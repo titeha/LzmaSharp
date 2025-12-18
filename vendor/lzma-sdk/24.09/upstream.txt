@@ -1,0 +1,5 @@
+Name: LZMA SDK
+Version: 24.09
+Downloaded: 2025-12-18
+Source: https://sourceforge.net/projects/sevenzip/files/LZMA%20SDK/
+Notes: stored as vendor reference, not compiled
