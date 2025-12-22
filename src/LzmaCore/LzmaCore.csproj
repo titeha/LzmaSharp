@@ -12,4 +12,8 @@
     <BaseOutputPath>..\..\bin</BaseOutputPath>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="$(MSBuildProjectName).Tests"/>
+  </ItemGroup>
+
 </Project>

@@ -2,6 +2,7 @@
 // Порт (в работе) Lzma2Dec.c + Lzma2Dec.h из 7-Zip / LZMA SDK.
 // Это “обвязка” LZMA2: парсит чанки и дергает LZMA-декодер (LzmaDec.*).
 
+using System;
 using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 
@@ -354,9 +355,7 @@ internal static class Lzma2Dec
         // Этот блок можно было бы закомментировать.
         // Не критично, если мы прочитаем лишний байт входа — позже остановимся в DATA/DATA_CONT.
         if (outSize == 0 && p.State != Lzma2State.Finished)
-        {
           return (Lzma2ParseStatus)LzmaStatus.NotFinished;
-        }
 
         if (p.State == Lzma2State.Data)
           return Lzma2ParseStatus.NewChunk;
