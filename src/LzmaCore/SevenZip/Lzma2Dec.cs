@@ -2,7 +2,6 @@
 // Порт (в работе) Lzma2Dec.c + Lzma2Dec.h из 7-Zip / LZMA SDK.
 // Это “обвязка” LZMA2: парсит чанки и дергает LZMA-декодер (LzmaDec.*).
 
-using System;
 using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 
@@ -42,7 +41,7 @@ internal static class Lzma2Dec
   private static bool IsUncompressedState(in CLzma2Dec p) => (p.Control & 0x80) == 0;
 
   [MethodImpl(MethodImplOptions.AggressiveInlining)]
-  private static uint DicSizeFromProp(byte prop) => ((uint)2 | (uint)(prop & 1)) << (prop / 2 + 11);
+  private static uint DicSizeFromProp(byte prop) => (2 | (uint)(prop & 1)) << (prop / 2 + 11);
 
   private static int GetOldProps(byte prop, Span<byte> props /* длина >= 5 */)
   {
@@ -131,8 +130,7 @@ internal static class Lzma2Dec
         return (p.Control & 0x40) != 0 ? Lzma2State.Prop : Lzma2State.Data;
 
       case Lzma2State.Prop:
-      {
-        if (b >= (9 * 5 * 5))
+        if (b >= 9 * 5 * 5)
           return Lzma2State.Error;
 
         uint lc = (uint)(b % 9);
@@ -147,7 +145,7 @@ internal static class Lzma2Dec
         p.Decoder.Prop.Lc = (byte)lc;
         p.Decoder.Prop.Lp = (byte)lp;
         return Lzma2State.Data;
-      }
+
 
       default:
         return Lzma2State.Error;
@@ -220,13 +218,10 @@ internal static class Lzma2Dec
 
       int inCur = inSize - srcLen;
       int outCur = dicLimit - dicPos;
-      LzmaFinishMode curFinishMode = LzmaFinishMode.Any;
+      const LzmaFinishMode curFinishMode = LzmaFinishMode.Any;
 
       if ((uint)outCur >= p.UnpackSize)
-      {
         outCur = (int)p.UnpackSize;
-        curFinishMode = LzmaFinishMode.End;
-      }
 
       if (IsUncompressedState(p))
       {
@@ -273,7 +268,7 @@ internal static class Lzma2Dec
         int res = LzmaDec.DecodeToDic(
             ref p.Decoder,
             dicPos + outCur,
-            src.Slice(srcPos),
+            src[srcPos..],
             ref inCur2,
             curFinishMode,
             ref status);
@@ -287,6 +282,9 @@ internal static class Lzma2Dec
 
         outCur = p.Decoder.DicPos - dicPos;
         p.UnpackSize -= (uint)outCur;
+
+        if (p.UnpackSize == 0 && p.PackSize == 0)
+          p.State = Lzma2State.Control;
 
         if (res != Sz.OK)
           break;
@@ -404,7 +402,7 @@ internal static class Lzma2Dec
           if (src[srcPos] != 0)
           {
             // Первый байт LZMA-чанка обязан быть 0
-            srcLen += 1;
+            srcLen++;
             p.PackSize--;
             break;
           }
@@ -474,7 +472,7 @@ internal static class Lzma2Dec
         curFinishMode = finishMode;
       }
 
-      int res = DecodeToDic(ref p, dicPos + outCur, src.Slice(srcPos), ref inCur, curFinishMode, out status);
+      int res = DecodeToDic(ref p, dicPos + outCur, src[srcPos..], ref inCur, curFinishMode, out status);
 
       srcPos += inCur;
       inSize -= inCur;
@@ -485,7 +483,7 @@ internal static class Lzma2Dec
       if (p.Decoder.Dic is null)
         throw new InvalidOperationException("Словарь декодера (Dic) не задан.");
 
-      p.Decoder.Dic.AsSpan(dicPos, produced).CopyTo(dest.Slice(destPos));
+      p.Decoder.Dic.AsSpan(dicPos, produced).CopyTo(dest[destPos..]);
       destPos += produced;
 
       outSize -= produced;

@@ -1,0 +1,45 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <UpstreamSevenZipCsDir Condition="'$(UpstreamSevenZipCsDir)' == ''">$(MSBuildProjectDirectory)\..\..\vendor\lzma-sdk\24.09\CS\7zip</UpstreamSevenZipCsDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\LzmaCore\LzmaCore.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="$(UpstreamSevenZipCsDir)\ICoder.cs" Link="Upstream\ICoder.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="$(UpstreamSevenZipCsDir)\Common\*.cs" Link="Upstream\Common\%(Filename)%(Extension)" />
+    <Compile Include="$(UpstreamSevenZipCsDir)\Compress\RangeCoder\*.cs" Link="Upstream\Compress\RangeCoder\%(Filename)%(Extension)" />
+    <Compile Include="$(UpstreamSevenZipCsDir)\Compress\LZ\*.cs" Link="Upstream\Compress\LZ\%(Filename)%(Extension)" />
+    <Compile Include="$(UpstreamSevenZipCsDir)\Compress\LZMA\*.cs" Link="Upstream\Compress\LZMA\%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <Target Name="CheckUpstreamSevenZipCsDir" BeforeTargets="BeforeCompile">
+    <Error Condition="!Exists('$(UpstreamSevenZipCsDir)\ICoder.cs')"
+           Text="Не найден C# код LZMA SDK (SevenZip) по пути '$(UpstreamSevenZipCsDir)'. Исправь UpstreamSevenZipCsDir в tests/LzmaTests/LzmaTests.csproj или передай /p:UpstreamSevenZipCsDir=..."/>
+  </Target>
+
+</Project>

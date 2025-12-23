@@ -3,7 +3,6 @@
 // ВАЖНО: это низкоуровневое ядро. Мы держим логику максимально близко к C-коду,
 // а "шарповый" API будет выше уровнем (Stream/Span и т.п.).
 
-using System;
 using System.Runtime.CompilerServices;
 
 namespace LzmaCore.SevenZip;
@@ -56,76 +55,76 @@ internal static class LzmaDec
 
   // ----- Константы из LzmaDec.c -----
 
-  private const uint kTopValue = 1u << 24;
+  private const uint _kTopValue = 1u << 24;
 
-  private const int kNumBitModelTotalBits = 11;
-  private const uint kBitModelTotal = 1u << kNumBitModelTotalBits;
+  private const int _kNumBitModelTotalBits = 11;
+  private const uint _kBitModelTotal = 1u << _kNumBitModelTotalBits;
 
   private const int RC_INIT_SIZE = 5;
   private const int LZMA_REQUIRED_INPUT_MAX = 20;
 
-  private const int kNumMoveBits = 5;
+  private const int _kNumMoveBits = 5;
 
-  private const int kNumPosBitsMax = 4;
-  private const int kNumPosStatesMax = 1 << kNumPosBitsMax;
+  private const int _kNumPosBitsMax = 4;
+  private const int _kNumPosStatesMax = 1 << _kNumPosBitsMax;
 
-  private const int kLenNumLowBits = 3;
-  private const int kLenNumLowSymbols = 1 << kLenNumLowBits;
-  private const int kLenNumHighBits = 8;
-  private const int kLenNumHighSymbols = 1 << kLenNumHighBits;
+  private const int _kLenNumLowBits = 3;
+  private const int _kLenNumLowSymbols = 1 << _kLenNumLowBits;
+  private const int _kLenNumHighBits = 8;
+  private const int _kLenNumHighSymbols = 1 << _kLenNumHighBits;
 
   private const int LenLow = 0;
-  private const int LenHigh = LenLow + 2 * (kNumPosStatesMax << kLenNumLowBits);
-  private const int kNumLenProbs = LenHigh + kLenNumHighSymbols;
+  private const int LenHigh = LenLow + 2 * (_kNumPosStatesMax << _kLenNumLowBits);
+  private const int _kNumLenProbs = LenHigh + _kLenNumHighSymbols;
 
   private const int LenChoice = LenLow;
-  private const int LenChoice2 = LenLow + (1 << kLenNumLowBits);
+  private const int LenChoice2 = LenLow + (1 << _kLenNumLowBits);
 
-  private const int kNumStates = 12;
-  private const int kNumStates2 = 16;
-  private const int kNumLitStates = 7;
+  private const int _kNumStates = 12;
+  private const int _kNumStates2 = 16;
+  private const int _kNumLitStates = 7;
 
-  private const int kStartPosModelIndex = 4;
-  private const int kEndPosModelIndex = 14;
-  private const int kNumFullDistances = 1 << (kEndPosModelIndex >> 1);
+  private const int _kStartPosModelIndex = 4;
+  private const int _kEndPosModelIndex = 14;
+  private const int _kNumFullDistances = 1 << (_kEndPosModelIndex >> 1);
 
-  private const int kNumPosSlotBits = 6;
-  private const int kNumLenToPosStates = 4;
+  private const int _kNumPosSlotBits = 6;
+  private const int _kNumLenToPosStates = 4;
 
-  private const int kNumAlignBits = 4;
-  private const int kAlignTableSize = 1 << kNumAlignBits;
+  private const int _kNumAlignBits = 4;
+  private const int _kAlignTableSize = 1 << _kNumAlignBits;
 
-  private const int kMatchMinLen = 2;
-  private const int kMatchSpecLenStart = kMatchMinLen + kLenNumLowSymbols * 2 + kLenNumHighSymbols;
+  private const int _kMatchMinLen = 2;
+  private const int _kMatchSpecLenStart = _kMatchMinLen + _kLenNumLowSymbols * 2 + _kLenNumHighSymbols;
 
-  private const int kMatchSpecLen_Error_Data = 1 << 9;            // 512
-  private const int kMatchSpecLen_Error_Fail = kMatchSpecLen_Error_Data - 1; // 511
+  private const int _kMatchSpecLen_Error_Data = 1 << 9;            // 512
+  private const int _kMatchSpecLen_Error_Fail = _kMatchSpecLen_Error_Data - 1; // 511
 
-  private const int kStartOffset = 1664;
+  private const int _kStartOffset = 1664;
 
-  private const int SpecPos = -kStartOffset;
-  private const int IsRep0Long = SpecPos + kNumFullDistances;
-  private const int RepLenCoder = IsRep0Long + (kNumStates2 << kNumPosBitsMax);
-  private const int LenCoder = RepLenCoder + kNumLenProbs;
-  private const int IsMatch = LenCoder + kNumLenProbs;
-  private const int Align = IsMatch + (kNumStates2 << kNumPosBitsMax);
-  private const int IsRep = Align + kAlignTableSize;
-  private const int IsRepG0 = IsRep + kNumStates;
-  private const int IsRepG1 = IsRepG0 + kNumStates;
-  private const int IsRepG2 = IsRepG1 + kNumStates;
-  private const int PosSlot = IsRepG2 + kNumStates;
-  private const int Literal = PosSlot + (kNumLenToPosStates << kNumPosSlotBits);
-  private const int NUM_BASE_PROBS = Literal + kStartOffset; // 1984
+  private const int SpecPos = -_kStartOffset;
+  private const int IsRep0Long = SpecPos + _kNumFullDistances;
+  private const int RepLenCoder = IsRep0Long + (_kNumStates2 << _kNumPosBitsMax);
+  private const int LenCoder = RepLenCoder + _kNumLenProbs;
+  private const int IsMatch = LenCoder + _kNumLenProbs;
+  private const int Align = IsMatch + (_kNumStates2 << _kNumPosBitsMax);
+  private const int IsRep = Align + _kAlignTableSize;
+  private const int IsRepG0 = IsRep + _kNumStates;
+  private const int IsRepG1 = IsRepG0 + _kNumStates;
+  private const int IsRepG2 = IsRepG1 + _kNumStates;
+  private const int PosSlot = IsRepG2 + _kNumStates;
+  private const int Literal = PosSlot + (_kNumLenToPosStates << _kNumPosSlotBits);
+  private const int NUM_BASE_PROBS = Literal + _kStartOffset; // 1984
 
   private const int LZMA_LIT_SIZE = 0x300;
   private const uint LZMA_DIC_MIN = 1u << 12;
 
   // kBadRepCode расчёт из C (для ранней проверки невозможного REP в начале потока)
-  private const uint kRange0 = 0xFFFFFFFF;
-  private const uint kBound0 = ((kRange0 >> kNumBitModelTotalBits) << (kNumBitModelTotalBits - 1));
-  private const uint kBadRepCode = kBound0 + (((kRange0 - kBound0) >> kNumBitModelTotalBits) << (kNumBitModelTotalBits - 1));
+  private const uint _kRange0 = 0xFFFFFFFF;
+  private const uint _kBound0 = ((_kRange0 >> _kNumBitModelTotalBits) << (_kNumBitModelTotalBits - 1));
+  private const uint _kBadRepCode = _kBound0 + (((_kRange0 - _kBound0) >> _kNumBitModelTotalBits) << (_kNumBitModelTotalBits - 1));
 
-  private static int AbsProb(int rel) => kStartOffset + rel;
+  private static int AbsProb(int rel) => _kStartOffset + rel;
 
   private static void EnsureTempBuf(ref CLzmaDec p)
   {
@@ -219,17 +218,17 @@ internal static class LzmaDec
   {
     EnsureTempBuf(ref p);
 
-    p.RemainLen = (uint)(kMatchSpecLenStart + 1);
+    p.RemainLen = _kMatchSpecLenStart + 1;
     p.TempBufSize = 0;
 
     if (initDic)
     {
       p.ProcessedPos = 0;
       p.CheckDicSize = 0;
-      p.RemainLen = (uint)(kMatchSpecLenStart + 2);
+      p.RemainLen = _kMatchSpecLenStart + 2;
     }
     if (initState)
-      p.RemainLen = (uint)(kMatchSpecLenStart + 2);
+      p.RemainLen = _kMatchSpecLenStart + 2;
   }
 
   public static void Init(ref CLzmaDec p)
@@ -241,7 +240,7 @@ internal static class LzmaDec
   [MethodImpl(MethodImplOptions.AggressiveInlining)]
   private static void Normalize(ReadOnlySpan<byte> src, ref int buf, ref uint range, ref uint code)
   {
-    if (range < kTopValue)
+    if (range < _kTopValue)
     {
       range <<= 8;
       code = (code << 8) | src[buf++];
@@ -253,18 +252,18 @@ internal static class LzmaDec
   {
     uint ttt = prob;
     Normalize(src, ref buf, ref range, ref code);
-    uint bound = (range >> kNumBitModelTotalBits) * ttt;
+    uint bound = (range >> _kNumBitModelTotalBits) * ttt;
     if (code < bound)
     {
       range = bound;
-      prob = (ushort)(ttt + ((kBitModelTotal - ttt) >> kNumMoveBits));
+      prob = (ushort)(ttt + ((_kBitModelTotal - ttt) >> _kNumMoveBits));
       return 0;
     }
     else
     {
       range -= bound;
       code -= bound;
-      prob = (ushort)(ttt - (ttt >> kNumMoveBits));
+      prob = (ushort)(ttt - (ttt >> _kNumMoveBits));
       return 1;
     }
   }
@@ -272,7 +271,7 @@ internal static class LzmaDec
   [MethodImpl(MethodImplOptions.AggressiveInlining)]
   private static bool NormalizeCheck(ReadOnlySpan<byte> buf, int bufLimit, ref int pos, ref uint range, ref uint code)
   {
-    if (range < kTopValue)
+    if (range < _kTopValue)
     {
       if (pos >= bufLimit)
         return false;
@@ -292,7 +291,7 @@ internal static class LzmaDec
     if (!NormalizeCheck(buf, bufLimit, ref pos, ref range, ref code))
       return false;
 
-    uint bound = (range >> kNumBitModelTotalBits) * ttt;
+    uint bound = (range >> _kNumBitModelTotalBits) * ttt;
     if (code < bound)
     {
       range = bound;
@@ -324,7 +323,7 @@ internal static class LzmaDec
     uint code = p.Code;
 
     var probsArr = p.Probs!;
-    int baseIdx = kStartOffset;
+    int baseIdx = _kStartOffset;
     uint state = p.State;
 
     for (; ; )
@@ -357,7 +356,7 @@ internal static class LzmaDec
           litBase += (int)(LZMA_LIT_SIZE * ctx);
         }
 
-        if (state < kNumLitStates)
+        if (state < _kNumLitStates)
         {
           uint symbol = 1;
           while (symbol < 0x100)
@@ -473,7 +472,7 @@ internal static class LzmaDec
             }
           }
 
-          state = kNumStates;
+          state = _kNumStates;
           lenCoderBase = baseIdx + RepLenCoder;
         }
 
@@ -494,7 +493,7 @@ internal static class LzmaDec
         {
           probLenBase = lenCoderBase + LenLow + (int)posState;
           offset = 0;
-          limit = 1 << kLenNumLowBits;
+          limit = 1 << _kLenNumLowBits;
         }
         else
         {
@@ -507,15 +506,15 @@ internal static class LzmaDec
 
           if (bit == 0)
           {
-            probLenBase = lenCoderBase + LenLow + (int)posState + (1 << kLenNumLowBits);
-            offset = kLenNumLowSymbols;
-            limit = 1 << kLenNumLowBits;
+            probLenBase = lenCoderBase + LenLow + (int)posState + (1 << _kLenNumLowBits);
+            offset = _kLenNumLowSymbols;
+            limit = 1 << _kLenNumLowBits;
           }
           else
           {
             probLenBase = lenCoderBase + LenHigh;
-            offset = kLenNumLowSymbols * 2;
-            limit = 1 << kLenNumHighBits;
+            offset = _kLenNumLowSymbols * 2;
+            limit = 1 << _kLenNumHighBits;
           }
         }
 
@@ -538,11 +537,11 @@ internal static class LzmaDec
         if (state < 4)
         {
           uint posSlot;
-          int posSlotBase = baseIdx + PosSlot + ((int)((len < (kNumLenToPosStates - 1)) ? len : (kNumLenToPosStates - 1)) << kNumPosSlotBits);
+          int posSlotBase = baseIdx + PosSlot + ((int)((len < (_kNumLenToPosStates - 1)) ? len : (_kNumLenToPosStates - 1)) << _kNumPosSlotBits);
 
           // TREE_DECODE_CHECK (6 бит)
           uint ps = 1;
-          uint lim = 1u << kNumPosSlotBits;
+          const uint lim = 1u << _kNumPosSlotBits;
           while (ps < lim)
           {
             int pi = posSlotBase + (int)ps;
@@ -555,18 +554,18 @@ internal static class LzmaDec
           }
           posSlot = ps - lim;
 
-          if (posSlot >= kStartPosModelIndex)
+          if (posSlot >= _kStartPosModelIndex)
           {
             int numDirectBits = (int)((posSlot >> 1) - 1);
 
             int probBase2;
-            if (posSlot < kEndPosModelIndex)
+            if (posSlot < _kEndPosModelIndex)
             {
               probBase2 = baseIdx + SpecPos + (int)((2u | (posSlot & 1u)) << numDirectBits);
             }
             else
             {
-              numDirectBits -= kNumAlignBits;
+              numDirectBits -= _kNumAlignBits;
               while (numDirectBits-- > 0)
               {
                 if (!NormalizeCheck(buf, bufLimit, ref pos, ref range, ref code))
@@ -579,7 +578,7 @@ internal static class LzmaDec
                 code -= range & (((code - range) >> 31) - 1);
               }
               probBase2 = baseIdx + Align;
-              numDirectBits = kNumAlignBits;
+              numDirectBits = _kNumAlignBits;
             }
 
             // REV_BIT_CHECK
@@ -659,12 +658,12 @@ internal static class LzmaDec
   private static int DecodeReal3(ref CLzmaDec p, int limit, ReadOnlySpan<byte> src, ref int buf, int bufLimit)
   {
     var probsArr = p.Probs!;
-    int baseIdx = kStartOffset;
+    const int baseIdx = _kStartOffset;
 
     uint state = p.State;
     uint rep0 = p.Rep0, rep1 = p.Rep1, rep2 = p.Rep2, rep3 = p.Rep3;
 
-    uint pbMask = (uint)((1u << p.Prop.Pb) - 1u);
+    uint pbMask = (1u << p.Prop.Pb) - 1u;
     int lc = p.Prop.Lc;
     int lpMask = ((0x100 << p.Prop.Lp) - (0x100 >> lc));
 
@@ -690,13 +689,13 @@ internal static class LzmaDec
       int probIsMatch = baseIdx + IsMatch + (int)(posState + state);
       ttt = probsArr[probIsMatch];
       Normalize(src, ref buf, ref range, ref code);
-      bound = (range >> kNumBitModelTotalBits) * ttt;
+      bound = (range >> _kNumBitModelTotalBits) * ttt;
 
       if (code < bound)
       {
         // Literal
         range = bound;
-        probsArr[probIsMatch] = (ushort)(ttt + ((kBitModelTotal - ttt) >> kNumMoveBits));
+        probsArr[probIsMatch] = (ushort)(ttt + ((_kBitModelTotal - ttt) >> _kNumMoveBits));
 
         int prob = baseIdx + Literal;
 
@@ -710,10 +709,10 @@ internal static class LzmaDec
         processedPos++;
 
         uint symbol = 1;
-        if (state < kNumLitStates)
+        if (state < _kNumLitStates)
         {
           // state переход как в C:
-          state = (uint)(state - (state < 4 ? state : 3));
+          state -= (state < 4 ? state : 3);
 
           // 8 бит
           for (int i = 0; i < 8; i++)
@@ -750,7 +749,7 @@ internal static class LzmaDec
       // Not literal
       range -= bound;
       code -= bound;
-      probsArr[probIsMatch] = (ushort)(ttt - (ttt >> kNumMoveBits));
+      probsArr[probIsMatch] = (ushort)(ttt - (ttt >> _kNumMoveBits));
 
       int probIsRep = baseIdx + IsRep + (int)state;
       uint isRep = GetBit(ref probsArr[probIsRep], src, ref buf, ref range, ref code);
@@ -759,7 +758,7 @@ internal static class LzmaDec
       if (isRep == 0)
       {
         // Non-Rep match
-        state += kNumStates;
+        state += _kNumStates;
         lenCoderBase = baseIdx + LenCoder;
       }
       else
@@ -776,7 +775,7 @@ internal static class LzmaDec
             dic[dicPos] = dic[dicPos - (int)rep0 + (dicPos < rep0 ? dicBufSize : 0)];
             dicPos++;
             processedPos++;
-            state = state < kNumLitStates ? 9u : 11u;
+            state = state < _kNumLitStates ? 9u : 11u;
             continue;
           }
         }
@@ -808,7 +807,7 @@ internal static class LzmaDec
           rep0 = distance;
         }
 
-        state = state < kNumLitStates ? 8u : 11u;
+        state = state < _kNumLitStates ? 8u : 11u;
         lenCoderBase = baseIdx + RepLenCoder;
       }
 
@@ -836,7 +835,7 @@ internal static class LzmaDec
         uint choice2 = GetBit(ref probsArr[probLenChoice2], src, ref buf, ref range, ref code);
         if (choice2 == 0)
         {
-          probLenBase = lenCoderBase + LenLow + (int)posState + (1 << kLenNumLowBits);
+          probLenBase = lenCoderBase + LenLow + (int)posState + (1 << _kLenNumLowBits);
           len = 1;
           for (int i = 0; i < 3; i++)
           {
@@ -844,7 +843,7 @@ internal static class LzmaDec
             uint b = GetBit(ref probsArr[pi], src, ref buf, ref range, ref code);
             len = (len << 1) + (int)b;
           }
-          offset = kLenNumLowSymbols;
+          offset = _kLenNumLowSymbols;
         }
         else
         {
@@ -856,18 +855,18 @@ internal static class LzmaDec
             int pi = probLenBase + iTree;
             uint b = GetBit(ref probsArr[pi], src, ref buf, ref range, ref code);
             iTree = (iTree << 1) + (int)b;
-            if (iTree >= (1 << kLenNumHighBits))
+            if (iTree >= (1 << _kLenNumHighBits))
               break;
           }
-          len = iTree - (1 << kLenNumHighBits);
-          offset = kLenNumLowSymbols * 2;
+          len = iTree - (1 << _kLenNumHighBits);
+          offset = _kLenNumLowSymbols * 2;
         }
       }
 
-      if (state >= kNumStates)
+      if (state >= _kNumStates)
       {
         // Non-Rep: decode distance
-        int posSlotBase = baseIdx + PosSlot + ((len < kNumLenToPosStates ? len : kNumLenToPosStates - 1) << kNumPosSlotBits);
+        int posSlotBase = baseIdx + PosSlot + ((len < _kNumLenToPosStates ? len : _kNumLenToPosStates - 1) << _kNumPosSlotBits);
         int distance = 1;
         for (int i = 0; i < 6; i++)
         {
@@ -877,38 +876,56 @@ internal static class LzmaDec
         }
         distance -= 0x40;
 
-        if (distance >= kStartPosModelIndex)
+        if (distance >= _kStartPosModelIndex)
         {
           int posSlot = distance;
           int numDirectBits = ((distance >> 1) - 1);
           uint dist = (uint)(2 | (distance & 1));
 
-          if (posSlot < kEndPosModelIndex)
+          if (posSlot < _kEndPosModelIndex)
           {
             dist <<= numDirectBits;
-            int probSpecPos = baseIdx + SpecPos;
+            const int probSpecPos = baseIdx + SpecPos;
 
             uint m = 1;
             dist++;
-            while (numDirectBits-- != 0)
+            //while (numDirectBits-- != 0)
+            //{
+            //  // REV_BIT_VAR(prob, dist, m)
+            //  int pi = probSpecPos + (int)dist;
+            //  uint b = GetBit(ref probsArr[pi], src, ref buf, ref range, ref code);
+            //  if (b == 0)
+            //  {
+            //    dist += m;
+            //    m += m;
+            //    m += m;
+            //    dist += m;
+            //  }
+            //  // else: ничего
+            //}
+            do
             {
               // REV_BIT_VAR(prob, dist, m)
               int pi = probSpecPos + (int)dist;
               uint b = GetBit(ref probsArr[pi], src, ref buf, ref range, ref code);
+
               if (b == 0)
               {
                 dist += m;
                 m += m;
+              }
+              else
+              {
                 m += m;
                 dist += m;
               }
-              // else: ничего
             }
+            while (--numDirectBits != 0);
             dist -= m;
           }
           else
           {
-            numDirectBits -= kNumAlignBits;
+            numDirectBits -= _kNumAlignBits;
             while (numDirectBits-- != 0)
             {
               Normalize(src, ref buf, ref range, ref code);
@@ -920,8 +937,8 @@ internal static class LzmaDec
               code = unchecked(code + (range & t));
             }
 
-            int probAlign = baseIdx + Align;
-            dist <<= kNumAlignBits;
+            const int probAlign = baseIdx + Align;
+            dist <<= _kNumAlignBits;
 
             uint i = 1;
             // REV_BIT_CONST(prob, i, 1)
@@ -953,8 +970,8 @@ internal static class LzmaDec
 
             if (dist == 0xFFFFFFFF)
             {
-              len = kMatchSpecLenStart;
-              state -= kNumStates;
+              len = _kMatchSpecLenStart;
+              state -= _kNumStates;
               break;
             }
           }
@@ -964,18 +981,18 @@ internal static class LzmaDec
           rep1 = rep0;
           rep0 = dist + 1;
 
-          state = (state < (kNumStates + kNumLitStates)) ? (uint)kNumLitStates : (uint)(kNumLitStates + 3);
+          state = (state < _kNumStates + _kNumLitStates) ? _kNumLitStates : (uint)(_kNumLitStates + 3);
 
           uint check = (checkDicSize == 0) ? processedPos : checkDicSize;
           if (dist >= check)
           {
-            len += kMatchSpecLen_Error_Data + kMatchMinLen;
+            len += _kMatchSpecLen_Error_Data + _kMatchMinLen;
             break;
           }
         }
       }
 
-      len += kMatchMinLen;
+      len += _kMatchMinLen;
 
       // Copy match bytes to dictionary
       int rem2 = limit - dicPos;
@@ -1026,7 +1043,7 @@ internal static class LzmaDec
     p.Rep3 = rep3;
     p.State = state;
 
-    if (len >= kMatchSpecLen_Error_Data)
+    if (len >= _kMatchSpecLen_Error_Data)
       return Sz.ERROR_DATA;
 
     return Sz.OK;
@@ -1071,10 +1088,10 @@ internal static class LzmaDec
       throw new InvalidOperationException("Вероятности (Probs) не выделены. Сначала вызови AllocateProbs().");
 
     // Инициализация range coder / probs
-    if (p.RemainLen > kMatchSpecLenStart)
+    if (p.RemainLen > _kMatchSpecLenStart)
     {
-      if (p.RemainLen > (uint)(kMatchSpecLenStart + 2))
-        return p.RemainLen == (uint)kMatchSpecLen_Error_Fail ? Sz.ERROR_FAIL : Sz.ERROR_DATA;
+      if (p.RemainLen > _kMatchSpecLenStart + 2)
+        return p.RemainLen == _kMatchSpecLen_Error_Fail ? Sz.ERROR_FAIL : Sz.ERROR_DATA;
 
       // Набираем 5 байт RC_INIT_SIZE (первый обязан быть 0)
       while (inSize > 0 && p.TempBufSize < RC_INIT_SIZE)
@@ -1097,19 +1114,19 @@ internal static class LzmaDec
              | ((uint)p.TempBuf![3] << 8)
              | (uint)p.TempBuf![4];
 
-      if (p.CheckDicSize == 0 && p.ProcessedPos == 0 && p.Code >= kBadRepCode)
+      if (p.CheckDicSize == 0 && p.ProcessedPos == 0 && p.Code >= _kBadRepCode)
         return Sz.ERROR_DATA;
 
       p.Range = 0xFFFFFFFF;
       p.TempBufSize = 0;
 
-      if (p.RemainLen > (uint)(kMatchSpecLenStart + 1))
+      if (p.RemainLen > _kMatchSpecLenStart + 1)
       {
         // init probs/state
         int numProbs = GetNumProbs(p.Prop);
         var probsArr = p.Probs!;
         for (int i = 0; i < numProbs; i++)
-          probsArr[i] = (ushort)(kBitModelTotal >> 1);
+          probsArr[i] = (ushort)(_kBitModelTotal >> 1);
 
         p.Rep0 = p.Rep1 = p.Rep2 = p.Rep3 = 1;
         p.State = 0;
@@ -1120,7 +1137,7 @@ internal static class LzmaDec
 
     for (; ; )
     {
-      if (p.RemainLen == (uint)kMatchSpecLenStart)
+      if (p.RemainLen == _kMatchSpecLenStart)
       {
         if (p.Code != 0)
           return Sz.ERROR_DATA;
@@ -1222,7 +1239,7 @@ internal static class LzmaDec
 
         if (res != Sz.OK)
         {
-          p.RemainLen = (uint)kMatchSpecLen_Error_Data;
+          p.RemainLen = _kMatchSpecLen_Error_Data;
           return Sz.ERROR_DATA;
         }
 
@@ -1297,14 +1314,14 @@ internal static class LzmaDec
 
         if (res != Sz.OK)
         {
-          p.RemainLen = (uint)kMatchSpecLen_Error_Data;
+          p.RemainLen = _kMatchSpecLen_Error_Data;
           return Sz.ERROR_DATA;
         }
       }
     }
 
     // Непредвиденная ошибка (как в C): внутренний сбой/коррупция памяти/и т.п.
-    p.RemainLen = (uint)kMatchSpecLen_Error_Fail;
+    p.RemainLen = _kMatchSpecLen_Error_Fail;
     return Sz.ERROR_FAIL;
   }
 }
