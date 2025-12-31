@@ -25,9 +25,10 @@ namespace Lzma.Core.Lzma1;
 public struct LzmaRangeDecoder
 {
   /// <summary>
-  /// Порог для нормализации range coder'а. В классическом LZMA это 1 &lt;&lt; 24.
+  /// Порог для нормализации range coder'а.
+  /// В классическом LZMA это 1 << 24.
   /// </summary>
-  public const uint TopValue = 1u << 24;
+  public const uint TopValue = LzmaConstants.RangeTopValue;
 
   // Текущее «окно» и «код» range coder'а.
   private uint _range;
@@ -77,11 +78,12 @@ public struct LzmaRangeDecoder
   }
 
   /// <summary>
-  /// Пытается дочитать 5 байт инициализации (Init()) из <paramref name="input"/>.
-  ///
+  /// <para>Пытается дочитать 5 байт инициализации (Init()) из <paramref name="input"/>.</para>
+  /// <para>
   /// Примечание:
   /// - Метод «частично-потребляющий»: если вход обрывается, он вернёт NeedMoreInput,
   ///   но уже прочитанные байты останутся учтёнными во внутреннем состоянии.
+  /// </para>
   /// </summary>
   public LzmaRangeInitResult TryInitialize(ReadOnlySpan<byte> input, ref int offset)
   {
@@ -101,13 +103,14 @@ public struct LzmaRangeDecoder
   }
 
   /// <summary>
-  /// Нормализует состояние range coder'а (если нужно).
-  ///
+  /// <para>Нормализует состояние range coder'а (если нужно).</para>
+  /// <para>
   /// В оригинальном алгоритме нормализация выполняется так:
-  /// if (Range &lt; TopValue) { Range &lt;&lt;= 8; Code = (Code &lt;&lt; 8) | ReadByte(); }
+  /// if (Range < TopValue) { Range <<= 8; Code = (Code << 8) | ReadByte(); }
   ///
   /// Мы делаем то же самое, но в потоковом режиме можем сказать NeedMoreInput,
   /// если очередного байта пока нет.
+  /// </para>
   /// </summary>
   private LzmaRangeDecodeResult EnsureNormalized(ReadOnlySpan<byte> input, ref int offset)
   {
@@ -123,11 +126,12 @@ public struct LzmaRangeDecoder
   }
 
   /// <summary>
-  /// Декодирует 1 бит с использованием адаптивной вероятности <paramref name="prob"/>.
-  ///
+  /// <para>Декодирует 1 бит с использованием адаптивной вероятности <paramref name="prob"/>.</para>
+  /// <para>
   /// Контракт потокового режима:
   /// - Если вернули NeedMoreInput, декодирование НЕ выполнено (prob/Range/Code не менялись),
   ///   потому что нам не хватило байта для нормализации до декодирования.
+  /// </para>
   /// </summary>
   public LzmaRangeDecodeResult TryDecodeBit(
       ref ushort prob,
@@ -145,23 +149,25 @@ public struct LzmaRangeDecoder
     if (norm != LzmaRangeDecodeResult.Ok)
       return norm;
 
-    // prob — 11-битное значение (0..2048). Стандартные константы LZMA:
-    //   kNumBitModelTotalBits = 11
-    //   kBitModelTotal        = 1 << 11 (2048)
-    //   kNumMoveBits          = 5
-    uint bound = (_range >> 11) * prob;
+    // Стандартная формула LZMA:
+    // bound = (range >> kNumBitModelTotalBits) * prob;
+    uint bound = (_range >> LzmaConstants.NumBitModelTotalBits) * prob;
 
     if (_code < bound)
     {
       _range = bound;
-      prob = (ushort)(prob + ((2048 - prob) >> 5));
+
+      // prob += (kBitModelTotal - prob) >> kNumMoveBits;
+      prob = (ushort)(prob + ((LzmaConstants.BitModelTotal - prob) >> LzmaConstants.NumMoveBits));
       bit = 0;
     }
     else
     {
       _range -= bound;
       _code -= bound;
-      prob = (ushort)(prob - (prob >> 5));
+
+      // prob -= prob >> kNumMoveBits;
+      prob = (ushort)(prob - (prob >> LzmaConstants.NumMoveBits));
       bit = 1;
     }
 
@@ -169,9 +175,8 @@ public struct LzmaRangeDecoder
   }
 
   /// <summary>
-  /// Декодирует указанное количество «прямых» бит (без вероятностей).
-  ///
-  /// Это используется в LZMA для чтения некоторых чисел без вероятностной модели.
+  /// <para>Декодирует указанное количество «прямых» бит (без вероятностей).</para>
+  /// <para>Это используется в LZMA для чтения некоторых чисел без вероятностной модели.</para>
   /// </summary>
   public LzmaRangeDecodeResult TryDecodeDirectBits(
       int numBits,
