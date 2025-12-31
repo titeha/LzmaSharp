@@ -127,4 +127,11 @@ public static class LzmaConstants
   /// Максимальное количество posState = 2^pb, где pb ∈ [0..4].
   /// </summary>
   public const int NumPosStatesMax = 1 << NumPosStatesBitsEncodingMax; // 16
+
+  /// <summary>
+  /// Начальное значение вероятности для всех моделей.
+  /// В классическом LZMA все вероятности стартуют с 1/2 шкалы,
+  /// то есть BitModelTotal / 2 (2048 / 2 = 1024).
+  /// </summary>
+  public const ushort ProbabilityInitValue = BitModelTotal / 2;
 }
