@@ -91,18 +91,18 @@ public static class LzmaConstants
   // Модель длин (len)
   // ============================================================
 
-  public const int NumLowLenBits = 3;
-  public const int NumMidLenBits = 3;
-  public const int NumHighLenBits = 8;
+  public const int LenNumLowBits = 3;
+  public const int LenNumMidBits = 3;
+  public const int LenNumHighBits = 8;
 
-  public const int NumLowLenSymbols = 1 << NumLowLenBits;
-  public const int NumMidLenSymbols = 1 << NumMidLenBits;
-  public const int NumHighLenSymbols = 1 << NumHighLenBits;
+  public const int LenNumLowSymbols = 1 << LenNumLowBits;
+  public const int LenNumMidSymbols = 1 << LenNumMidBits;
+  public const int NumHighLenSymbols = 1 << LenNumHighBits;
 
   /// <summary>
   /// Общее количество кодируемых значений длины.
   /// </summary>
-  public const int NumLenSymbols = NumLowLenSymbols + NumMidLenSymbols + NumHighLenSymbols;
+  public const int NumLenSymbols = LenNumLowSymbols + LenNumMidSymbols + NumHighLenSymbols;
 
   /// <summary>
   /// Максимальная длина матча: MatchMinLen + NumLenSymbols - 1 (обычно 273).
@@ -117,4 +117,14 @@ public static class LzmaConstants
   /// Количество «литеральных состояний» (используется в state-machine).
   /// </summary>
   public const int NumLitStates = 7;
+
+  /// <summary>
+  /// Сколько «последних байт» LZMA считает допустимыми для некоторых переходов.
+  /// </summary>
+  public const int NumPosStatesBitsEncodingMax = 4;
+
+  /// <summary>
+  /// Максимальное количество posState = 2^pb, где pb ∈ [0..4].
+  /// </summary>
+  public const int NumPosStatesMax = 1 << NumPosStatesBitsEncodingMax; // 16
 }
