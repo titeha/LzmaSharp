@@ -1,233 +1,207 @@
 namespace Lzma.Core.Lzma1;
 
 /// <summary>
-/// <para>Декодер литералов (одиночных байт) для LZMA.</para>
+/// <para>Декодер литералов LZMA.</para>
 /// <para>
-/// В LZMA каждый байт кодируется 8 битами через range coder (арифметический декодер)
-/// и дерево вероятностей.
+/// Здесь мы декодируем один байт (0..255) на основе контекста:
+/// - lc: сколько старших бит прошлого байта учитываем;
+/// - lp: сколько младших бит позиции (pos) учитываем.
 /// </para>
 /// <para>
-/// Главная особенность LZMA: вероятности выбираются по контексту.
-/// Контекст определяется параметрами lc/lp и зависит от:
-/// - позиции (lp младших бит позиции),
-/// - предыдущего байта (lc старших бит предыдущего байта).
-/// </para>
-/// <para>
-/// Количество контекстов: 1 &lt;&lt; (lc + lp).
-/// На каждый контекст выделяется массив вероятностей из 0x300 (768) элементов.
-/// </para>
-/// <para>
-/// Важно:
-/// - Это «чистая» реализация без оптимизаций и трюков с памятью.
-/// - Метод TryDecode* не является атомарным: если в середине декодирования не хватит входных байт,
-///   часть вероятностей может успеть измениться. Для стриминга мы позже добавим слой,
-///   который обеспечивает атомарность на уровне «декодируем один символ целиком или не декодируем».
+/// Важно: этот класс — "строительный блок" декодера. В полном LZMA-декодере
+/// литерал декодируется после того, как isMatch == 0.
 /// </para>
 /// </summary>
 public sealed class LzmaLiteralDecoder
 {
+  // По LZMA SDK: один "subcoder" имеет 0x300 вероятностей.
+  private const int _literalCoderSize = 0x300;
+
   private readonly int _lc;
   private readonly int _lp;
-  private readonly int _posMask;
-  private readonly SubDecoder[] _subDecoders;
 
-  /// <summary>
-  /// Создаёт декодер литералов.
-  /// </summary>
-  /// <param name="lc">Количество бит контекста из предыдущего байта (0..8).</param>
-  /// <param name="lp">Количество бит контекста из позиции (0..4).</param>
+  internal int ContextCount => 1 << (_lc + _lp);
+
   public LzmaLiteralDecoder(int lc, int lp)
   {
-    if ((uint)lc > 8)
-      throw new ArgumentOutOfRangeException(nameof(lc), "lc должен быть в диапазоне 0..8.");
-    if ((uint)lp > 4)
-      throw new ArgumentOutOfRangeException(nameof(lp), "lp должен быть в диапазоне 0..4.");
+    if (lc < 0 || lc > LzmaProperties.MaxLc)
+      throw new ArgumentOutOfRangeException(nameof(lc));
+    if (lp < 0 || lp > LzmaProperties.MaxLp)
+      throw new ArgumentOutOfRangeException(nameof(lp));
 
     _lc = lc;
     _lp = lp;
 
-    // Если lp = 0, маска станет 0 (то есть posPart всегда 0).
-    _posMask = (1 << lp) - 1;
-
+    // Количество контекстов = 2^(lc+lp)
     int numContexts = 1 << (lc + lp);
-    _subDecoders = new SubDecoder[numContexts];
-    for (int i = 0; i < _subDecoders.Length; i++)
-      _subDecoders[i] = new SubDecoder();
+
+    // В каждом контексте LiteralCoderSize вероятностей.
+    Probs = new ushort[numContexts * _literalCoderSize];
 
     Reset();
   }
 
-  public int Lc => _lc;
-  public int Lp => _lp;
-
   /// <summary>
-  /// Количество контекстов.
-  /// </summary>
-  public int ContextCount => _subDecoders.Length;
-
-  /// <summary>
-  /// Вычисляет индекс контекста для декодирования литерала.
-  /// Формула совпадает с SDK 7-Zip.
-  /// </summary>
-  public int ComputeContextIndex(int position, byte previousByte)
-  {
-    int posPart = position & _posMask;
-
-    // Старшие lc бит предыдущего байта.
-    // Если lc == 0, prevPart должен быть 0.
-    int prevPart = _lc == 0 ? 0 : (previousByte >> (8 - _lc));
-
-    return (posPart << _lc) + prevPart;
-  }
-
-  /// <summary>
-  /// Сбрасывает все вероятности во всех контекстах.
+  /// Сбрасывает вероятности литералов в исходное значение.
   /// </summary>
   public void Reset()
   {
-    foreach (var d in _subDecoders)
-      d.Reset();
+    LzmaProbability.Reset(Probs);
   }
 
-  /// <summary>
-  /// Возвращает конкретную вероятность для тестов/отладки.
-  /// </summary>
-  public ushort GetProbability(int contextIndex, int probabilityIndex)
-  {
-    if ((uint)contextIndex >= (uint)_subDecoders.Length)
-      throw new ArgumentOutOfRangeException(nameof(contextIndex));
-
-    return _subDecoders[contextIndex].GetProbability(probabilityIndex);
-  }
-
-  /// <summary>
-  /// Декодирует литерал в «обычном» режиме (без matchByte).
-  /// </summary>
   public LzmaRangeDecodeResult TryDecodeNormal(
-      ref LzmaRangeDecoder range,
+      LzmaRangeDecoder rangeDecoder,
       ReadOnlySpan<byte> input,
-      ref int inputOffset,
-      int position,
+      ref int offset,
       byte previousByte,
-      out byte literal)
+      long position,
+      out byte decoded)
   {
-    int ctx = ComputeContextIndex(position, previousByte);
-    return _subDecoders[ctx].TryDecodeNormal(ref range, input, ref inputOffset, out literal);
-  }
+    int ctx = GetContextIndex(position, previousByte);
+    int baseIndex = GetSubCoderOffset(ctx);
 
-  /// <summary>
-  /// Декодирует литерал в режиме «с matchByte».
-  ///
-  /// Этот режим используется, когда текущее состояние LZMA говорит,
-  /// что после match/rep вероятность следующего литерала зависит от байта,
-  /// который находится в словаре по текущей match-дистанции.
-  /// </summary>
-  public LzmaRangeDecodeResult TryDecodeWithMatchByte(
-      ref LzmaRangeDecoder range,
-      ReadOnlySpan<byte> input,
-      ref int inputOffset,
-      int position,
-      byte previousByte,
-      byte matchByte,
-      out byte literal)
-  {
-    int ctx = ComputeContextIndex(position, previousByte);
-    return _subDecoders[ctx].TryDecodeWithMatchByte(ref range, input, ref inputOffset, matchByte, out literal);
-  }
+    int symbol = 1;
 
-  private sealed class SubDecoder
-  {
-    // 0x300 = 768. Индексы 0..0x2FF.
-    // Ноды дерева для литерала используют диапазон 1..0x1FF, а режим matchByte использует и 0x200..0x2FF.
-    private const int ProbabilityCount = 0x300;
-
-    private readonly ushort[] _probs = new ushort[ProbabilityCount];
-
-    public void Reset() => LzmaProbability.Reset(_probs);
-
-    public ushort GetProbability(int probabilityIndex)
+    for (int i = 0; i < 8; i++)
     {
-      if ((uint)probabilityIndex >= (uint)_probs.Length)
-        throw new ArgumentOutOfRangeException(nameof(probabilityIndex));
+      ref ushort prob = ref Probs[baseIndex + symbol];
 
-      return _probs[probabilityIndex];
-    }
-
-    public LzmaRangeDecodeResult TryDecodeNormal(
-        ref LzmaRangeDecoder range,
-        ReadOnlySpan<byte> input,
-        ref int inputOffset,
-        out byte literal)
-    {
-      // В SDK это делается битовым деревом:
-      // symbol = 1;
-      // while(symbol < 0x100) symbol = (symbol<<1) | DecodeBit(probs[symbol]);
-      uint symbol = 1;
-
-      while (symbol < 0x100)
+      var res = rangeDecoder.TryDecodeBit(ref prob, input, ref offset, out uint bit);
+      if (res == LzmaRangeDecodeResult.NeedMoreInput)
       {
-        var res = range.TryDecodeBit(ref _probs[(int)symbol], input, ref inputOffset, out uint bit);
-        if (res != LzmaRangeDecodeResult.Ok)
-        {
-          literal = 0;
-          return res;
-        }
-
-        symbol = (symbol << 1) | bit;
+        decoded = 0;
+        return res;
       }
 
-      literal = (byte)symbol;
-      return LzmaRangeDecodeResult.Ok;
+      symbol = (symbol << 1) | (int)bit;
     }
 
-    public LzmaRangeDecodeResult TryDecodeWithMatchByte(
-        ref LzmaRangeDecoder range,
-        ReadOnlySpan<byte> input,
-        ref int inputOffset,
-        byte matchByte,
-        out byte literal)
+    decoded = (byte)symbol;
+    return LzmaRangeDecodeResult.Ok;
+  }
+
+  public LzmaRangeDecodeResult TryDecodeWithMatchByte(
+      LzmaRangeDecoder rangeDecoder,
+      ReadOnlySpan<byte> input,
+      ref int offset,
+      byte previousByte,
+      long position,
+      byte matchByte,
+      out byte decoded)
+  {
+    int ctx = GetContextIndex(position, previousByte);
+    int baseIndex = GetSubCoderOffset(ctx);
+
+    int symbol = 1;
+
+    for (int i = 0; i < 8; i++)
     {
-      uint symbol = 1;
+      // В "matched" режиме мы идём по дереву, используя matchByte как подсказку.
+      uint matchBit = (uint)((matchByte >> 7) & 1);
+      matchByte <<= 1;
 
-      while (symbol < 0x100)
+      int probIndex = baseIndex + (1 + (int)matchBit) * 0x100 + symbol;
+
+      ref ushort prob = ref Probs[probIndex];
+
+      var res = rangeDecoder.TryDecodeBit(ref prob, input, ref offset, out uint bit);
+      if (res == LzmaRangeDecodeResult.NeedMoreInput)
       {
-        uint matchBit = (uint)((matchByte >> 7) & 1);
-        matchByte <<= 1;
+        decoded = 0;
+        return res;
+      }
 
-        // Индекс вероятности выбирается из «верхней половины» массива:
-        // ((1 + matchBit) << 8) + symbol
-        int probIndex = (int)(((1 + matchBit) << 8) + symbol);
+      symbol = (symbol << 1) | (int)bit;
 
-        var res = range.TryDecodeBit(ref _probs[probIndex], input, ref inputOffset, out uint bit);
-        if (res != LzmaRangeDecodeResult.Ok)
+      if (matchBit != bit)
+      {
+        // Дальше идём как normal.
+        for (i++; i < 8; i++)
         {
-          literal = 0;
-          return res;
-        }
+          ref ushort prob2 = ref Probs[baseIndex + symbol];
 
-        symbol = (symbol << 1) | bit;
-
-        if (bit != matchBit)
-        {
-          // Если мы «разошлись» с matchByte, оставшиеся биты декодируем обычным деревом.
-          while (symbol < 0x100)
+          var res2 = rangeDecoder.TryDecodeBit(ref prob2, input, ref offset, out uint bit2);
+          if (res2 == LzmaRangeDecodeResult.NeedMoreInput)
           {
-            res = range.TryDecodeBit(ref _probs[(int)symbol], input, ref inputOffset, out bit);
-            if (res != LzmaRangeDecodeResult.Ok)
-            {
-              literal = 0;
-              return res;
-            }
-
-            symbol = (symbol << 1) | bit;
+            decoded = 0;
+            return res2;
           }
 
-          break;
+          symbol = (symbol << 1) | (int)bit2;
         }
-      }
 
-      literal = (byte)symbol;
-      return LzmaRangeDecodeResult.Ok;
+        decoded = (byte)symbol;
+        return LzmaRangeDecodeResult.Ok;
+      }
     }
+
+    decoded = (byte)symbol;
+    return LzmaRangeDecodeResult.Ok;
+  }
+
+  internal int ComputeContextIndex(long position, byte previousByte)
+  {
+    // lp: берём младшие lp бит позиции.
+    int lpMask = (1 << _lp) - 1;
+    int posBits = (int)(position & lpMask);
+
+    // lc: берём старшие lc бит прошлого байта.
+    int prevBits = previousByte >> (8 - _lc);
+
+    return (posBits << _lc) + prevBits;
+  }
+
+  private int GetContextIndex(long position, byte previousByte)
+  {
+    // lp: берём младшие lp бит позиции.
+    int lpMask = (1 << _lp) - 1;
+    int posBits = (int)(position & lpMask);
+
+    // lc: берём старшие lc бит прошлого байта.
+    int prevBits = previousByte >> (8 - _lc);
+
+    return (posBits << _lc) + prevBits;
+  }
+
+  private static int GetSubCoderOffset(int ctx)
+  {
+    return ctx * _literalCoderSize;
+  }
+
+  internal ushort GetProbability(int contextIndex, int probabilityIndex)
+  {
+    if (contextIndex < 0 || contextIndex >= ContextCount)
+      throw new ArgumentOutOfRangeException(nameof(contextIndex));
+    if (probabilityIndex < 0 || probabilityIndex >= _literalCoderSize)
+      throw new ArgumentOutOfRangeException(nameof(probabilityIndex));
+
+    return Probs[contextIndex * _literalCoderSize + probabilityIndex];
+  }
+
+  // --- Внутренние helpers для инкрементальных декодеров (следующий слой) ---
+
+  /// <summary>
+  /// Размер одного "subcoder" (контекста) — 0x300 вероятностей.
+  /// </summary>
+  internal const int _subCoderSize = _literalCoderSize;
+
+  /// <summary>
+  /// Прямой доступ к массиву вероятностей (ВНУТРЕННИЙ API).
+  /// Используем, чтобы пошагово (по одному биту) декодировать литерал в более высоком уровне.
+  /// </summary>
+  internal ushort[] Probs { get; }
+
+  /// <summary>
+  /// Возвращает смещение subcoder'а (в массиве вероятностей) по текущей позиции и предыдущему байту.
+  /// Это удобно для пошагового декодирования литерала.
+  /// </summary>
+  internal int GetSubCoderOffset(long position, byte previousByte)
+  {
+    int lpMask = (1 << _lp) - 1;
+    int posBits = (int)(position & lpMask);
+    int prevBits = previousByte >> (8 - _lc);
+
+    int ctx = (posBits << _lc) + prevBits;
+    return ctx * _literalCoderSize;
   }
 }

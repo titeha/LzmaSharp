@@ -43,11 +43,11 @@ public sealed class LzmaLiteralDecoderTests
 
     int inputOffset = 0;
     var res = dec.TryDecodeNormal(
-        ref range,
+        range,
         input: ReadOnlySpan<byte>.Empty,
         ref inputOffset,
-        position: 0,
         previousByte: 0,
+        position: 0,
         out byte b);
 
     Assert.Equal(LzmaRangeDecodeResult.Ok, res);
@@ -63,11 +63,11 @@ public sealed class LzmaLiteralDecoderTests
 
     int inputOffset = 0;
     var res = dec.TryDecodeNormal(
-        ref range,
+        range,
         input: ReadOnlySpan<byte>.Empty,
         ref inputOffset,
-        position: 0,
         previousByte: 0,
+        position: 0,
         out byte b);
 
     Assert.Equal(LzmaRangeDecodeResult.Ok, res);
@@ -83,11 +83,11 @@ public sealed class LzmaLiteralDecoderTests
 
     int inputOffset = 0;
     var res = dec.TryDecodeWithMatchByte(
-        ref range,
+        range,
         input: ReadOnlySpan<byte>.Empty,
         ref inputOffset,
-        position: 0,
         previousByte: 0,
+        position: 0,
         matchByte: 0x00,
         out byte b);
 
@@ -104,11 +104,11 @@ public sealed class LzmaLiteralDecoderTests
 
     int inputOffset = 0;
     var res = dec.TryDecodeWithMatchByte(
-        ref range,
+        range,
         input: ReadOnlySpan<byte>.Empty,
         ref inputOffset,
-        position: 0,
         previousByte: 0,
+        position: 0,
         matchByte: 0xFF,
         out byte b);
 
@@ -133,11 +133,11 @@ public sealed class LzmaLiteralDecoderTests
 
     // Декодируем один байт в контексте 0 (position=0).
     var res = dec.TryDecodeNormal(
-        ref range,
+        range,
         input: ReadOnlySpan<byte>.Empty,
         ref inputOffset,
-        position: 0,
         previousByte: 0,
+        position: 0,
         out _);
 
     Assert.Equal(LzmaRangeDecodeResult.Ok, res);

@@ -216,6 +216,7 @@ public enum LzmaRangeInitResult
 {
   Ok,
   NeedMoreInput,
+  InvalidData
 }
 
 /// <summary>
