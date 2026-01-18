@@ -171,4 +171,21 @@ public sealed class LzmaDictionary
     value = _buffer[idx];
     return true;
   }
+
+  /// <summary>
+  /// Возвращает байт "назад" на <paramref name="distance"/> (distance=1 — предыдущий байт).
+  /// </summary>
+  /// <remarks>
+  /// Это удобный helper для декодера.
+  /// Для внешнего API оставляем безопасный вариант <see cref="TryGetByteBack"/>.
+  /// </remarks>
+  /// <exception cref="ArgumentOutOfRangeException">
+  /// Если <paramref name="distance"/> меньше 1, больше размера словаря или больше количества уже записанных байт.
+  /// </exception>
+  public byte PeekBackByte(int distance)
+  {
+    if (!TryGetByteBack(distance, out byte b))
+      throw new ArgumentOutOfRangeException(nameof(distance), distance, "Недопустимое расстояние для словаря.");
+    return b;
+  }
 }

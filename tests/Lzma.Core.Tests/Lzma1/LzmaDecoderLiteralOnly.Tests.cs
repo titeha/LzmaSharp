@@ -57,13 +57,11 @@ public sealed class LzmaDecoderLiteralOnlyTests
     int inOffset = 0;
     int watchdog = 0;
 
-    // Выход тоже маленькими кусками.
+    // CA2014: stackalloc не внутри цикла.
     Span<byte> outChunk = stackalloc byte[7];
 
     while (outputAll.Count < expected.Length)
     {
-      outChunk.Clear();
-
       watchdog++;
       Assert.True(watchdog < 10000, "Похоже на зависание: декодер не продвигается.");
 
@@ -74,6 +72,7 @@ public sealed class LzmaDecoderLiteralOnlyTests
 
       ReadOnlySpan<byte> inChunk = compressed.AsSpan(inOffset, takeIn);
 
+      // Выход тоже маленькими кусками.
       LzmaDecodeResult res = decoder.Decode(inChunk, out int consumed, outChunk, out int written, out _);
 
       inOffset += consumed;
@@ -97,33 +96,41 @@ public sealed class LzmaDecoderLiteralOnlyTests
   }
 
   [Fact]
-  public void Decode_Returns_NotImplemented_When_It_Sees_Match()
+  public void Decode_Returns_NotImplemented_When_It_Sees_Rep1_OrHigher()
   {
     const byte propsByte = 93;
     Assert.True(LzmaProperties.TryParse(propsByte, out var props));
 
     const int dictionarySize = 1 << 16;
 
-    // Кодируем "isMatch = 1" и "isRep = 1" для первого символа.
-    // Rep-матчи мы ещё не реализовали, поэтому декодер должен вернуть NotImplemented.
+    // Кодируем для первого символа: isMatch=1 (match), isRep=1 (rep), isRepG0=1 (rep1/rep2/rep3).
+    // Rep1+ пока не реализованы => декодер должен вернуть NotImplemented.
     var range = new LzmaTestRangeEncoder();
 
     int numPosStates = 1 << props.Pb;
+
     ushort[] isMatch = new ushort[LzmaConstants.NumStates * numPosStates];
+    ushort[] isRep = new ushort[LzmaConstants.NumStates];
+    ushort[] isRepG0 = new ushort[LzmaConstants.NumStates];
+
     LzmaProbability.Reset(isMatch);
+    LzmaProbability.Reset(isRep);
+    LzmaProbability.Reset(isRepG0);
 
     var state = new LzmaState();
     state.Reset();
 
-    // isMatch=1
-    ref ushort pMatch = ref isMatch[state.Value * numPosStates + 0 /*posState*/];
-    range.EncodeBit(ref pMatch, 1);
+    // isMatch
+    ref ushort pIsMatch = ref isMatch[state.Value * numPosStates + 0 /*posState*/];
+    range.EncodeBit(ref pIsMatch, 1);
 
-    // isRep=1
-    ushort[] isRep = new ushort[LzmaConstants.NumStates];
-    LzmaProbability.Reset(isRep);
-    ref ushort pRep = ref isRep[state.Value];
-    range.EncodeBit(ref pRep, 1);
+    // isRep
+    ref ushort pIsRep = ref isRep[state.Value];
+    range.EncodeBit(ref pIsRep, 1);
+
+    // isRepG0
+    ref ushort pIsRepG0 = ref isRepG0[state.Value];
+    range.EncodeBit(ref pIsRepG0, 1);
 
     byte[] compressed = range.Finish();
 

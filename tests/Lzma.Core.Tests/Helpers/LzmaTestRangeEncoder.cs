@@ -45,15 +45,48 @@ internal sealed class LzmaTestRangeEncoder
     }
   }
 
-  public byte[] Finish()
+  /// <summary>
+  /// "Инициализационные" байты range coder'а.
+  /// </summary>
+  /// <remarks>
+  /// В LZMA декодер перед началом работы читает первые 5 байт входного потока
+  /// и заполняет ими регистр <c>Code</c> (см. <see cref="LzmaRangeDecoder.TryInitialize"/>).
+  ///
+  /// Важно: эти 5 байт не являются отдельным заголовком — это часть арифметического потока.
+  /// Поэтому в тестовом энкодере мы НИЧЕГО специально не записываем: первые байты появятся
+  /// естественно при первом <see cref="ShiftLow"/> (в процессе кодирования/флаша).
+  ///
+  /// Метод нужен только чтобы тестовые энкодеры читались «как документация».
+  /// </remarks>
+  public void WriteInitBytes()
   {
-    // По SDK — 5 раз делаем ShiftLow, чтобы выгрузить хвост.
+    // намеренно пусто
+  }
+
+  /// <summary>
+  /// Сбрасывает "хвост" range coder'а в выходной буфер.
+  /// </summary>
+  /// <remarks>
+  /// Аналог RangeEnc_FlushData в SDK: 5 раз делаем ShiftLow().
+  /// В отличие от <see cref="ToArrayAndReset"/> не сбрасывает состояние и не очищает буфер.
+  /// </remarks>
+  public void Flush()
+  {
     for (int i = 0; i < 5; i++)
     {
       ShiftLow();
     }
+  }
 
-    return [.. _out];
+  /// <summary>
+  /// Возвращает текущий накопленный output без Reset().
+  /// </summary>
+  public byte[] ToArray() => [.. _out];
+
+  public byte[] Finish()
+  {
+    Flush();
+    return ToArray();
   }
 
   public byte[] ToArrayAndReset()

@@ -18,7 +18,13 @@ namespace Lzma.Core.Tests.Helpers;
 /// </summary>
 internal static class LzmaTestSimpleMatchEncoder
 {
-  private const int _literalCoderSize = 0x300;
+  private const int LiteralCoderSize = 0x300;
+
+  /// <summary>
+  /// Синоним для удобства: кодирует тот же поток, что и Encode_A_Run_With_One_Match.
+  /// </summary>
+  public static byte[] Encode(LzmaProperties props, int totalLen) =>
+    Encode_A_Run_With_One_Match(props, totalLen);
 
   /// <summary>
   /// Кодирует поток, который распаковывается в строку из <paramref name="totalLen"/> байт 'A'.
@@ -26,7 +32,8 @@ internal static class LzmaTestSimpleMatchEncoder
   /// </summary>
   public static byte[] Encode_A_Run_With_One_Match(LzmaProperties props, int totalLen)
   {
-    ArgumentOutOfRangeException.ThrowIfLessThan(totalLen, 2);
+    if (totalLen < 2)
+      throw new ArgumentOutOfRangeException(nameof(totalLen));
 
     int numPosStates = 1 << props.Pb;
     int posStateMask = numPosStates - 1;
@@ -47,7 +54,7 @@ internal static class LzmaTestSimpleMatchEncoder
 
     // literal probs
     int numLiteralContexts = 1 << (props.Lc + props.Lp);
-    ushort[] literalProbs = new ushort[_literalCoderSize * numLiteralContexts];
+    ushort[] literalProbs = new ushort[LiteralCoderSize * numLiteralContexts];
     LzmaProbability.Reset(literalProbs);
 
     var state = new LzmaState();
@@ -58,7 +65,7 @@ internal static class LzmaTestSimpleMatchEncoder
 
     // 1) Первый байт — литерал 'A'
     {
-      const long pos = 0;
+      long pos = 0;
       int posState = (int)pos & posStateMask;
       ref ushort pIsMatch = ref isMatch[state.Value * numPosStates + posState];
       range.EncodeBit(ref pIsMatch, 0);
@@ -70,7 +77,7 @@ internal static class LzmaTestSimpleMatchEncoder
 
     // 2) Один match (isMatch=1, isRep=0)
     {
-      const long pos = 1;
+      long pos = 1;
       int posState = (int)pos & posStateMask;
 
       ref ushort pIsMatch = ref isMatch[state.Value * numPosStates + posState];
@@ -116,7 +123,7 @@ internal static class LzmaTestSimpleMatchEncoder
       byte value)
   {
     int ctx = CalcLiteralContext(props, pos, prevByte);
-    int baseIndex = ctx * _literalCoderSize;
+    int baseIndex = ctx * LiteralCoderSize;
 
     int symbol = 1;
     for (int bitIndex = 7; bitIndex >= 0; bitIndex--)
