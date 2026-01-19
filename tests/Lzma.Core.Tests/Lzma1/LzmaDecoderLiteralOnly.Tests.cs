@@ -78,7 +78,7 @@ public sealed class LzmaDecoderLiteralOnlyTests
   }
 
   [Fact]
-  public void Decode_Returns_NotImplemented_When_It_Sees_Rep1_OrHigher()
+  public void Decode_Returns_NotImplemented_When_It_Sees_Rep2_OrHigher()
   {
     // На текущем шаге реализован только rep0.
     // Любые rep1/rep2/rep3 пока должны возвращать NotImplemented.

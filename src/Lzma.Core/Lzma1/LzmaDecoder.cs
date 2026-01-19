@@ -9,10 +9,11 @@ namespace Lzma.Core.Lzma1;
 /// - rep0 (isMatch == 1, isRep == 1, isRepG0 == 0):
 ///   - короткий rep0 (isRep0Long == 0) — длина 1;
 ///   - длинный rep0 (isRep0Long == 1) — длина из repLen.
+/// - rep1 (isMatch == 1, isRep == 1, isRepG0 == 1, isRepG1 == 0).
 /// </para>
 /// <para>
 /// Пока НЕ реализовано (вернём <see cref="LzmaDecodeResult.NotImplemented"/>):
-/// - rep1/rep2/rep3 (ветка isRepG0 == 1).
+/// - rep2/rep3 (ветка isRepG0 == 1, isRepG1 == 1).
 /// </para>
 /// <para>
 /// Контракт:
@@ -37,6 +38,9 @@ public sealed class LzmaDecoder
 
     /// <summary>Декодируем isRepG0 (только если isRep == 1).</summary>
     IsRepG0,
+
+    /// <summary>Декодируем isRepG1 (только если isRepG0 == 1).</summary>
+    IsRepG1,
 
     /// <summary>Декодируем isRep0Long (только если isRepG0 == 0).</summary>
     IsRep0Long,
@@ -76,6 +80,9 @@ public sealed class LzmaDecoder
 
   // isRepG0[state]
   private readonly ushort[] _isRepG0;
+
+  // isRepG1[state]
+  private readonly ushort[] _isRepG1;
 
   // isRep0Long[state][posState]
   private readonly ushort[] _isRep0Long;
@@ -129,6 +136,7 @@ public sealed class LzmaDecoder
     _isMatch = new ushort[LzmaConstants.NumStates * _numPosStates];
     _isRep = new ushort[LzmaConstants.NumStates];
     _isRepG0 = new ushort[LzmaConstants.NumStates];
+    _isRepG1 = new ushort[LzmaConstants.NumStates];
     _isRep0Long = new ushort[LzmaConstants.NumStates * _numPosStates];
 
     _lenDecoder = new LzmaLenDecoder();
@@ -162,6 +170,7 @@ public sealed class LzmaDecoder
     LzmaProbability.Reset(_isMatch);
     LzmaProbability.Reset(_isRep);
     LzmaProbability.Reset(_isRepG0);
+    LzmaProbability.Reset(_isRepG1);
     LzmaProbability.Reset(_isRep0Long);
     _lenDecoder.Reset(_numPosStates);
     _repLenDecoder.Reset(_numPosStates);
@@ -260,6 +269,7 @@ public sealed class LzmaDecoder
         LzmaProbability.Reset(_isMatch);
         LzmaProbability.Reset(_isRep);
         LzmaProbability.Reset(_isRepG0);
+        LzmaProbability.Reset(_isRepG1);
         LzmaProbability.Reset(_isRep0Long);
         _lenDecoder.Reset(_numPosStates);
         _repLenDecoder.Reset(_numPosStates);
@@ -329,13 +339,42 @@ public sealed class LzmaDecoder
 
         if (isRepG0 != 0)
         {
-          // rep1/rep2/rep3 будем добавлять следующим шагом.
+          // isRepG0 == 1 означает rep1/rep2/rep3.
+          // На этом шаге реализуем ТОЛЬКО rep1.
+          _step = Step.IsRepG1;
+          continue;
+        }
+
+        _step = Step.IsRep0Long;
+        continue;
+      }
+
+      if (_step == Step.IsRepG1)
+      {
+        ref ushort prob = ref _isRepG1[_state.Value];
+        var bitRes = _range.TryDecodeBit(ref prob, src, ref srcPos, out uint isRepG1);
+        if (bitRes == LzmaRangeDecodeResult.NeedMoreInput)
+        {
+          result = LzmaDecodeResult.NeedsMoreInput;
+          break;
+        }
+
+        // isRepG1 == 0 -> rep1
+        // isRepG1 == 1 -> rep2/rep3 (пока не поддержано)
+        if (isRepG1 != 0)
+        {
           result = LzmaDecodeResult.NotImplemented;
           shouldTerminate = true;
           break;
         }
 
-        _step = Step.IsRep0Long;
+        // rep1: используем _rep1 как distance и поднимаем его в rep0.
+        // История rep-ов: [rep0, rep1, rep2, rep3] -> [rep1, rep0, rep2, rep3]
+        int dist = _rep1;
+        _rep1 = _rep0;
+        _rep0 = dist;
+
+        _step = Step.DecodeRepLen;
         continue;
       }
 
