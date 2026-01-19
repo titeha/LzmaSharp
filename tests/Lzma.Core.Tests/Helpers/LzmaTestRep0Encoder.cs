@@ -3,291 +3,223 @@ using Lzma.Core.Lzma1;
 namespace Lzma.Core.Tests.Helpers;
 
 /// <summary>
+/// <para>Минимальный «энкодер» для тестов, который позволяет получить потоки с rep0.</para>
 /// <para>
-/// Тестовый «мини-энкодер», который умеет закодировать очень узкий набор сценариев,
-/// нужный для пошаговой разработки декодера.
-/// </para>
-/// <para>
-/// На этом шаге он умеет:
-/// - 1 литерал;
-/// - затем rep0 (короткий или длинный).
-/// </para>
-/// <para>
-/// Это НЕ полноценный LZMA-энкодер.
-/// Он создан только для того, чтобы у нас были детерминированные входные данные
-/// для юнит-тестов декодера.
+/// Важно:
+/// - это НЕ производственный энкодер;
+/// - он покрывает только те ветки, которые нам нужны для unit-тестов;
+/// - мы сознательно держим код простым и понятным.
 /// </para>
 /// </summary>
-internal sealed class LzmaTestRep0Encoder
+internal static class LzmaTestRep0Encoder
 {
-  private readonly LzmaProperties _props;
+  private const int LiteralCoderSize = 0x300;
 
-  private readonly LzmaTestRangeEncoder _range = new();
-  private readonly LzmaLiteralDecoder _literal;
-
-  private readonly int _numPosStates;
-  private readonly int _posStateMask;
-
-  // Модели вероятностей — ровно те же, что использует декодер.
-  private readonly ushort[] _isMatch;      // [state][posState]
-  private readonly ushort[] _isRep;        // [state]
-  private readonly ushort[] _isRepG0;      // [state]
-  private readonly ushort[] _isRep0Long;   // [state][posState]
-
-  // Модели длины для repLen (отдельная модель от matchLen).
-  private readonly ushort[] _repLenChoice;   // 2
-  private readonly ushort[] _repLenChoice2;  // 2
-  private readonly ushort[] _repLenLow;      // posStates * (1<<LenNumLowBits)
-  private readonly ushort[] _repLenMid;      // posStates * (1<<LenNumMidBits)
-  private readonly ushort[] _repLenHigh;     // 1<<LenNumHighBits
-
-  private LzmaState _state;
-  private byte _previousByte;
-  private long _pos;
-
-  public LzmaTestRep0Encoder(LzmaProperties props)
+  /// <summary>
+  /// Поток: один литерал 'A', затем короткий rep0 (len = 1).
+  /// Ожидаемый результат распаковки: "AA".
+  /// </summary>
+  public static byte[] Encode_OneLiteral_Then_ShortRep0(LzmaProperties props, byte literal)
   {
-    _props = props;
+    // Настройки позиции
+    int numPosStates = 1 << props.Pb;
+    int posStateMask = numPosStates - 1;
 
-    _literal = new LzmaLiteralDecoder(props.Lc, props.Lp);
+    // Модели вероятностей
+    ushort[] isMatch = new ushort[LzmaConstants.NumStates * numPosStates];
+    ushort[] isRep = new ushort[LzmaConstants.NumStates];
+    ushort[] isRepG0 = new ushort[LzmaConstants.NumStates];
+    ushort[] isRep0Long = new ushort[LzmaConstants.NumStates * numPosStates];
 
-    _numPosStates = 1 << props.Pb;
-    _posStateMask = _numPosStates - 1;
+    LzmaProbability.Reset(isMatch);
+    LzmaProbability.Reset(isRep);
+    LzmaProbability.Reset(isRepG0);
+    LzmaProbability.Reset(isRep0Long);
 
-    _isMatch = new ushort[LzmaConstants.NumStates * _numPosStates];
-    _isRep = new ushort[LzmaConstants.NumStates];
-    _isRepG0 = new ushort[LzmaConstants.NumStates];
-    _isRep0Long = new ushort[LzmaConstants.NumStates * _numPosStates];
+    // Литералы (lc/lp)
+    var lit = new LzmaLiteralDecoder(props.Lc, props.Lp);
+    lit.Reset();
 
-    _repLenChoice = new ushort[2];
-    _repLenChoice2 = new ushort[2];
+    var state = new LzmaState();
+    byte previousByte = 0;
+    long pos = 0;
 
-    int lowCount = 1 << LzmaConstants.LenNumLowBits;
-    int midCount = 1 << LzmaConstants.LenNumMidBits;
-    int highCount = 1 << LzmaConstants.LenNumHighBits;
+    var enc = new LzmaTestRangeEncoder();
 
-    _repLenLow = new ushort[_numPosStates * lowCount];
-    _repLenMid = new ushort[_numPosStates * midCount];
-    _repLenHigh = new ushort[highCount];
+    // 1) Литерал
+    EncodeIsMatch(enc, isMatch, state, numPosStates, posStateMask, pos, 0);
+    EncodeLiteral(enc, lit, pos, previousByte, literal);
+    previousByte = literal;
+    state.UpdateLiteral();
+    pos++;
 
-    Reset();
+    // 2) rep0 (короткий)
+    EncodeIsMatch(enc, isMatch, state, numPosStates, posStateMask, pos, 1);
+    enc.EncodeBit(ref isRep[state.Value], 1);       // isRep = 1
+    enc.EncodeBit(ref isRepG0[state.Value], 0);     // isRepG0 = 0 (rep0)
+
+    int posState = (int)pos & posStateMask;
+    int rep0LongIndex = (state.Value * numPosStates) + posState;
+    enc.EncodeBit(ref isRep0Long[rep0LongIndex], 0); // isRep0Long = 0 => короткий rep (len = 1)
+
+    state.UpdateShortRep();
+    pos++;
+
+    return enc.Finish();
   }
 
   /// <summary>
-  /// Кодирует поток: 1 литерал, затем короткий rep0 (len=1).
-  /// Ожидаемый эффект при декодировании: повторится предыдущий байт.
+  /// Поток: один литерал 'A', затем длинный rep0 (len >= 2).
+  /// Ожидаемый результат распаковки: (1 + <paramref name="repLen"/>) байт 'A'.
   /// </summary>
-  public byte[] Encode_OneLiteral_Then_ShortRep0(byte literal)
+  public static byte[] Encode_OneLiteral_Then_LongRep0(LzmaProperties props, byte literal, int repLen)
   {
-    Reset();
+    ArgumentOutOfRangeException.ThrowIfLessThan(repLen, LzmaConstants.MatchMinLen);
 
-    EncodeLiteral(literal);
+    // Мы кодируем только "low" ветку LenDecoder: длины 2..9
+    if (repLen > (LzmaConstants.MatchMinLen + ((1 << LzmaConstants.LenNumLowBits) - 1)))
+      throw new ArgumentOutOfRangeException(nameof(repLen), "Этот тестовый энкодер поддерживает только длины 2..9 (low-ветка).");
 
-    // match
-    EncodeIsMatch(1);
+    int numPosStates = 1 << props.Pb;
+    int posStateMask = numPosStates - 1;
 
-    // rep
-    EncodeIsRep(1);
+    // Модели вероятностей
+    ushort[] isMatch = new ushort[LzmaConstants.NumStates * numPosStates];
+    ushort[] isRep = new ushort[LzmaConstants.NumStates];
+    ushort[] isRepG0 = new ushort[LzmaConstants.NumStates];
+    ushort[] isRep0Long = new ushort[LzmaConstants.NumStates * numPosStates];
 
-    // rep0
-    EncodeIsRepG0(0);
+    // repLenDecoder модели
+    ushort[] repLenChoice = new ushort[2];
+    ushort[] repLenLow = new ushort[numPosStates * (1 << LzmaConstants.LenNumLowBits)];
 
-    // short rep0
-    EncodeIsRep0Long(0);
+    LzmaProbability.Reset(isMatch);
+    LzmaProbability.Reset(isRep);
+    LzmaProbability.Reset(isRepG0);
+    LzmaProbability.Reset(isRep0Long);
+    LzmaProbability.Reset(repLenChoice);
+    LzmaProbability.Reset(repLenLow);
 
-    // «Выпускаем» один байт вывода, который декодер скопирует из словаря.
-    _state.UpdateShortRep();
-    _pos += 1;
-    // previousByte не меняется: он равен скопированному байту.
+    var lit = new LzmaLiteralDecoder(props.Lc, props.Lp);
+    lit.Reset();
 
-    _range.Flush();
-    return _range.ToArray();
+    var state = new LzmaState();
+    byte previousByte = 0;
+    long pos = 0;
+
+    var enc = new LzmaTestRangeEncoder();
+
+    // 1) Литерал
+    EncodeIsMatch(enc, isMatch, state, numPosStates, posStateMask, pos, 0);
+    EncodeLiteral(enc, lit, pos, previousByte, literal);
+    previousByte = literal;
+    state.UpdateLiteral();
+    pos++;
+
+    // 2) rep0 (длинный)
+    EncodeIsMatch(enc, isMatch, state, numPosStates, posStateMask, pos, 1);
+    enc.EncodeBit(ref isRep[state.Value], 1);   // isRep = 1
+    enc.EncodeBit(ref isRepG0[state.Value], 0); // isRepG0 = 0 (rep0)
+
+    int posState = (int)pos & posStateMask;
+    int rep0LongIndex = (state.Value * numPosStates) + posState;
+    enc.EncodeBit(ref isRep0Long[rep0LongIndex], 1); // isRep0Long = 1 => длинный rep0
+
+    // repLenDecoder: choice[0]=0 и low[posState]
+    enc.EncodeBit(ref repLenChoice[0], 0);
+
+    int lowSymbol = repLen - LzmaConstants.MatchMinLen; // 0..7
+    Span<ushort> low = repLenLow.AsSpan(posState * (1 << LzmaConstants.LenNumLowBits), (1 << LzmaConstants.LenNumLowBits));
+    EncodeBitTree(enc, low, LzmaConstants.LenNumLowBits, lowSymbol);
+
+    state.UpdateRep();
+    pos += repLen;
+
+    return enc.Finish();
   }
 
   /// <summary>
-  /// Кодирует поток: 1 литерал, затем длинный rep0 (len &gt;= 2).
+  /// Поток: один литерал, затем "rep с isRepG0=1".
+  /// В нашем декодере эта ветка пока не реализована, и должна вернуть NotImplemented.
   /// </summary>
-  public byte[] Encode_OneLiteral_Then_LongRep0(byte literal, int repLen)
+  public static byte[] Encode_OneLiteral_Then_RepG0_Is_1(LzmaProperties props, byte literal)
   {
-    if (repLen < LzmaConstants.MatchMinLen)
-      throw new ArgumentOutOfRangeException(nameof(repLen), $"repLen должен быть >= {LzmaConstants.MatchMinLen}.");
+    int numPosStates = 1 << props.Pb;
+    int posStateMask = numPosStates - 1;
 
-    Reset();
+    ushort[] isMatch = new ushort[LzmaConstants.NumStates * numPosStates];
+    ushort[] isRep = new ushort[LzmaConstants.NumStates];
+    ushort[] isRepG0 = new ushort[LzmaConstants.NumStates];
 
-    EncodeLiteral(literal);
+    LzmaProbability.Reset(isMatch);
+    LzmaProbability.Reset(isRep);
+    LzmaProbability.Reset(isRepG0);
 
-    // match
-    EncodeIsMatch(1);
+    var lit = new LzmaLiteralDecoder(props.Lc, props.Lp);
+    lit.Reset();
 
-    // rep
-    EncodeIsRep(1);
+    var state = new LzmaState();
+    byte previousByte = 0;
+    long pos = 0;
 
-    // rep0
-    EncodeIsRepG0(0);
+    var enc = new LzmaTestRangeEncoder();
 
-    // long rep0
-    EncodeIsRep0Long(1);
+    // 1) Литерал
+    EncodeIsMatch(enc, isMatch, state, numPosStates, posStateMask, pos, 0);
+    EncodeLiteral(enc, lit, pos, previousByte, literal);
+    previousByte = literal;
+    state.UpdateLiteral();
+    pos++;
 
-    EncodeRepLen(repLen);
+    // 2) rep, но не rep0 (isRepG0 = 1)
+    EncodeIsMatch(enc, isMatch, state, numPosStates, posStateMask, pos, 1);
+    enc.EncodeBit(ref isRep[state.Value], 1);
+    enc.EncodeBit(ref isRepG0[state.Value], 1);
 
-    // Декодер после repLen сделает копирование repLen байт.
-    _state.UpdateRep();
-    _pos += repLen;
-    // previousByte после копирования станет таким же (повтор литерала).
-
-    _range.Flush();
-    return _range.ToArray();
+    return enc.Finish();
   }
 
-  private void Reset()
+  private static void EncodeIsMatch(
+    LzmaTestRangeEncoder enc,
+    ushort[] isMatch,
+    LzmaState state,
+    int numPosStates,
+    int posStateMask,
+    long pos,
+    uint bit)
   {
-    _range.Reset();
-    _range.WriteInitBytes();
-
-    LzmaProbability.Reset(_isMatch);
-    LzmaProbability.Reset(_isRep);
-    LzmaProbability.Reset(_isRepG0);
-    LzmaProbability.Reset(_isRep0Long);
-
-    LzmaProbability.Reset(_repLenChoice);
-    LzmaProbability.Reset(_repLenChoice2);
-    LzmaProbability.Reset(_repLenLow);
-    LzmaProbability.Reset(_repLenMid);
-    LzmaProbability.Reset(_repLenHigh);
-
-    _literal.Reset();
-
-    _state.Reset();
-    _previousByte = 0;
-    _pos = 0;
+    int posState = (int)pos & posStateMask;
+    int idx = (state.Value * numPosStates) + posState;
+    enc.EncodeBit(ref isMatch[idx], bit);
   }
 
-  private int GetPosState() => (int)_pos & _posStateMask;
-
-  private void EncodeIsMatch(uint bit)
+  private static void EncodeLiteral(LzmaTestRangeEncoder enc, LzmaLiteralDecoder lit, long pos, byte prevByte, byte value)
   {
-    int posState = GetPosState();
-    ref ushort prob = ref _isMatch[_state.Value * _numPosStates + posState];
-    _range.EncodeBit(ref prob, bit);
-  }
-
-  private void EncodeIsRep(uint bit)
-  {
-    ref ushort prob = ref _isRep[_state.Value];
-    _range.EncodeBit(ref prob, bit);
-  }
-
-  private void EncodeIsRepG0(uint bit)
-  {
-    ref ushort prob = ref _isRepG0[_state.Value];
-    _range.EncodeBit(ref prob, bit);
-  }
-
-  private void EncodeIsRep0Long(uint bit)
-  {
-    int posState = GetPosState();
-    ref ushort prob = ref _isRep0Long[_state.Value * _numPosStates + posState];
-    _range.EncodeBit(ref prob, bit);
-  }
-
-  private void EncodeLiteral(byte b)
-  {
-    // Перед литералом обязательно кодируем isMatch=0.
-    EncodeIsMatch(0);
-
-    int offset = _literal.GetSubCoderOffset(_pos, _previousByte);
-
+    int subOffset = lit.GetSubCoderOffset(pos, prevByte);
     int symbol = 1;
-    for (int i = 7; i >= 0; i--)
-    {
-      uint bit = (uint)((b >> i) & 1);
-      _range.EncodeBit(ref _literal.Probs[offset + symbol], bit);
-      symbol = (symbol << 1) | (int)bit;
-    }
 
-    _previousByte = b;
-    _state.UpdateLiteral();
-    _pos++;
+    for (int i = 0; i < 8; i++)
+    {
+      int bit = (value >> (7 - i)) & 1;
+      enc.EncodeBit(ref lit.Probs[subOffset + symbol], (uint)bit);
+      symbol = (symbol << 1) | bit;
+    }
   }
 
-  private void EncodeRepLen(int len)
+  private static void EncodeBitTree(LzmaTestRangeEncoder enc, Span<ushort> probs, int numBits, int symbol)
   {
-    // В LZMA «len» измеряется в реальных байтах (минимум MatchMinLen).
-    // Внутри модели кодируется symbol = len - MatchMinLen.
-    int posState = GetPosState();
-    int symbol = len - LzmaConstants.MatchMinLen;
-
-    if (symbol < LzmaConstants.LenNumLowSymbols)
+    int m = 1;
+    for (int i = numBits - 1; i >= 0; i--)
     {
-      // choice0 = 0
-      _range.EncodeBit(ref _repLenChoice[0], 0);
-
-      int offset = posState * (1 << LzmaConstants.LenNumLowBits);
-      BitTreeEncoderForTests.Encode(
-        range: _range,
-        probs: _repLenLow,
-        offset: offset,
-        numBits: LzmaConstants.LenNumLowBits,
-        symbol: symbol);
-
-      return;
+      int bit = (symbol >> i) & 1;
+      enc.EncodeBit(ref probs[m], (uint)bit);
+      m = (m << 1) | bit;
     }
-
-    // choice0 = 1
-    _range.EncodeBit(ref _repLenChoice[0], 1);
-
-    symbol -= LzmaConstants.LenNumLowSymbols;
-
-    if (symbol < LzmaConstants.LenNumMidSymbols)
-    {
-      // choice1 = 0
-      _range.EncodeBit(ref _repLenChoice[1], 0);
-
-      int offset = posState * (1 << LzmaConstants.LenNumMidBits);
-      BitTreeEncoderForTests.Encode(
-        range: _range,
-        probs: _repLenMid,
-        offset: offset,
-        numBits: LzmaConstants.LenNumMidBits,
-        symbol: symbol);
-
-      return;
-    }
-
-    // choice1 = 1
-    _range.EncodeBit(ref _repLenChoice[1], 1);
-
-    symbol -= LzmaConstants.LenNumMidSymbols;
-
-    BitTreeEncoderForTests.Encode(
-      range: _range,
-      probs: _repLenHigh,
-      offset: 0,
-      numBits: LzmaConstants.LenNumHighBits,
-      symbol: symbol);
   }
 
   /// <summary>
-  /// Минимальный bit-tree энкодер для тестов.
+  /// Алиас: оставлен для читаемости тестов.
   /// </summary>
-  private static class BitTreeEncoderForTests
-  {
-    public static void Encode(
-      LzmaTestRangeEncoder range,
-      ushort[] probs,
-      int offset,
-      int numBits,
-      int symbol)
-    {
-      // Символ кодируется как путь по дереву от корня:
-      // на каждом уровне записываем 0/1 и обновляем prob соответствующей вершины.
-      int m = 1;
-      for (int bitIndex = numBits - 1; bitIndex >= 0; bitIndex--)
-      {
-        uint bit = (uint)((symbol >> bitIndex) & 1);
-        range.EncodeBit(ref probs[offset + m], bit);
-        m = (m << 1) | (int)bit;
-      }
-    }
-  }
+  public static byte[] Encode_OneLiteral_Then_RepG0_Is1(LzmaProperties props, byte literal)
+    => Encode_OneLiteral_Then_RepG0_Is_1(props, literal);
 }

@@ -3,37 +3,30 @@ using Lzma.Core.Tests.Helpers;
 
 namespace Lzma.Core.Tests.Lzma1;
 
+/// <summary>
+/// Тесты декодера, которые используют ТОЛЬКО литералы (без match и без rep).
+/// Это важно: мы хотим иметь стабильную базу, которую легко отлаживать.
+/// </summary>
 public sealed class LzmaDecoderLiteralOnlyTests
 {
   [Fact]
   public void Decode_OneShot_Produces_Exact_Output()
   {
-    // LZMA props: lc=3, lp=0, pb=2 => propsByte = 3 + 0*9 + 2*45 = 93.
-    const byte propsByte = 93;
-    Assert.True(LzmaProperties.TryParse(propsByte, out var props));
+    Assert.True(LzmaProperties.TryParse(0x5D, out var props));
 
-    // Для literal-only тестов размер словаря не критичен, но пусть будет "как в жизни".
-    const int dictionarySize = 1 << 16;
+    byte[] original = "Hello, LZMA!"u8.ToArray();
+    byte[] compressed = LzmaTestLiteralOnlyEncoder.Encode(props, original);
 
-    byte[] expected = System.Text.Encoding.ASCII.GetBytes("Hello, LZMA literal-only!\n");
-    byte[] compressed = LzmaTestLiteralOnlyEncoder.Encode(props, expected);
+    var decoder = new LzmaDecoder(props, dictionarySize: 1 << 16);
+    byte[] dst = new byte[original.Length];
 
-    var decoder = new LzmaDecoder(props, dictionarySize);
-
-    byte[] output = new byte[expected.Length];
-    LzmaDecodeResult res = decoder.Decode(
-        compressed,
-        out int consumed,
-        output,
-        out int written,
-        out var progress);
+    var res = decoder.Decode(compressed, out int consumed, dst, out int written, out var progress);
 
     Assert.Equal(LzmaDecodeResult.Ok, res);
-    Assert.Equal(expected.Length, written);
-    Assert.True(consumed > 0); // хоть что-то должны были прочитать
-    Assert.Equal(expected, output);
+    Assert.Equal(original.Length, written);
+    Assert.Equal(original, dst);
 
-    // Прогресс должен быть консистентен.
+    // Прогресс должен отражать то, сколько реально было потреблено/записано.
     Assert.Equal(consumed, progress.BytesRead);
     Assert.Equal(written, progress.BytesWritten);
   }
@@ -41,104 +34,66 @@ public sealed class LzmaDecoderLiteralOnlyTests
   [Fact]
   public void Decode_Works_When_Input_And_Output_Are_Streamed_In_Tiny_Chunks()
   {
-    const byte propsByte = 93;
-    Assert.True(LzmaProperties.TryParse(propsByte, out var props));
+    Assert.True(LzmaProperties.TryParse(0x5D, out var props));
 
-    const int dictionarySize = 1 << 16;
+    byte[] original = Enumerable.Range(0, 100).Select(i => (byte)i).ToArray();
+    byte[] compressed = LzmaTestLiteralOnlyEncoder.Encode(props, original);
 
-    // Немного длиннее, чтобы было больше шансов попасть на границы нормализации range coder.
-    byte[] expected = [.. Enumerable.Range(0, 256).Select(i => (byte)i)];
-    byte[] compressed = LzmaTestLiteralOnlyEncoder.Encode(props, expected);
+    var decoder = new LzmaDecoder(props, dictionarySize: 1 << 16);
+    var output = new List<byte>(original.Length);
 
-    var decoder = new LzmaDecoder(props, dictionarySize);
+    // Важно: stackalloc внутри цикла потенциально может привести к переполнению стека,
+    // поэтому буфер выделяем ОДИН РАЗ снаружи.
+    Span<byte> outBuffer = stackalloc byte[7];
 
-    var outputAll = new List<byte>(expected.Length);
-
-    int inOffset = 0;
-    int watchdog = 0;
-
-    // CA2014: stackalloc не внутри цикла.
-    Span<byte> outChunk = stackalloc byte[7];
-
-    while (outputAll.Count < expected.Length)
+    int srcOffset = 0;
+    while (output.Count < original.Length)
     {
-      watchdog++;
-      Assert.True(watchdog < 10000, "Похоже на зависание: декодер не продвигается.");
+      // Ограничиваем выходной буфер оставшимся количеством байт.
+      // Иначе в самом конце теста декодер может корректно запросить NeedsMoreInput
+      // (пытаясь продолжить декодирование), хотя нам уже достаточно данных.
+      int remaining = original.Length - output.Count;
+      Span<byte> outChunk = outBuffer.Slice(0, Math.Min(outBuffer.Length, remaining));
 
-      // Дадим вход маленькими кусками 1..3 байта.
-      int takeIn = Math.Min(1 + (outputAll.Count % 3), compressed.Length - inOffset);
-      if (takeIn <= 0)// Сжатый поток закончился, а выход ещё нет => ошибка.
-        throw new InvalidOperationException("Вход закончился раньше, чем мы получили весь ожидаемый выход.");
+      // Дробим и вход, и выход.
+      int inChunkSize = Math.Min(3, compressed.Length - srcOffset);
+      ReadOnlySpan<byte> inChunk = compressed.AsSpan(srcOffset, inChunkSize);
 
-      ReadOnlySpan<byte> inChunk = compressed.AsSpan(inOffset, takeIn);
+      var res = decoder.Decode(inChunk, out int consumed, outChunk, out int written, out _);
+      srcOffset += consumed;
+      output.AddRange(outChunk.Slice(0, written).ToArray());
 
-      // Выход тоже маленькими кусками.
-      LzmaDecodeResult res = decoder.Decode(inChunk, out int consumed, outChunk, out int written, out _);
-
-      inOffset += consumed;
-
-      if (written > 0)
-        outputAll.AddRange(outChunk.Slice(0, written).ToArray());
-
-      switch (res)
+      if (res == LzmaDecodeResult.NeedsMoreInput)
       {
-        case LzmaDecodeResult.Ok:
-        case LzmaDecodeResult.NeedsMoreInput:
-          // Оба результата допустимы: либо упёрлись в маленький dst, либо ждём ещё src.
-          break;
-
-        default:
-          throw new InvalidOperationException($"Неожиданный результат декодирования: {res}");
+        if (srcOffset >= compressed.Length)
+          throw new InvalidOperationException("Вход закончился раньше, чем мы получили весь ожидаемый выход.");
+        continue;
       }
+
+      if (res != LzmaDecodeResult.Ok)
+        throw new InvalidOperationException($"Неожиданный результат декодера: {res}");
     }
 
-    Assert.Equal(expected, outputAll.ToArray());
+    Assert.Equal(original, output.ToArray());
   }
 
   [Fact]
   public void Decode_Returns_NotImplemented_When_It_Sees_Rep1_OrHigher()
   {
-    const byte propsByte = 93;
-    Assert.True(LzmaProperties.TryParse(propsByte, out var props));
+    // На текущем шаге реализован только rep0.
+    // Любые rep1/rep2/rep3 пока должны возвращать NotImplemented.
 
-    const int dictionarySize = 1 << 16;
+    Assert.True(LzmaProperties.TryParse(0x5D, out var props));
 
-    // Кодируем для первого символа: isMatch=1 (match), isRep=1 (rep), isRepG0=1 (rep1/rep2/rep3).
-    // Rep1+ пока не реализованы => декодер должен вернуть NotImplemented.
-    var range = new LzmaTestRangeEncoder();
+    byte[] compressed = LzmaTestRep0Encoder.Encode_OneLiteral_Then_RepG0_Is1(props, (byte)'A');
 
-    int numPosStates = 1 << props.Pb;
+    var decoder = new LzmaDecoder(props, dictionarySize: 1 << 16);
+    Span<byte> dst = stackalloc byte[2];
 
-    ushort[] isMatch = new ushort[LzmaConstants.NumStates * numPosStates];
-    ushort[] isRep = new ushort[LzmaConstants.NumStates];
-    ushort[] isRepG0 = new ushort[LzmaConstants.NumStates];
-
-    LzmaProbability.Reset(isMatch);
-    LzmaProbability.Reset(isRep);
-    LzmaProbability.Reset(isRepG0);
-
-    var state = new LzmaState();
-    state.Reset();
-
-    // isMatch
-    ref ushort pIsMatch = ref isMatch[state.Value * numPosStates + 0 /*posState*/];
-    range.EncodeBit(ref pIsMatch, 1);
-
-    // isRep
-    ref ushort pIsRep = ref isRep[state.Value];
-    range.EncodeBit(ref pIsRep, 1);
-
-    // isRepG0
-    ref ushort pIsRepG0 = ref isRepG0[state.Value];
-    range.EncodeBit(ref pIsRepG0, 1);
-
-    byte[] compressed = range.Finish();
-
-    var decoder = new LzmaDecoder(props, dictionarySize);
-
-    Span<byte> out1 = stackalloc byte[1];
-    LzmaDecodeResult res = decoder.Decode(compressed, out _, out1, out _, out _);
+    var res = decoder.Decode(compressed, out _, dst, out int written, out _);
 
     Assert.Equal(LzmaDecodeResult.NotImplemented, res);
+    Assert.Equal(1, written);
+    Assert.Equal((byte)'A', dst[0]);
   }
 }

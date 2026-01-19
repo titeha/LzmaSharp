@@ -1,71 +1,72 @@
 namespace Lzma.Core.Lzma1;
 
 /// <summary>
-/// <para>Минимальный потоковый LZMA-декодер.</para>
+/// <para>Потоковый LZMA-декодер (инкрементальный, без небезопасной магии и указателей).</para>
 /// <para>
-/// Мы собираем декодер маленькими шагами, поэтому в нём постепенно появляются новые ветки.
 /// На текущем шаге реализовано:
-/// <list type="bullet">
-///   <item><description>инициализация range decoder'а (чтение 5 init-байт);</description></item>
-///   <item><description>литералы (<c>isMatch == 0</c>);</description></item>
-///   <item><description>обычные match'и (<c>isMatch == 1</c> и <c>isRep == 0</c>): декод длины + дистанции и копирование из словаря;</description></item>
-///   <item><description>rep0 (<c>isMatch == 1</c>, <c>isRep == 1</c>, <c>isRepG0 == 0</c>):
-///     <list type="bullet">
-///       <item><description>short rep0 (<c>isRep0Long == 0</c>) — копируем 1 байт назад;</description></item>
-///       <item><description>long rep0 (<c>isRep0Long == 1</c>) — длина через repLen-модель, дистанция = rep0.</description></item>
-///     </list>
-///   </description></item>
-/// </list>
+/// - литералы (isMatch == 0);
+/// - обычный match (isMatch == 1, isRep == 0);
+/// - rep0 (isMatch == 1, isRep == 1, isRepG0 == 0):
+///   - короткий rep0 (isRep0Long == 0) — длина 1;
+///   - длинный rep0 (isRep0Long == 1) — длина из repLen.
 /// </para>
 /// <para>
 /// Пока НЕ реализовано (вернём <see cref="LzmaDecodeResult.NotImplemented"/>):
-/// <list type="bullet">
-///   <item><description>rep1/rep2/rep3 (когда <c>isRepG0 == 1</c>);</description></item>
-///   <item><description>прочие ветки (end marker, align и т.п. появятся позже).</description></item>
-/// </list>
+/// - rep1/rep2/rep3 (ветка isRepG0 == 1).
 /// </para>
 /// <para>
 /// Контракт:
-/// <list type="bullet">
-///   <item><description><see cref="Decode"/> можно вызывать много раз; декодер хранит состояние между вызовами;</description></item>
-///   <item><description>если входных данных не хватает, возвращает <see cref="LzmaDecodeResult.NeedsMoreInput"/>;</description></item>
-///   <item><description>выходной буфер заполняется максимально (пока не закончился dst или не упёрлись в NeedsMoreInput / ошибку);</description></item>
-///   <item><description>поддерживается потоковая выдача match'ей: если длина match'а больше остатка dst — копируем сколько помещается и продолжим на следующем вызове.</description></item>
-/// </list>
+/// - метод <see cref="Decode"/> можно вызывать много раз;
+/// - декодер хранит состояние между вызовами;
+/// - если входных данных не хватает, возвращает <see cref="LzmaDecodeResult.NeedsMoreInput"/>;
+/// - выходной буфер заполняется максимально (пока не закончился dst или не упёрлись в NeedsMoreInput).
 /// </para>
 /// </summary>
 public sealed class LzmaDecoder
 {
   private enum Step
   {
+    /// <summary>Ожидаем 5 байт инициализации range decoder.</summary>
     RangeInit,
 
+    /// <summary>Декодируем isMatch.</summary>
     IsMatch,
+
+    /// <summary>Декодируем isRep (только если isMatch == 1).</summary>
     IsRep,
 
-    // Обычный match (isRep == 0)
-    MatchLen,
-    MatchDist,
-    CopyMatch,
-
-    // Rep-ветка (isRep == 1)
+    /// <summary>Декодируем isRepG0 (только если isRep == 1).</summary>
     IsRepG0,
-    IsRep0Long,
-    RepLen,
-    CopyRep,
 
-    // Литерал
+    /// <summary>Декодируем isRep0Long (только если isRepG0 == 0).</summary>
+    IsRep0Long,
+
+    /// <summary>Декодируем длину для rep0 (repLen).</summary>
+    DecodeRepLen,
+
+    /// <summary>Декодируем длину обычного match (len).</summary>
+    DecodeMatchLen,
+
+    /// <summary>Декодируем расстояние обычного match.</summary>
+    DecodeMatchDistance,
+
+    /// <summary>Копируем match в словарь и output (может продолжаться в следующем вызове).</summary>
+    MatchCopy,
+
+    /// <summary>Декодируем литерал (8 бит в битовом дереве).</summary>
     Literal,
   }
 
   private readonly LzmaProperties _properties;
+  // Важно: LzmaRangeDecoder — struct с изменяемым состоянием (Code/Range и т.п.).
+  // Если сделать поле readonly, компилятор начнёт делать защитные копии при вызове методов,
+  // и состояние range decoder'а перестанет сохраняться между вызовами (а иногда даже внутри одного Decode).
   private LzmaRangeDecoder _range = new();
   private readonly LzmaDictionary _dictionary;
   private readonly LzmaLiteralDecoder _literal;
-
-  private readonly LzmaLenDecoder _lenDecoder = new();
-  private readonly LzmaLenDecoder _repLenDecoder = new();
-  private readonly LzmaDistanceDecoder _distanceDecoder = new();
+  private readonly LzmaLenDecoder _lenDecoder;
+  private readonly LzmaLenDecoder _repLenDecoder;
+  private readonly LzmaDistanceDecoder _distanceDecoder;
 
   // isMatch[state][posState]
   private readonly ushort[] _isMatch;
@@ -84,24 +85,29 @@ public sealed class LzmaDecoder
 
   private LzmaState _state;
   private byte _previousByte;
-
   private Step _step;
 
-  // Промежуточное состояние декодирования литерала (битовое дерево 8 бит).
+  // Литерал: промежуточное состояние декодирования (битовое дерево 8 бит).
   private int _literalSubCoderOffset;
   private int _literalSymbol;
 
-  // Промежуточное состояние match/rep
-  private int _matchLength;     // ВАЖНО: это "остаток" длины, который ещё надо скопировать.
-  private int _matchDistance;
+  // Match/Rep: промежуточное состояние.
+  private int _matchPosState;
+  private int _decodedMatchLen;
+  private int _pendingMatchLength;
+  private int _pendingMatchDistance;
+
+  // Rep distances.
+  private int _rep0;
+  private int _rep1;
+  private int _rep2;
+  private int _rep3;
 
   private bool _isTerminal;
   private LzmaDecodeResult _terminalResult;
 
   private long _totalInputBytes;
-
-  // Rep history. На текущем шаге используем только rep0.
-  private int _rep0;
+  private bool _rangeInitialized;
 
   /// <summary>
   /// Создаёт декодер для потока с указанными параметрами.
@@ -125,6 +131,10 @@ public sealed class LzmaDecoder
     _isRepG0 = new ushort[LzmaConstants.NumStates];
     _isRep0Long = new ushort[LzmaConstants.NumStates * _numPosStates];
 
+    _lenDecoder = new LzmaLenDecoder();
+    _repLenDecoder = new LzmaLenDecoder();
+    _distanceDecoder = new LzmaDistanceDecoder();
+
     Reset(clearDictionary: true);
   }
 
@@ -143,6 +153,7 @@ public sealed class LzmaDecoder
   /// </summary>
   public void Reset(bool clearDictionary)
   {
+    _rangeInitialized = false;
     _range.Reset();
 
     _dictionary.Reset(clearBuffer: clearDictionary);
@@ -152,17 +163,19 @@ public sealed class LzmaDecoder
     LzmaProbability.Reset(_isRep);
     LzmaProbability.Reset(_isRepG0);
     LzmaProbability.Reset(_isRep0Long);
-
-    _literal.Reset();
     _lenDecoder.Reset(_numPosStates);
     _repLenDecoder.Reset(_numPosStates);
     _distanceDecoder.Reset();
+    _literal.Reset();
 
     // Состояние конечного автомата LZMA.
     _state.Reset();
 
     // Предыдущий байт (для контекста литералов).
     _previousByte = 0;
+
+    // Rep distances по умолчанию — 1 (это стандартное начальное значение в LZMA).
+    _rep0 = _rep1 = _rep2 = _rep3 = 1;
 
     // Мы ещё не прочитали 5 байт инициализации range coder.
     _step = Step.RangeInit;
@@ -171,17 +184,16 @@ public sealed class LzmaDecoder
     _literalSubCoderOffset = 0;
     _literalSymbol = 0;
 
-    // Match сейчас не в процессе.
-    _matchLength = 0;
-    _matchDistance = 0;
+    // Match/Rep сейчас не в процессе.
+    _matchPosState = 0;
+    _decodedMatchLen = 0;
+    _pendingMatchLength = 0;
+    _pendingMatchDistance = 0;
 
     _isTerminal = false;
     _terminalResult = LzmaDecodeResult.Ok;
 
     _totalInputBytes = 0;
-
-    // Как в LZMA SDK: rep0 по умолчанию 1.
-    _rep0 = 1;
   }
 
   /// <summary>
@@ -190,6 +202,9 @@ public sealed class LzmaDecoder
   /// <remarks>
   /// Мы не знаем "unpackSize" на этом шаге. Поэтому декодируем "сколько получится":
   /// пока есть место в <paramref name="dst"/> и пока хватает входных данных.
+  /// 
+  /// Когда выходной буфер заполнился, возвращаем <see cref="LzmaDecodeResult.Ok"/>.
+  /// Чтобы продолжить — вызови Decode ещё раз с новым куском выходного буфера.
   /// </remarks>
   public LzmaDecodeResult Decode(
     ReadOnlySpan<byte> src,
@@ -201,6 +216,10 @@ public sealed class LzmaDecoder
     int srcPos = 0;
     int dstPos = 0;
 
+    // Значения по умолчанию — на случай раннего выхода.
+    LzmaDecodeResult result = LzmaDecodeResult.Ok;
+    bool shouldTerminate = false;
+
     // Если терминальное состояние — выходим сразу.
     if (_isTerminal)
     {
@@ -210,45 +229,45 @@ public sealed class LzmaDecoder
       return _terminalResult;
     }
 
-    LzmaDecodeResult result = LzmaDecodeResult.Ok;
-    bool shouldTerminate = false;
+    // Если мы на старте потока — обязаны прочитать 5 init-байт range coder.
+    // Важно: мы делаем это ДО основного цикла, чтобы далее TryDecodeBit никогда
+    // не вызывался на неинициализированном range decoder'е.
+    if (_step == Step.RangeInit && !_rangeInitialized)
+    {
+      var init = _range.TryInitialize(src, ref srcPos);
+      if (init == LzmaRangeInitResult.NeedMoreInput)
+      {
+        result = LzmaDecodeResult.NeedsMoreInput;
+        goto Done;
+      }
+
+      if (init == LzmaRangeInitResult.InvalidData)
+      {
+        result = LzmaDecodeResult.InvalidData;
+        shouldTerminate = true;
+        goto Done;
+      }
+
+      _rangeInitialized = true;
+    }
 
     while (dstPos < dst.Length)
     {
       if (_step == Step.RangeInit)
       {
-        var initRes = _range.TryInitialize(src, ref srcPos);
-        if (initRes == LzmaRangeInitResult.NeedMoreInput)
-        {
-          result = LzmaDecodeResult.NeedsMoreInput;
-          break;
-        }
-
-        if (initRes == LzmaRangeInitResult.InvalidData)
-        {
-          result = LzmaDecodeResult.InvalidData;
-          shouldTerminate = true;
-          break;
-        }
-
-        // Инициализация нового потока.
+        // Range coder уже инициализирован (или мы вернули NeedsMoreInput выше).
+        // Здесь лишь инициализируем модели и состояние.
         LzmaProbability.Reset(_isMatch);
         LzmaProbability.Reset(_isRep);
         LzmaProbability.Reset(_isRepG0);
         LzmaProbability.Reset(_isRep0Long);
-
-        _literal.Reset();
         _lenDecoder.Reset(_numPosStates);
         _repLenDecoder.Reset(_numPosStates);
         _distanceDecoder.Reset();
-
+        _literal.Reset();
         _state.Reset();
         _previousByte = 0;
-
-        _rep0 = 1;
-
-        _matchLength = 0;
-        _matchDistance = 0;
+        _rep0 = _rep1 = _rep2 = _rep3 = 1;
 
         _step = Step.IsMatch;
         continue;
@@ -273,10 +292,13 @@ public sealed class LzmaDecoder
           _literalSubCoderOffset = _literal.GetSubCoderOffset(pos, _previousByte);
           _literalSymbol = 1;
           _step = Step.Literal;
-          continue;
+        }
+        else
+        {
+          _matchPosState = posState;
+          _step = Step.IsRep;
         }
 
-        _step = Step.IsRep;
         continue;
       }
 
@@ -290,110 +312,13 @@ public sealed class LzmaDecoder
           break;
         }
 
-        if (isRep == 0)
-        {
-          _step = Step.MatchLen;
-          continue;
-        }
-
-        // rep-ветка
-        _step = Step.IsRepG0;
-        continue;
-      }
-
-      if (_step == Step.MatchLen)
-      {
-        int posState = (int)_dictionary.TotalWritten & _posStateMask;
-        var lenRes = _lenDecoder.TryDecode(ref _range, src, ref srcPos, posState, out uint len);
-        if (lenRes == LzmaRangeDecodeResult.NeedMoreInput)
-        {
-          result = LzmaDecodeResult.NeedsMoreInput;
-          break;
-        }
-
-        _matchLength = checked((int)len);
-        _step = Step.MatchDist;
-        continue;
-      }
-
-      if (_step == Step.MatchDist)
-      {
-        // lenToPosState — грубо: min(len - 2, 3)
-        int lenToPosState = _matchLength - LzmaConstants.MatchMinLen;
-        if (lenToPosState > 3)
-          lenToPosState = 3;
-
-        var distRes = _distanceDecoder.TryDecodeDistance(ref _range, src, ref srcPos, lenToPosState, out uint dist);
-        if (distRes == LzmaRangeDecodeResult.NeedMoreInput)
-        {
-          result = LzmaDecodeResult.NeedsMoreInput;
-          break;
-        }
-
-        // В LZMA "distance" в битстриме хранится как (realDist - 1).
-        _matchDistance = checked((int)dist);
-        _step = Step.CopyMatch;
-        continue;
-      }
-
-      if (_step == Step.CopyMatch)
-      {
-        // Копируем match кусками: сколько помещается в dst.
-        if (_matchLength <= 0)
-        {
-          result = LzmaDecodeResult.InvalidData;
-          shouldTerminate = true;
-          break;
-        }
-
-        int canWrite = dst.Length - dstPos;
-        if (canWrite <= 0)
-        {
-          // dst заполнен. Возвращаем Ok, продолжим на следующем вызове.
-          result = LzmaDecodeResult.Ok;
-          break;
-        }
-
-        int chunkLen = _matchLength;
-        if (chunkLen > canWrite)
-          chunkLen = canWrite;
-
-        var dictRes = _dictionary.TryCopyMatch(distance: _matchDistance, length: chunkLen, dst, ref dstPos);
-        if (dictRes == LzmaDictionaryResult.OutputTooSmall)
-        {
-          // Теоретически сюда не должны попадать (chunkLen <= canWrite), но на всякий случай.
-          result = LzmaDecodeResult.Ok;
-          break;
-        }
-
-        if (dictRes != LzmaDictionaryResult.Ok)
-        {
-          result = LzmaDecodeResult.InvalidData;
-          shouldTerminate = true;
-          break;
-        }
-
-        _matchLength -= chunkLen;
-        _previousByte = _dictionary.PeekBackByte(1);
-
-        if (_matchLength > 0)
-        {
-          // match ещё не докопировали, а dst, вероятно, уже закончился.
-          result = LzmaDecodeResult.Ok;
-          break;
-        }
-
-        // match завершён.
-        _rep0 = _matchDistance;
-        _state.UpdateMatch();
-        _step = Step.IsMatch;
+        _step = isRep == 0 ? Step.DecodeMatchLen : Step.IsRepG0;
         continue;
       }
 
       if (_step == Step.IsRepG0)
       {
-        // На этом шаге поддерживаем только rep0.
-        // Если isRepG0 == 1, значит rep1/rep2/rep3 — вернём NotImplemented.
+        // Ветка rep. Пока реализуем ТОЛЬКО rep0 (isRepG0 == 0).
         ref ushort prob = ref _isRepG0[_state.Value];
         var bitRes = _range.TryDecodeBit(ref prob, src, ref srcPos, out uint isRepG0);
         if (bitRes == LzmaRangeDecodeResult.NeedMoreInput)
@@ -404,6 +329,7 @@ public sealed class LzmaDecoder
 
         if (isRepG0 != 0)
         {
+          // rep1/rep2/rep3 будем добавлять следующим шагом.
           result = LzmaDecodeResult.NotImplemented;
           shouldTerminate = true;
           break;
@@ -415,11 +341,9 @@ public sealed class LzmaDecoder
 
       if (_step == Step.IsRep0Long)
       {
-        long pos = _dictionary.TotalWritten;
-        int posState = (int)pos & _posStateMask;
-        int idx = _state.Value * _numPosStates + posState;
+        // isRep0Long зависит от state и posState.
+        int idx = (_state.Value * _numPosStates) + _matchPosState;
         ref ushort prob = ref _isRep0Long[idx];
-
         var bitRes = _range.TryDecodeBit(ref prob, src, ref srcPos, out uint isRep0Long);
         if (bitRes == LzmaRangeDecodeResult.NeedMoreInput)
         {
@@ -429,95 +353,149 @@ public sealed class LzmaDecoder
 
         if (isRep0Long == 0)
         {
-          // short rep0: длина = 1, дистанция = rep0
-          var dictRes = _dictionary.TryCopyMatch(distance: _rep0, length: 1, dst, ref dstPos);
-          if (dictRes == LzmaDictionaryResult.OutputTooSmall)
-          {
-            // dst неожиданно мал — просто вернём Ok.
-            result = LzmaDecodeResult.Ok;
-            break;
-          }
-
-          if (dictRes != LzmaDictionaryResult.Ok)
-          {
-            result = LzmaDecodeResult.InvalidData;
-            shouldTerminate = true;
-            break;
-          }
-
-          _previousByte = _dictionary.PeekBackByte(1);
+          // Короткий rep0: длина 1.
+          _pendingMatchLength = 1;
+          _pendingMatchDistance = _rep0;
           _state.UpdateShortRep();
-          _step = Step.IsMatch;
-          continue;
+          _step = Step.MatchCopy;
+        }
+        else
+        {
+          _step = Step.DecodeRepLen;
         }
 
-        _step = Step.RepLen;
         continue;
       }
 
-      if (_step == Step.RepLen)
+      if (_step == Step.DecodeRepLen)
       {
-        int posState = (int)_dictionary.TotalWritten & _posStateMask;
-        var lenRes = _repLenDecoder.TryDecode(ref _range, src, ref srcPos, posState, out uint len);
+        var lenRes = _repLenDecoder.TryDecode(ref _range, src, ref srcPos, _matchPosState, out uint repLen);
         if (lenRes == LzmaRangeDecodeResult.NeedMoreInput)
         {
           result = LzmaDecodeResult.NeedsMoreInput;
           break;
         }
 
-        _matchLength = checked((int)len);
-        _matchDistance = _rep0;
-        _step = Step.CopyRep;
+        if (lenRes != LzmaRangeDecodeResult.Ok)
+        {
+          result = LzmaDecodeResult.InvalidData;
+          shouldTerminate = true;
+          break;
+        }
+
+        _pendingMatchLength = checked((int)repLen);
+        _pendingMatchDistance = _rep0;
+        _state.UpdateRep();
+        _step = Step.MatchCopy;
         continue;
       }
 
-      if (_step == Step.CopyRep)
+      if (_step == Step.DecodeMatchLen)
       {
-        if (_matchLength <= 0)
+        var lenRes = _lenDecoder.TryDecode(ref _range, src, ref srcPos, _matchPosState, out uint matchLen);
+        if (lenRes == LzmaRangeDecodeResult.NeedMoreInput)
+        {
+          result = LzmaDecodeResult.NeedsMoreInput;
+          break;
+        }
+
+        if (lenRes != LzmaRangeDecodeResult.Ok)
         {
           result = LzmaDecodeResult.InvalidData;
           shouldTerminate = true;
           break;
         }
 
-        int canWrite = dst.Length - dstPos;
-        if (canWrite <= 0)
-        {
-          result = LzmaDecodeResult.Ok;
-          break;
-        }
-
-        int chunkLen = _matchLength;
-        if (chunkLen > canWrite)
-          chunkLen = canWrite;
-
-        var dictRes = _dictionary.TryCopyMatch(distance: _matchDistance, length: chunkLen, dst, ref dstPos);
-        if (dictRes == LzmaDictionaryResult.OutputTooSmall)
-        {
-          result = LzmaDecodeResult.Ok;
-          break;
-        }
-
-        if (dictRes != LzmaDictionaryResult.Ok)
-        {
-          result = LzmaDecodeResult.InvalidData;
-          shouldTerminate = true;
-          break;
-        }
-
-        _matchLength -= chunkLen;
-        _previousByte = _dictionary.PeekBackByte(1);
-
-        if (_matchLength > 0)
-        {
-          result = LzmaDecodeResult.Ok;
-          break;
-        }
-
-        // rep завершён.
-        _state.UpdateRep();
-        _step = Step.IsMatch;
+        _decodedMatchLen = checked((int)matchLen);
+        _step = Step.DecodeMatchDistance;
         continue;
+      }
+
+      if (_step == Step.DecodeMatchDistance)
+      {
+        // В LZMA distance декодируется с учётом lenToPosState.
+        // lenToPosState = min(matchLen - MatchMinLen, NumLenToPosStates - 1)
+        // (в оригинальном 7-Zip это: lenToPosState = (len < 6) ? (len - 2) : 3)
+        int lenToPosState = _decodedMatchLen - LzmaConstants.MatchMinLen;
+        if (lenToPosState < 0)
+          lenToPosState = 0;
+        if (lenToPosState >= LzmaConstants.NumLenToPosStates)
+          lenToPosState = LzmaConstants.NumLenToPosStates - 1;
+
+        var distRes = _distanceDecoder.TryDecodeDistance(ref _range, src, ref srcPos, lenToPosState, out uint distance);
+        if (distRes == LzmaRangeDecodeResult.NeedMoreInput)
+        {
+          result = LzmaDecodeResult.NeedsMoreInput;
+          break;
+        }
+
+        if (distRes != LzmaRangeDecodeResult.Ok)
+        {
+          result = LzmaDecodeResult.InvalidData;
+          shouldTerminate = true;
+          break;
+        }
+
+        // Обновляем rep history.
+        _rep3 = _rep2;
+        _rep2 = _rep1;
+        _rep1 = _rep0;
+        _rep0 = (int)distance;
+
+        _pendingMatchLength = _decodedMatchLen;
+        _pendingMatchDistance = _rep0;
+
+        _state.UpdateMatch();
+        _step = Step.MatchCopy;
+        continue;
+      }
+
+      if (_step == Step.MatchCopy)
+      {
+        int before = dstPos;
+
+        // Важно: LzmaDictionary.TryCopyMatch(...) не умеет сам уменьшать length.
+        // Поэтому мы сами считаем, сколько байт реально скопировали в dst,
+        // и уменьшаем _pendingMatchLength.
+        var copyRes = _dictionary.TryCopyMatch(_pendingMatchDistance, _pendingMatchLength, dst, ref dstPos);
+
+        int copied = dstPos - before;
+        _pendingMatchLength -= copied;
+        if (_pendingMatchLength < 0)
+        {
+          // Такого быть не должно: это означает рассинхрон длины и реального копирования.
+          result = LzmaDecodeResult.InvalidData;
+          shouldTerminate = true;
+          break;
+        }
+
+        if (copyRes == LzmaDictionaryResult.InvalidDistance)
+        {
+          result = LzmaDecodeResult.InvalidData;
+          shouldTerminate = true;
+          break;
+        }
+
+        if (copied > 0)
+          _previousByte = dst[dstPos - 1];
+
+        if (_pendingMatchLength == 0)
+        {
+          _step = Step.IsMatch;
+          continue;
+        }
+
+        // Выход закончился — вернём Ok, а копирование продолжим в следующем вызове.
+        if (copyRes == LzmaDictionaryResult.OutputTooSmall)
+        {
+          result = LzmaDecodeResult.Ok;
+          break;
+        }
+
+        // Если словарь сказал "Ok", но match не докопирован — это ошибка/битый поток.
+        result = LzmaDecodeResult.InvalidData;
+        shouldTerminate = true;
+        break;
       }
 
       if (_step == Step.Literal)
@@ -546,28 +524,30 @@ public sealed class LzmaDecoder
         _previousByte = b;
         _state.UpdateLiteral();
         _step = Step.IsMatch;
-        _literalSymbol = 0;
         continue;
       }
 
-      // Неверное состояние
+      // Неверное состояние.
       result = LzmaDecodeResult.InvalidData;
       shouldTerminate = true;
       break;
     }
 
+  Done:
     if (shouldTerminate)
     {
       _isTerminal = true;
       _terminalResult = result;
     }
 
-    // ЕДИНСТВЕННОЕ место присвоения out-параметров.
     bytesConsumed = srcPos;
     bytesWritten = dstPos;
-    _totalInputBytes += bytesConsumed;
-    progress = new LzmaProgress(_totalInputBytes, _dictionary.TotalWritten);
 
+    // Важно: учитываем потреблённый вход даже при NeedsMoreInput.
+    // Это гарантирует корректный прогресс при потоковой подаче.
+    _totalInputBytes += bytesConsumed;
+
+    progress = new LzmaProgress(_totalInputBytes, _dictionary.TotalWritten);
     return result;
   }
 }

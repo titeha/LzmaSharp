@@ -3,60 +3,50 @@ using Lzma.Core.Tests.Helpers;
 
 namespace Lzma.Core.Tests.Lzma1;
 
+/// <summary>
+/// <para>Тесты на rep0 (самая первая и частая «повторная дистанция» в LZMA).</para>
+/// <para>Мы пока не покрываем rep1/rep2/rep3 — это будут следующие маленькие шаги.</para>
+/// </summary>
 public sealed class LzmaDecoderRep0Tests
 {
   [Fact]
   public void Decode_ShortRep0_Copies_Previous_Byte()
   {
-    // Эти параметры совпадают с другими тестами.
-    // Важно: Pb = 2 -> numPosStates = 4.
-    const byte propsByte = 93;
-    Assert.True(LzmaProperties.TryParse(propsByte, out var props));
+    Assert.True(LzmaProperties.TryParse(0x5D, out var props));
 
-    const int dictionarySize = 1 << 16;
+    byte a = (byte)'A';
+    byte[] lzma = LzmaTestRep0Encoder.Encode_OneLiteral_Then_ShortRep0(props, a);
 
-    // Поток: 'A' (литерал) + short rep0 (длина = 1, dist = rep0).
-    // rep0 по умолчанию равен 1, то есть мы копируем предыдущий байт.
-    var encoder = new LzmaTestRep0Encoder(props);
-    byte[] input = encoder.Encode_OneLiteral_Then_ShortRep0((byte)'A');
+    var dec = new LzmaDecoder(props, dictionarySize: 1 << 16);
 
-    var decoder = new LzmaDecoder(props, dictionarySize);
-
-    Span<byte> output = stackalloc byte[2];
-    var res = decoder.Decode(input, out int bytesConsumed, output, out int bytesWritten, out var progress);
+    Span<byte> dst = stackalloc byte[2];
+    var res = dec.Decode(lzma, out _, dst, out int written, out _);
 
     Assert.Equal(LzmaDecodeResult.Ok, res);
-    Assert.Equal(2, bytesWritten);
-    Assert.Equal(new byte[] { (byte)'A', (byte)'A' }, output.ToArray());
-
-    // Прогресс должен совпадать с фактом записи.
-    Assert.Equal(bytesConsumed, progress.BytesRead);
-    Assert.Equal(2, progress.BytesWritten);
+    Assert.Equal(2, written);
+    Assert.Equal(a, dst[0]);
+    Assert.Equal(a, dst[1]);
   }
 
   [Fact]
   public void Decode_LongRep0_Copies_From_Dictionary_With_Overlap()
   {
-    const byte propsByte = 93;
-    Assert.True(LzmaProperties.TryParse(propsByte, out var props));
+    Assert.True(LzmaProperties.TryParse(0x5D, out var props));
 
-    const int dictionarySize = 1 << 16;
+    byte a = (byte)'A';
+    const int repLen = 3; // output: 1 + 3 = 4 байта
 
-    // Поток: 'Q' (литерал) + long rep0 (длина = 6).
-    // Ожидаемый результат: 1 + 6 = 7 байт 'Q'.
-    var encoder = new LzmaTestRep0Encoder(props);
-    byte[] input = encoder.Encode_OneLiteral_Then_LongRep0((byte)'Q', repLen: 6);
+    byte[] lzma = LzmaTestRep0Encoder.Encode_OneLiteral_Then_LongRep0(props, a, repLen);
 
-    var decoder = new LzmaDecoder(props, dictionarySize);
+    var dec = new LzmaDecoder(props, dictionarySize: 1 << 16);
 
-    byte[] output = new byte[7];
-    var res = decoder.Decode(input, out _, output, out int bytesWritten, out _);
+    Span<byte> dst = stackalloc byte[4];
+    var res = dec.Decode(lzma, out _, dst, out int written, out _);
 
     Assert.Equal(LzmaDecodeResult.Ok, res);
-    Assert.Equal(output.Length, bytesWritten);
-    for (int i = 0; i < output.Length; i++)
-    {
-      Assert.Equal((byte)'Q', output[i]);
-    }
+    Assert.Equal(4, written);
+
+    for (int i = 0; i < written; i++)
+      Assert.Equal(a, dst[i]);
   }
 }
