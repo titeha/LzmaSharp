@@ -36,7 +36,9 @@ public sealed class LzmaDecoderRep0Tests
     byte a = (byte)'A';
     const int repLen = 3; // output: 1 + 3 = 4 байта
 
-    byte[] lzma = LzmaTestRep0Encoder.Encode_OneLiteral_Then_LongRep0(props, a, repLen);
+    // Важно: сигнатура helper'а = (props, repLen, literal). Чтобы не перепутать порядок,
+    // используем именованные аргументы.
+    byte[] lzma = LzmaTestRep0Encoder.Encode_OneLiteral_Then_LongRep0(props, repLen: repLen, literal: a);
 
     var dec = new LzmaDecoder(props, dictionarySize: 1 << 16);
 

@@ -39,8 +39,19 @@ public sealed class LzmaDecoder
     /// <summary>Декодируем isRepG0 (только если isRep == 1).</summary>
     IsRepG0,
 
-    /// <summary>Декодируем isRepG1 (только если isRepG0 == 1).</summary>
+    /// <summary>
+    /// Декодируем isRepG1 (только если isRepG0 == 1).
+    /// 0 => rep1
+    /// 1 => rep2/rep3 (дальше смотри isRepG2)
+    /// </summary>
     IsRepG1,
+
+    /// <summary>
+    /// Декодируем isRepG2 (только если isRepG1 == 1).
+    /// 0 => rep2
+    /// 1 => rep3
+    /// </summary>
+    IsRepG2,
 
     /// <summary>Декодируем isRep0Long (только если isRepG0 == 0).</summary>
     IsRep0Long,
@@ -83,6 +94,7 @@ public sealed class LzmaDecoder
 
   // isRepG1[state]
   private readonly ushort[] _isRepG1;
+  private readonly ushort[] _isRepG2;
 
   // isRep0Long[state][posState]
   private readonly ushort[] _isRep0Long;
@@ -137,6 +149,7 @@ public sealed class LzmaDecoder
     _isRep = new ushort[LzmaConstants.NumStates];
     _isRepG0 = new ushort[LzmaConstants.NumStates];
     _isRepG1 = new ushort[LzmaConstants.NumStates];
+    _isRepG2 = new ushort[LzmaConstants.NumStates];
     _isRep0Long = new ushort[LzmaConstants.NumStates * _numPosStates];
 
     _lenDecoder = new LzmaLenDecoder();
@@ -171,6 +184,7 @@ public sealed class LzmaDecoder
     LzmaProbability.Reset(_isRep);
     LzmaProbability.Reset(_isRepG0);
     LzmaProbability.Reset(_isRepG1);
+    LzmaProbability.Reset(_isRepG2);
     LzmaProbability.Reset(_isRep0Long);
     _lenDecoder.Reset(_numPosStates);
     _repLenDecoder.Reset(_numPosStates);
@@ -209,11 +223,14 @@ public sealed class LzmaDecoder
   /// Декодирует данные из <paramref name="src"/> в <paramref name="dst"/>.
   /// </summary>
   /// <remarks>
+  /// <para>
   /// Мы не знаем "unpackSize" на этом шаге. Поэтому декодируем "сколько получится":
   /// пока есть место в <paramref name="dst"/> и пока хватает входных данных.
-  /// 
+  /// </para>
+  /// <para>
   /// Когда выходной буфер заполнился, возвращаем <see cref="LzmaDecodeResult.Ok"/>.
   /// Чтобы продолжить — вызови Decode ещё раз с новым куском выходного буфера.
+  /// </para>
   /// </remarks>
   public LzmaDecodeResult Decode(
     ReadOnlySpan<byte> src,
@@ -270,6 +287,7 @@ public sealed class LzmaDecoder
         LzmaProbability.Reset(_isRep);
         LzmaProbability.Reset(_isRepG0);
         LzmaProbability.Reset(_isRepG1);
+        LzmaProbability.Reset(_isRepG2);
         LzmaProbability.Reset(_isRep0Long);
         _lenDecoder.Reset(_numPosStates);
         _repLenDecoder.Reset(_numPosStates);
@@ -340,7 +358,7 @@ public sealed class LzmaDecoder
         if (isRepG0 != 0)
         {
           // isRepG0 == 1 означает rep1/rep2/rep3.
-          // На этом шаге реализуем ТОЛЬКО rep1.
+          // Дальше будет rep1 / rep2 / rep3 (см. шаги IsRepG1/IsRepG2).
           _step = Step.IsRepG1;
           continue;
         }
@@ -360,19 +378,51 @@ public sealed class LzmaDecoder
         }
 
         // isRepG1 == 0 -> rep1
-        // isRepG1 == 1 -> rep2/rep3 (пока не поддержано)
+        // isRepG1 == 1 -> rep2/rep3
         if (isRepG1 != 0)
         {
-          result = LzmaDecodeResult.NotImplemented;
-          shouldTerminate = true;
-          break;
+          _step = Step.IsRepG2;
+          continue;
         }
 
         // rep1: используем _rep1 как distance и поднимаем его в rep0.
         // История rep-ов: [rep0, rep1, rep2, rep3] -> [rep1, rep0, rep2, rep3]
-        int dist = _rep1;
-        _rep1 = _rep0;
-        _rep0 = dist;
+        (_rep0, _rep1) = (_rep1, _rep0);
+
+        _step = Step.DecodeRepLen;
+        continue;
+      }
+
+
+      if (_step == Step.IsRepG2)
+      {
+        ref ushort prob = ref _isRepG2[_state.Value];
+        var bitRes = _range.TryDecodeBit(ref prob, src, ref srcPos, out uint isRepG2);
+        if (bitRes == LzmaRangeDecodeResult.NeedMoreInput)
+        {
+          result = LzmaDecodeResult.NeedsMoreInput;
+          break;
+        }
+
+        if (isRepG2 == 0)
+        {
+          // rep2: используем _rep2 и поднимаем его в rep0.
+          // История rep-ов: [rep0, rep1, rep2, rep3] -> [rep2, rep0, rep1, rep3]
+          int dist = _rep2;
+          _rep2 = _rep1;
+          _rep1 = _rep0;
+          _rep0 = dist;
+        }
+        else
+        {
+          // rep3: используем _rep3 и поднимаем его в rep0.
+          // История rep-ов: [rep0, rep1, rep2, rep3] -> [rep3, rep0, rep1, rep2]
+          int dist = _rep3;
+          _rep3 = _rep2;
+          _rep2 = _rep1;
+          _rep1 = _rep0;
+          _rep0 = dist;
+        }
 
         _step = Step.DecodeRepLen;
         continue;
@@ -399,9 +449,7 @@ public sealed class LzmaDecoder
           _step = Step.MatchCopy;
         }
         else
-        {
           _step = Step.DecodeRepLen;
-        }
 
         continue;
       }

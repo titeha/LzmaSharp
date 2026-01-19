@@ -64,6 +64,15 @@ internal sealed class LzmaTestRangeEncoder
   }
 
   /// <summary>
+  /// Синоним <see cref="WriteInitBytes"/>.
+  /// </summary>
+  /// <remarks>
+  /// Исторически в разных шагах/тестах мы называли этот метод по‑разному.
+  /// Чтобы не ломать тесты при переименованиях, держим оба имени.
+  /// </remarks>
+  public void EncodeInitBytes() => WriteInitBytes();
+
+  /// <summary>
   /// Сбрасывает "хвост" range coder'а в выходной буфер.
   /// </summary>
   /// <remarks>

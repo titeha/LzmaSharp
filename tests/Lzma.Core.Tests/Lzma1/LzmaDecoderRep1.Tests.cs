@@ -13,7 +13,7 @@ public sealed class LzmaDecoderRep1Tests
 
     // Поток: 'A' (литерал), затем rep1 (дистанция rep1, в начале она равна 1)
     // и длина 3. Итого ожидаем 1 + 3 = 4 байта 'A'.
-    byte[] lzma = LzmaTestRep0Encoder.Encode_OneLiteral_Then_Rep1(props, (byte)'A', repLen: 3);
+    byte[] lzma = LzmaTestRep0Encoder.Encode_OneLiteral_Then_Rep1(props, repLen: 3, literal: (byte)'A');
 
     var dec = new LzmaDecoder(props, dictionarySize: 1 << 16);
 
@@ -28,6 +28,6 @@ public sealed class LzmaDecoderRep1Tests
 
     // Бонус: прогресс должен быть согласован с фактом записи.
     Assert.Equal(written, progress.BytesWritten);
-    Assert.True(progress.BytesRead > 0);
+    Assert.Equal(consumed, progress.BytesRead);
   }
 }

@@ -76,24 +76,4 @@ public sealed class LzmaDecoderLiteralOnlyTests
 
     Assert.Equal(original, output.ToArray());
   }
-
-  [Fact]
-  public void Decode_Returns_NotImplemented_When_It_Sees_Rep2_OrHigher()
-  {
-    // На текущем шаге реализован только rep0.
-    // Любые rep1/rep2/rep3 пока должны возвращать NotImplemented.
-
-    Assert.True(LzmaProperties.TryParse(0x5D, out var props));
-
-    byte[] compressed = LzmaTestRep0Encoder.Encode_OneLiteral_Then_RepG0_Is1(props, (byte)'A');
-
-    var decoder = new LzmaDecoder(props, dictionarySize: 1 << 16);
-    Span<byte> dst = stackalloc byte[2];
-
-    var res = decoder.Decode(compressed, out _, dst, out int written, out _);
-
-    Assert.Equal(LzmaDecodeResult.NotImplemented, res);
-    Assert.Equal(1, written);
-    Assert.Equal((byte)'A', dst[0]);
-  }
 }
