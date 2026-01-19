@@ -110,6 +110,12 @@ public sealed class LzmaDecoder
   private int _literalSubCoderOffset;
   private int _literalSymbol;
 
+  // Для "matched literal" режима (когда состояние НЕ литеральное):
+  // - _literalMatchMode == true означает, что мы всё ещё идём по веткам, зависящим от matchByte;
+  // - _literalMatchByte сдвигается влево по мере декодирования битов.
+  private bool _literalMatchMode;
+  private byte _literalMatchByte;
+
   // Match/Rep: промежуточное состояние.
   private int _matchPosState;
   private int _decodedMatchLen;
@@ -206,6 +212,8 @@ public sealed class LzmaDecoder
     // Литерал сейчас не в процессе.
     _literalSubCoderOffset = 0;
     _literalSymbol = 0;
+    _literalMatchMode = false;
+    _literalMatchByte = 0;
 
     // Match/Rep сейчас не в процессе.
     _matchPosState = 0;
@@ -319,6 +327,28 @@ public sealed class LzmaDecoder
         {
           _literalSubCoderOffset = _literal.GetSubCoderOffset(pos, _previousByte);
           _literalSymbol = 1;
+
+          if (_state.IsLiteralState)
+          {
+            // Обычный литерал (без matchByte).
+            _literalMatchMode = false;
+            _literalMatchByte = 0;
+          }
+          else
+          {
+            // "Matched literal": используем байт из словаря на расстоянии rep0.
+            // Это обязательный режим для корректной распаковки реальных LZMA-потоков.
+            if (!_dictionary.TryGetByteBack(_rep0, out var mb))
+            {
+              result = LzmaDecodeResult.InvalidData;
+              shouldTerminate = true;
+              break;
+            }
+
+            _literalMatchMode = true;
+            _literalMatchByte = mb;
+          }
+
           _step = Step.Literal;
         }
         else
@@ -539,30 +569,56 @@ public sealed class LzmaDecoder
 
       if (_step == Step.MatchCopy)
       {
+        // Важно про потоковость:
+        // LzmaDictionary.TryCopyMatch(...) копирует match "атомарно":
+        // если выходной буфер меньше, чем length, он НЕ копирует ничего и возвращает OutputTooSmall.
+        //
+        // Для потокового декодера это неудобно: при маленьких dst (например 1 байт)
+        // мы обязаны уметь продвигаться и писать частями.
+        // Поэтому здесь мы сами режем match на куски, которые точно помещаются в dst.
+
+        int outRemaining = dst.Length - dstPos;
+        if (outRemaining <= 0)
+        {
+          // В этот вызов уже нечего писать. Это не ошибка — просто попросим новый буфер.
+          result = LzmaDecodeResult.Ok;
+          break;
+        }
+
+        int chunkLen = _pendingMatchLength;
+        if (chunkLen > outRemaining)
+          chunkLen = outRemaining;
+
         int before = dstPos;
-
-        // Важно: LzmaDictionary.TryCopyMatch(...) не умеет сам уменьшать length.
-        // Поэтому мы сами считаем, сколько байт реально скопировали в dst,
-        // и уменьшаем _pendingMatchLength.
-        var copyRes = _dictionary.TryCopyMatch(_pendingMatchDistance, _pendingMatchLength, dst, ref dstPos);
-
+        var copyRes = _dictionary.TryCopyMatch(_pendingMatchDistance, chunkLen, dst, ref dstPos);
         int copied = dstPos - before;
+
+        if (copyRes != LzmaDictionaryResult.Ok)
+        {
+          // Сюда попадаем только на реально битых данных (например distance выходит за словарь)
+          // или если сломали контракт словаря.
+          result = LzmaDecodeResult.InvalidData;
+          shouldTerminate = true;
+          break;
+        }
+
+        // TryCopyMatch при Ok обязан скопировать ровно chunkLen байт.
+        if (copied != chunkLen)
+        {
+          result = LzmaDecodeResult.InvalidData;
+          shouldTerminate = true;
+          break;
+        }
+
         _pendingMatchLength -= copied;
         if (_pendingMatchLength < 0)
         {
-          // Такого быть не должно: это означает рассинхрон длины и реального копирования.
           result = LzmaDecodeResult.InvalidData;
           shouldTerminate = true;
           break;
         }
 
-        if (copyRes == LzmaDictionaryResult.InvalidDistance)
-        {
-          result = LzmaDecodeResult.InvalidData;
-          shouldTerminate = true;
-          break;
-        }
-
+        // Обновляем previousByte (он нужен для контекста литералов)
         if (copied > 0)
           _previousByte = dst[dstPos - 1];
 
@@ -572,27 +628,37 @@ public sealed class LzmaDecoder
           continue;
         }
 
-        // Выход закончился — вернём Ok, а копирование продолжим в следующем вызове.
-        if (copyRes == LzmaDictionaryResult.OutputTooSmall)
-        {
-          result = LzmaDecodeResult.Ok;
-          break;
-        }
-
-        // Если словарь сказал "Ok", но match не докопирован — это ошибка/битый поток.
-        result = LzmaDecodeResult.InvalidData;
-        shouldTerminate = true;
+        // Match ещё не докопирован, но dst уже заполнен.
+        // Вернём Ok и продолжим копирование в следующем вызове.
+        result = LzmaDecodeResult.Ok;
         break;
       }
 
       if (_step == Step.Literal)
       {
-        ref ushort prob = ref _literal.Probs[_literalSubCoderOffset + _literalSymbol];
+        uint matchBit = 0;
+
+        int probIndex = _literalSubCoderOffset + _literalSymbol;
+        if (_literalMatchMode)
+        {
+          matchBit = (uint)(_literalMatchByte >> 7) & 1;
+          probIndex = _literalSubCoderOffset + (((1 + (int)matchBit) << 8) + _literalSymbol);
+        }
+
+        ref ushort prob = ref _literal.Probs[probIndex];
         var bitRes = _range.TryDecodeBit(ref prob, src, ref srcPos, out uint bit);
         if (bitRes == LzmaRangeDecodeResult.NeedMoreInput)
         {
           result = LzmaDecodeResult.NeedsMoreInput;
           break;
+        }
+
+        // Обновляем состояние matched-literal только после успешного чтения бита.
+        if (_literalMatchMode)
+        {
+          _literalMatchByte = (byte)(_literalMatchByte << 1);
+          if (bit != matchBit)
+            _literalMatchMode = false;
         }
 
         _literalSymbol = (_literalSymbol << 1) | (int)bit;
