@@ -33,7 +33,7 @@ public sealed class Lzma2IncrementalDecoderEdgeCasesTests
     var dec = new Lzma2IncrementalDecoder();
 
     // Загоняем декодер в ошибку.
-    _ = dec.Decode([0x03], Span<byte>.Empty, out _, out _);
+    _ = dec.Decode([0x03], [], out _, out _);
 
     dec.Reset();
 
@@ -57,7 +57,7 @@ public sealed class Lzma2IncrementalDecoderEdgeCasesTests
     // END + произвольные байты дальше.
     byte[] input = [0x00, 0x01, 0x00, 0x00, 0xFF];
 
-    var res = dec.Decode(input, Span<byte>.Empty, out int consumed, out int written);
+    var res = dec.Decode(input, [], out int consumed, out int written);
 
     Assert.Equal(Lzma2DecodeResult.Finished, res);
     Assert.Equal(1, consumed);
@@ -130,7 +130,7 @@ public sealed class Lzma2IncrementalDecoderEdgeCasesTests
       // Жёстко ограничиваем output.
       Span<byte> outChunk = outPos < output.Length
           ? output.AsSpan(outPos, Math.Min(4, output.Length - outPos))
-          : Span<byte>.Empty;
+          : [];
 
       var res = dec.Decode(inChunk, outChunk, out int consumed, out int written);
 
@@ -158,17 +158,17 @@ public sealed class Lzma2IncrementalDecoderEdgeCasesTests
   }
 
   [Fact]
-  public void LzmaChunk_СProps_ЗаголовокПотребляется_ИВозвращаетсяNotSupported()
+  public void LzmaChunk_СProps_ЗаголовокПотребляется_ИВозвращаетсяNeedMoreOutput()
   {
     var dec = new Lzma2IncrementalDecoder();
 
     // LZMA-чанк с флагами reset+new props (0xE0), unpack=1, pack=1, props=0x5D.
-    // payload мы не добавляем: декодер должен остановиться на NotSupported сразу после заголовка.
+    // payload мы не добавляем: декодер должен остановиться на NeedMoreOutput сразу после заголовка.
     byte[] header = [0xE0, 0x00, 0x00, 0x00, 0x00, 0x5D];
 
     var res = dec.Decode(header, [], out int consumed, out int written);
 
-    Assert.Equal(Lzma2DecodeResult.NotSupported, res);
+    Assert.Equal(Lzma2DecodeResult.NeedMoreOutput, res);
     Assert.Equal(6, consumed);
     Assert.Equal(0, written);
   }

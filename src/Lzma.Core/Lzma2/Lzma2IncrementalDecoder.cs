@@ -1,313 +1,313 @@
-// Copyright (c) LzmaSharp project.
-// Лицензия: см. корень репозитория.
+using System;
 
 namespace Lzma.Core.Lzma2;
 
-/// <summary>
-/// <para>Инкрементальный (поштучный) декодер LZMA2.</para>
-/// <para>
-/// На этом шаге мы реализуем только самый простой поднабор формата:
-/// - COPY-чанки (0x01 / 0x02) — «несжатые» данные, которые просто копируются в выход;
-/// - END-маркер (0x00).
-/// </para>
-/// <para>Сжатые LZMA-чанки (control >= 0x80) пока не реализованы и возвращают <see cref="Lzma2DecodeResult.NotSupported"/>.</para>
-/// <para>
-/// Зачем нужен отдельный класс, если есть <see cref="Lzma2CopyDecoder"/>?
-/// - <see cref="Lzma2CopyDecoder"/> — статическая «пакетная» функция: удобна для тестов и простых сценариев.
-/// - Этот класс — stateful/streaming вариант: он умеет принимать вход маленькими кусочками
-///   без необходимости «склеивать» хвосты заголовков снаружи. Это важно для будущей интеграции со Stream/IO.
-/// </para>
-/// <para>Также здесь сразу «закладываем» прогресс: счётчики общего входа/выхода и необязательный callback.</para>
-/// </summary>
-/// <remarks>
-/// Создаёт новый инкрементальный декодер.
-/// </remarks>
-/// <param name="progress">
-/// Необязательный репортёр прогресса.
-/// Он будет вызываться только когда меняются счётчики (BytesRead/BytesWritten).
-/// </param>
-public sealed class Lzma2IncrementalDecoder(IProgress<LzmaProgress>? progress = null)
+// Incremental LZMA2 decoder.
+// At this step we support:
+// - End marker (0x00)
+// - Copy chunks (0x01/0x02)
+// - LZMA chunks WITH properties byte (control >= 0xE0)
+//   NOTE: continuation LZMA chunks without properties are still NotSupported.
+public sealed class Lzma2IncrementalDecoder
 {
-  private enum DecoderState
-  {
-    ReadingHeader,
-    CopyingPayload,
-    Finished,
-    Error,
-  }
-
-  private readonly IProgress<LzmaProgress>? _progress = progress;
-
-  // Заголовок LZMA2-чанка максимум 6 байт.
+  // Header buffer large enough for LZMA2 header with properties byte (max 6).
   private readonly byte[] _headerBuffer = new byte[6];
   private int _headerFilled;
-  private int _headerExpected;
+  private int _headerExpected = -1;
 
-  // Для COPY-чанка: сколько байт полезной нагрузки осталось скопировать.
   private uint _copyRemaining;
 
+  // LZMA chunk state
+  private const int DefaultLzmaDictionarySize = 1 << 23;
+  private Lzma1.LzmaDecoder? _lzma;
+  private uint _lzmaPackRemaining;
+  private uint _lzmaUnpackRemaining;
+
   private DecoderState _state = DecoderState.ReadingHeader;
-  private Lzma2DecodeResult _errorResult = Lzma2DecodeResult.InvalidData;
+  private bool _isTerminal;
+  private Lzma2DecodeResult _terminalResult;
 
-  private long _totalBytesRead;
-  private long _totalBytesWritten;
+  private long _totalRead;
+  private long _totalWritten;
 
-  private long _lastReportedRead;
-  private long _lastReportedWritten;
+  private readonly IProgress<LzmaProgress>? _progress;
+  private readonly int _dictionarySize;
+  private LzmaProgress _lastProgress;
 
-  /// <summary>
-  /// Сколько байт всего было потреблено из входа (сжатые данные).
-  /// </summary>
-  public long TotalBytesRead => _totalBytesRead;
+  public Lzma2IncrementalDecoder(IProgress<LzmaProgress>? progress = null, int dictionarySize = DefaultLzmaDictionarySize)
+  {
+    if (dictionarySize <= 0)
+      throw new ArgumentOutOfRangeException(nameof(dictionarySize), "Размер словаря должен быть > 0.");
 
-  /// <summary>
-  /// Сколько байт всего было записано в выход (распакованные данные).
-  /// </summary>
-  public long TotalBytesWritten => _totalBytesWritten;
+    _progress = progress;
+    _dictionarySize = dictionarySize;
+  }
 
-  /// <summary>
-  /// Удобный флаг для потребителя (например, Stream-обёртки).
-  /// </summary>
-  public bool IsFinished => _state == DecoderState.Finished;
+  public long TotalBytesRead => _totalRead;
 
-  /// <summary>
-  /// Удобный флаг для потребителя.
-  /// </summary>
-  public bool HasError => _state == DecoderState.Error;
+  public long TotalBytesWritten => _totalWritten;
 
-  /// <summary>
-  /// Сбрасывает внутреннее состояние, чтобы переиспользовать экземпляр.
-  /// </summary>
   public void Reset()
   {
     _headerFilled = 0;
-    _headerExpected = 0;
-    _copyRemaining = 0;
-    _state = DecoderState.ReadingHeader;
-    _errorResult = Lzma2DecodeResult.InvalidData;
+    _headerExpected = -1;
 
-    _totalBytesRead = 0;
-    _totalBytesWritten = 0;
-    _lastReportedRead = 0;
-    _lastReportedWritten = 0;
+    _copyRemaining = 0;
+
+    _lzma = null;
+    _lzmaPackRemaining = 0;
+    _lzmaUnpackRemaining = 0;
+
+    _state = DecoderState.ReadingHeader;
+    _isTerminal = false;
+    _terminalResult = default;
+
+    _totalRead = 0;
+    _totalWritten = 0;
+    _lastProgress = default;
   }
 
-  /// <summary>
-  /// Обрабатывает часть входных данных и пишет распакованные байты в <paramref name="output"/>.
-  /// </summary>
-  /// <param name="input">Очередной кусок входа (LZMA2-поток).</param>
-  /// <param name="output">Буфер для распакованных данных.</param>
-  /// <param name="bytesConsumed">Сколько байт было реально прочитано из <paramref name="input"/>.</param>
-  /// <param name="bytesWritten">Сколько байт было реально записано в <paramref name="output"/>.</param>
-  /// <returns>
-  /// - <see cref="Lzma2DecodeResult.Finished"/> — встречен END-маркер.
-  /// - <see cref="Lzma2DecodeResult.NeedMoreInput"/> — вход закончился, а продолжать нужно.
-  /// - <see cref="Lzma2DecodeResult.NeedMoreOutput"/> — выходной буфер кончился, а ещё есть что писать.
-  /// - <see cref="Lzma2DecodeResult.InvalidData"/> — поток повреждён.
-  /// - <see cref="Lzma2DecodeResult.NotSupported"/> — встретился LZMA-чанк (пока не реализован).
-  /// </returns>
-  public Lzma2DecodeResult Decode(
-      ReadOnlySpan<byte> input,
-      Span<byte> output,
-      out int bytesConsumed,
-      out int bytesWritten)
+  public Lzma2DecodeResult Decode(ReadOnlySpan<byte> input, Span<byte> output, out int bytesConsumed, out int bytesWritten)
   {
     bytesConsumed = 0;
     bytesWritten = 0;
+
+    if (_isTerminal)
+      return _terminalResult;
 
     while (true)
     {
       switch (_state)
       {
-        case DecoderState.Finished:
-          return ReturnWithProgress(Lzma2DecodeResult.Finished);
-
-        case DecoderState.Error:
-          return ReturnWithProgress(_errorResult);
-
         case DecoderState.ReadingHeader:
-        {
-          // 1) Считываем control-байт, если ещё не считали.
-          if (_headerFilled == 0)
+          // Need at least 1 byte to know the expected header size.
+          if (input.IsEmpty)
+            return ReturnWithProgress(Lzma2DecodeResult.NeedMoreInput);
+
+          if (_headerExpected < 0)
           {
-            if (input.IsEmpty)
-              return ReturnWithProgress(Lzma2DecodeResult.NeedMoreInput);
-
-            byte control = input[0];
-            input = input.Slice(1);
-
-            _headerBuffer[0] = control;
-            _headerFilled = 1;
-
-            bytesConsumed++;
-            _totalBytesRead++;
-
-            _headerExpected = GetExpectedHeaderSize(control);
-            if (_headerExpected < 0)
-            {
-              // Невалидный control.
-              SetError(Lzma2DecodeResult.InvalidData);
-              return ReturnWithProgress(Lzma2DecodeResult.InvalidData);
-            }
+            _headerExpected = GetExpectedHeaderSize(input[0]);
+            if (_headerExpected is < 1 or > 6)
+              return SetError(Lzma2DecodeResult.InvalidData);
           }
 
-          // 2) Добираем оставшиеся байты заголовка.
+          int need = _headerExpected - _headerFilled;
+          int canTake = Math.Min(need, input.Length);
+
+          input[..canTake].CopyTo(_headerBuffer.AsSpan(_headerFilled));
+          _headerFilled += canTake;
+
+          input = input[canTake..];
+          bytesConsumed += canTake;
+          _totalRead += canTake;
+
           if (_headerFilled < _headerExpected)
-          {
-            int need = _headerExpected - _headerFilled;
-            int take = Math.Min(need, input.Length);
+            return ReturnWithProgress(Lzma2DecodeResult.NeedMoreInput);
 
-            if (take == 0)
-              return ReturnWithProgress(Lzma2DecodeResult.NeedMoreInput);
+          var headerRead = Lzma2ChunkHeader.TryRead(
+              _headerBuffer.AsSpan(0, _headerExpected),
+              out var header,
+              out var headerSize);
 
-            input.Slice(0, take).CopyTo(_headerBuffer.AsSpan(_headerFilled, take));
-            input = input.Slice(take);
+          if (headerRead == Lzma2ReadHeaderResult.NeedMoreInput)
+            return ReturnWithProgress(Lzma2DecodeResult.NeedMoreInput);
 
-            _headerFilled += take;
-            bytesConsumed += take;
-            _totalBytesRead += take;
+          if (headerRead == Lzma2ReadHeaderResult.InvalidData || headerSize != _headerExpected)
+            return SetError(Lzma2DecodeResult.InvalidData);
 
-            if (_headerFilled < _headerExpected)
-              return ReturnWithProgress(Lzma2DecodeResult.NeedMoreInput);
-          }
-
-          // 3) Заголовок готов, парсим его.
-          var headerResult = Lzma2ChunkHeader.TryRead(
-            _headerBuffer.AsSpan(0, _headerExpected),
-            out var header,
-            out int consumed);
-          if (headerResult != Lzma2ReadHeaderResult.Ok || consumed != _headerExpected)
-          {
-            SetError(Lzma2DecodeResult.InvalidData);
-            return ReturnWithProgress(Lzma2DecodeResult.InvalidData);
-          }
-
-          // Сбрасываем буфер заголовка для следующего чанка.
           _headerFilled = 0;
-          _headerExpected = 0;
+          _headerExpected = -1;
 
-          // 4) Реагируем на тип чанка.
           if (header.Kind == Lzma2ChunkKind.End)
           {
             _state = DecoderState.Finished;
+            _isTerminal = true;
+            _terminalResult = Lzma2DecodeResult.Finished;
             return ReturnWithProgress(Lzma2DecodeResult.Finished);
+          }
+
+          if (header.Kind == Lzma2ChunkKind.Copy)
+          {
+            _copyRemaining = (uint)header.UnpackSize;
+            _state = DecoderState.CopyingPayload;
+            continue;
           }
 
           if (header.Kind == Lzma2ChunkKind.Lzma)
           {
-            // Следующий шаг будет посвящён именно этому.
-            SetError(Lzma2DecodeResult.NotSupported);
-            return ReturnWithProgress(Lzma2DecodeResult.NotSupported);
+            // For now we only support LZMA chunks that include the properties byte.
+            if (!header.HasProperties)
+              return SetError(Lzma2DecodeResult.NotSupported);
+
+            if (!header.Properties.HasValue || !Lzma1.LzmaProperties.TryParse(header.Properties.Value, out var props))
+              return SetError(Lzma2DecodeResult.InvalidData);
+
+            try
+            {
+              _lzma = new Lzma1.LzmaDecoder(props, _dictionarySize);
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+              return SetError(Lzma2DecodeResult.InvalidData);
+            }
+
+            _lzmaPackRemaining = (uint)header.PackSize;
+            _lzmaUnpackRemaining = (uint)header.UnpackSize;
+
+            _state = DecoderState.DecodingLzmaPayload;
+            continue;
           }
 
-          // COPY-чанк. Для нас payload длиной UnpackSize.
-          _copyRemaining = (uint)header.UnpackSize;
-          _state = DecoderState.CopyingPayload;
-
-          // Продолжаем цикл: возможно, payload уже находится в input.
-          continue;
-        }
-
+          return SetError(Lzma2DecodeResult.NotSupported);
         case DecoderState.CopyingPayload:
-        {
           if (_copyRemaining == 0)
           {
             _state = DecoderState.ReadingHeader;
             continue;
           }
 
-          // Нужен выходной буфер: мы должны писать распакованные байты.
-          if (output.IsEmpty)
-            return ReturnWithProgress(Lzma2DecodeResult.NeedMoreOutput);
-
-          // Нужен вход: без него нечего копировать.
-          if (input.IsEmpty)
-            return ReturnWithProgress(Lzma2DecodeResult.NeedMoreInput);
-
-          int toCopy = Math.Min(input.Length, output.Length);
-          if ((uint)toCopy > _copyRemaining)
-            toCopy = (int)_copyRemaining;
-
-          input.Slice(0, toCopy).CopyTo(output);
-
-          input = input.Slice(toCopy);
-          output = output.Slice(toCopy);
-
-          bytesConsumed += toCopy;
-          bytesWritten += toCopy;
-          _totalBytesRead += toCopy;
-          _totalBytesWritten += toCopy;
-
-          _copyRemaining -= (uint)toCopy;
-
-          // Если payload дописали — возвращаемся к чтению заголовка следующего чанка.
-          if (_copyRemaining == 0)
-          {
-            _state = DecoderState.ReadingHeader;
-            continue;
-          }
-
-          // Иначе осталось дописывать payload — нужно либо больше input, либо больше output.
           if (output.IsEmpty)
             return ReturnWithProgress(Lzma2DecodeResult.NeedMoreOutput);
 
           if (input.IsEmpty)
             return ReturnWithProgress(Lzma2DecodeResult.NeedMoreInput);
 
-          // Теоретически сюда не попадём (мы копируем максимум), но оставим как "страховку".
+          int copyNow = (int)Math.Min(_copyRemaining, (uint)Math.Min(input.Length, output.Length));
+
+          input[..copyNow].CopyTo(output);
+          input = input[copyNow..];
+          output = output[copyNow..];
+
+          bytesConsumed += copyNow;
+          bytesWritten += copyNow;
+
+          _totalRead += copyNow;
+          _totalWritten += copyNow;
+
+          _copyRemaining -= (uint)copyNow;
           continue;
-        }
+        case DecoderState.DecodingLzmaPayload:
+          // If we're done producing output for this chunk, skip remaining compressed bytes.
+          if (_lzmaUnpackRemaining == 0)
+          {
+            if (_lzmaPackRemaining > 0)
+            {
+              if (input.IsEmpty)
+                return ReturnWithProgress(Lzma2DecodeResult.NeedMoreInput);
 
+              int skip = (int)Math.Min(_lzmaPackRemaining, (uint)input.Length);
+              input = input[skip..];
+
+              bytesConsumed += skip;
+              _totalRead += skip;
+
+              _lzmaPackRemaining -= (uint)skip;
+              continue;
+            }
+
+            _state = DecoderState.ReadingHeader;
+            continue;
+          }
+
+          if (output.IsEmpty)
+            return ReturnWithProgress(Lzma2DecodeResult.NeedMoreOutput);
+
+          if (_lzmaPackRemaining == 0)
+            return SetError(Lzma2DecodeResult.InvalidData);
+
+          if (input.IsEmpty)
+            return ReturnWithProgress(Lzma2DecodeResult.NeedMoreInput);
+
+          int inLimit = (int)Math.Min(_lzmaPackRemaining, (uint)input.Length);
+          int outLimit = (int)Math.Min(_lzmaUnpackRemaining, (uint)output.Length);
+
+          var lzRes = _lzma!.Decode(
+              input[..inLimit],
+              out int lzConsumed,
+              output[..outLimit],
+              out int lzWritten,
+              out _);
+
+          if (lzConsumed == 0 && lzWritten == 0)
+            return SetError(Lzma2DecodeResult.InvalidData);
+
+          input = input[lzConsumed..];
+          output = output[lzWritten..];
+
+          bytesConsumed += lzConsumed;
+          bytesWritten += lzWritten;
+
+          _totalRead += lzConsumed;
+          _totalWritten += lzWritten;
+
+          if ((uint)lzConsumed > _lzmaPackRemaining || (uint)lzWritten > _lzmaUnpackRemaining)
+            return SetError(Lzma2DecodeResult.InvalidData);
+
+          _lzmaPackRemaining -= (uint)lzConsumed;
+          _lzmaUnpackRemaining -= (uint)lzWritten;
+
+          if (lzRes == Lzma1.LzmaDecodeResult.InvalidData)
+            return SetError(Lzma2DecodeResult.InvalidData);
+
+          if (lzRes == Lzma1.LzmaDecodeResult.NotImplemented)
+            return SetError(Lzma2DecodeResult.NotSupported);
+
+          if (lzRes == Lzma1.LzmaDecodeResult.NeedsMoreInput && _lzmaPackRemaining == 0 && _lzmaUnpackRemaining > 0)
+            return SetError(Lzma2DecodeResult.InvalidData);
+
+          continue;
+
+        case DecoderState.Finished:
+          _isTerminal = true;
+          _terminalResult = Lzma2DecodeResult.Finished;
+          return ReturnWithProgress(Lzma2DecodeResult.Finished);
         default:
-          // На случай, если добавим состояние и забудем обработать.
-          SetError(Lzma2DecodeResult.InvalidData);
-          return ReturnWithProgress(Lzma2DecodeResult.InvalidData);
+          _isTerminal = true;
+          return _terminalResult;
       }
     }
   }
 
-  private void SetError(Lzma2DecodeResult error)
+  private Lzma2DecodeResult SetError(Lzma2DecodeResult result)
   {
+    _isTerminal = true;
+    _terminalResult = result;
     _state = DecoderState.Error;
-    _errorResult = error;
-  }
-
-  /// <summary>
-  /// В LZMA2 размер заголовка определяется только по control-байту.
-  /// </summary>
-  private static int GetExpectedHeaderSize(byte control)
-  {
-    // END.
-    if (control == 0x00)
-      return 1;
-
-    // COPY. У этих чанков ровно 3 байта заголовка.
-    if (control == 0x01 || control == 0x02)
-      return 3;
-
-    // LZMA.
-    // Формат управляющего байта (по спецификации LZMA2 из lzma-sdk):
-    // 100xxxxx ... 111xxxxx  => LZMA-чанк.
-    // Если (control & 0x40) != 0 (диапазоны 0xC0..0xFF), то после 5 байт заголовка
-    // присутствует дополнительный байт свойств (props).
-    if (control >= 0x80)
-      return control >= 0xC0 ? 6 : 5;
-
-    // Всё остальное (0x03..0x7F) — невалидно.
-    return -1;
+    return ReturnWithProgress(result);
   }
 
   private Lzma2DecodeResult ReturnWithProgress(Lzma2DecodeResult result)
   {
-    // Репортим прогресс только когда счётчики реально изменились.
-    if (_progress is not null
-        && (_totalBytesRead != _lastReportedRead || _totalBytesWritten != _lastReportedWritten))
+    var prog = new LzmaProgress(_totalRead, _totalWritten);
+    if (prog != _lastProgress)
     {
-      _lastReportedRead = _totalBytesRead;
-      _lastReportedWritten = _totalBytesWritten;
-      _progress.Report(new LzmaProgress(_totalBytesRead, _totalBytesWritten));
+      _lastProgress = prog;
+      _progress?.Report(prog);
     }
 
     return result;
+  }
+
+  private static int GetExpectedHeaderSize(byte control)
+  {
+    if (control == 0x00)
+      return 1;
+
+    if (control is 0x01 or 0x02)
+      return 3;
+
+    if ((control & 0x80) == 0)
+      return 1; // invalid control -> TryRead will return InvalidData
+
+    return control >= 0xE0 ? 6 : 5;
+  }
+
+  private enum DecoderState
+  {
+    ReadingHeader,
+    CopyingPayload,
+    DecodingLzmaPayload,
+    Finished,
+    Error,
   }
 }
