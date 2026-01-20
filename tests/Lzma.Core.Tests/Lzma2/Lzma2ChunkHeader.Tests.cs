@@ -74,14 +74,56 @@ public sealed class Lzma2ChunkHeaderTests
     Assert.Equal(5, consumed);
     Assert.Equal(Lzma2ChunkKind.Lzma, header.Kind);
     Assert.Equal(0x80, header.Control);
-    Assert.True(header.ResetDictionary); // 0x80..0x9F
-    Assert.False(header.ResetState);     // 0x80..0xBF
+    Assert.False(header.ResetDictionary); // reset dic только для 0xE0..0xFF
+    Assert.False(header.ResetState);      // 0x80..0x9F не сбрасывает состояние
     Assert.False(header.HasProperties);
     Assert.Equal(1, header.UnpackSize);
     Assert.Equal(1, header.PackSize);
     Assert.Equal(1, header.PayloadSize);
     Assert.Equal(5 + 1, header.TotalSize);
     Assert.Null(header.Properties);
+  }
+
+  [Fact]
+  public void LzmaChunk_NoProps_ControlA0_Parses_ResetStateOnly()
+  {
+    // control=0xA0 => 101uuuuu => reset state, но без props.
+    // unpackSizeMinus1_21 = 0, packSizeMinus1 = 0.
+    // => unpackSize = 1, packSize = 1.
+    byte[] data = [0xA0, 0x00, 0x00, 0x00, 0x00];
+
+    var res = Lzma2ChunkHeader.TryRead(data, out var header, out int consumed);
+
+    Assert.Equal(Lzma2ReadHeaderResult.Ok, res);
+    Assert.Equal(5, consumed);
+    Assert.Equal(Lzma2ChunkKind.Lzma, header.Kind);
+    Assert.Equal(0xA0, header.Control);
+    Assert.False(header.ResetDictionary);
+    Assert.True(header.ResetState);
+    Assert.False(header.HasProperties);
+    Assert.Equal(1, header.UnpackSize);
+    Assert.Equal(1, header.PackSize);
+    Assert.Null(header.Properties);
+  }
+
+  [Fact]
+  public void LzmaChunk_WithProps_ControlC0_Parses_ResetStateAndProps_WithoutDicReset()
+  {
+    // control=0xC0 => 110uuuuu => reset state + props, но без reset dic.
+    // unpackSizeMinus1_21 = 0, packSizeMinus1 = 0.
+    // => unpackSize = 1, packSize = 1.
+    byte[] data = [0xC0, 0x00, 0x00, 0x00, 0x00, 0x5D];
+
+    var res = Lzma2ChunkHeader.TryRead(data, out var header, out int consumed);
+
+    Assert.Equal(Lzma2ReadHeaderResult.Ok, res);
+    Assert.Equal(6, consumed);
+    Assert.Equal(Lzma2ChunkKind.Lzma, header.Kind);
+    Assert.Equal(0xC0, header.Control);
+    Assert.False(header.ResetDictionary);
+    Assert.True(header.ResetState);
+    Assert.True(header.HasProperties);
+    Assert.Equal((byte)0x5D, header.Properties!);
   }
 
   [Fact]
@@ -97,9 +139,9 @@ public sealed class Lzma2ChunkHeaderTests
     Assert.Equal(Lzma2ReadHeaderResult.Ok, res);
     Assert.Equal(6, consumed);
     Assert.Equal(Lzma2ChunkKind.Lzma, header.Kind);
-    Assert.False(header.ResetDictionary); // E0 >= A0
-    Assert.True(header.ResetState);       // E0 >= C0
-    Assert.True(header.HasProperties);    // E0 >= E0
+    Assert.True(header.ResetDictionary);  // 0xE0..0xFF => reset dic
+    Assert.True(header.ResetState);       // 0xA0..0xFF => reset state
+    Assert.True(header.HasProperties);    // 0xC0..0xFF => есть props
     Assert.Equal(85, header.UnpackSize);
     Assert.Equal(17, header.PackSize);
     Assert.Equal(17, header.PayloadSize);

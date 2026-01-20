@@ -10,7 +10,7 @@
 //   0x01 или 0x02      — "copy" (несжатый) чанк: далее 2 байта UnpackSize-1 (BE), затем UnpackSize байт данных
 //   0x80..0xFF         — "lzma" (сжатый) чанк: далее 2 байта (нижние 16 бит UnpackSize-1, BE),
 //                        далее 2 байта PackSize-1 (BE),
-//                        и опционально 1 байт свойств (properties) если control >= 0xE0.
+//                        и опционально 1 байт свойств (properties) если control >= 0xC0.
 //                        Сами свойства — это стандартный LZMA property byte.
 //
 // Важно: тут мы НЕ пытаемся распаковать данные. Мы только читаем заголовок,
@@ -150,9 +150,14 @@ public readonly record struct Lzma2ChunkHeader(
       return Lzma2ReadHeaderResult.InvalidData;
 
     // 4) LZMA (сжатый) блок
-    bool resetDictionary = control < 0xA0;  // 0x80..0x9F
-    bool resetState = control >= 0xC0;      // 0xC0..0xFF
-    bool hasProperties = control >= 0xE0;   // 0xE0..0xFF
+    // По формату LZMA2 (см. исходники 7-Zip / Lzma2Dec.c):
+    //   100uuuuu ...   (0x80..0x9F) — LZMA, без reset state, без props, без reset dic
+    //   101uuuuu ...   (0xA0..0xBF) — LZMA, reset state
+    //   110uuuuu ... S (0xC0..0xDF) — LZMA, reset state + новые props
+    //   111uuuuu ... S (0xE0..0xFF) — LZMA, reset state + новые props + reset dic
+    bool resetDictionary = control >= 0xE0;      // 111xxxxx
+    bool resetState = control >= 0xA0;           // 101xxxxx..111xxxxx
+    bool hasProperties = (control & 0x40) != 0;  // 110xxxxx..111xxxxx
 
     int headerSize = hasProperties ? 6 : 5;
     if (input.Length < headerSize)

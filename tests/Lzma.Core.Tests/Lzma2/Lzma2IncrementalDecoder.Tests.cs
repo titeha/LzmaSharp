@@ -37,7 +37,7 @@ public sealed class Lzma2IncrementalDecoderTests
 
       Span<byte> outChunk = outPos < actual.Length
           ? actual.AsSpan(outPos, Math.Min(outChunkSize, actual.Length - outPos))
-          : Span<byte>.Empty;
+          : [];
 
       var res = decoder.Decode(inChunk, outChunk, out int consumed, out int written);
 
@@ -146,9 +146,25 @@ public sealed class Lzma2IncrementalDecoderTests
   public void Decode_LzmaChunk_ПокаНеПоддерживается()
   {
     // Минимальный валидный заголовок LZMA-чанка (без props): 5 байт.
-    // control=0x80 => LZMA chunk, без props (т.к. < 0xE0).
+    // control=0x80 => LZMA chunk без props (в диапазоне 0x80..0xBF, бит 0x40 не выставлен).
     // unpackSize = 1, packSize = 1.
     byte[] lzmaHeaderOnly = [0x80, 0x00, 0x00, 0x00, 0x00];
+
+    var decoder = new Lzma2IncrementalDecoder();
+    var res = decoder.Decode(lzmaHeaderOnly, Span<byte>.Empty, out int consumed, out int written);
+
+    Assert.Equal(Lzma2DecodeResult.NotSupported, res);
+    Assert.Equal(lzmaHeaderOnly.Length, consumed);
+    Assert.Equal(0, written);
+  }
+
+  [Fact]
+  public void Decode_LzmaChunk_WithProps_ПокаНеПоддерживается()
+  {
+    // Заголовок LZMA-чанка с props: 6 байт.
+    // control=0xC0 => 110uuuuu => reset state + set new prop (но без reset dic).
+    // unpackSize = 1, packSize = 1.
+    byte[] lzmaHeaderOnly = [0xC0, 0x00, 0x00, 0x00, 0x00, 0x5D];
 
     var decoder = new Lzma2IncrementalDecoder();
     var res = decoder.Decode(lzmaHeaderOnly, Span<byte>.Empty, out int consumed, out int written);

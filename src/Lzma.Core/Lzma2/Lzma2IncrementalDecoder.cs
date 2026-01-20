@@ -140,7 +140,7 @@ public sealed class Lzma2IncrementalDecoder(IProgress<LzmaProgress>? progress = 
             _headerFilled = 1;
 
             bytesConsumed++;
-            _totalBytesRead += 1;
+            _totalBytesRead++;
 
             _headerExpected = GetExpectedHeaderSize(control);
             if (_headerExpected < 0)
@@ -285,9 +285,13 @@ public sealed class Lzma2IncrementalDecoder(IProgress<LzmaProgress>? progress = 
     if (control == 0x01 || control == 0x02)
       return 3;
 
-    // LZMA. Минимум 5 байт (без props) или 6 байт (с props).
+    // LZMA.
+    // Формат управляющего байта (по спецификации LZMA2 из lzma-sdk):
+    // 100xxxxx ... 111xxxxx  => LZMA-чанк.
+    // Если (control & 0x40) != 0 (диапазоны 0xC0..0xFF), то после 5 байт заголовка
+    // присутствует дополнительный байт свойств (props).
     if (control >= 0x80)
-      return control >= 0xE0 ? 6 : 5;
+      return control >= 0xC0 ? 6 : 5;
 
     // Всё остальное (0x03..0x7F) — невалидно.
     return -1;
