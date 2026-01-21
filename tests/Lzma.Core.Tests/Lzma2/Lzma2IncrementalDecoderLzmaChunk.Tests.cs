@@ -32,6 +32,29 @@ public sealed class Lzma2IncrementalDecoderLzmaChunkTests
   }
 
   [Fact]
+  public void Decode_OneShot_LzmaChunk_NewProps_NoDicReset_Then_EndMarker()
+  {
+    var props = new LzmaProperties(Lc: 3, Lp: 0, Pb: 2);
+    byte[] plain = Encoding.ASCII.GetBytes("Hello, new-props LZMA2!");
+
+    byte[] lzmaPayload = LzmaTestLiteralOnlyEncoder.Encode(props, plain);
+    byte[] lzma2Stream = Lzma2TestStreamBuilder.SingleLzmaChunkWithNewPropsNoResetDictionaryThenEnd(
+      props,
+      lzmaPayload,
+      unpackSize: plain.Length);
+
+    var dec = new Lzma2IncrementalDecoder(dictionarySize: 1 << 20);
+
+    byte[] dst = new byte[plain.Length];
+    var res = dec.Decode(lzma2Stream, dst, out int consumed, out int written);
+
+    Assert.Equal(Lzma2DecodeResult.Finished, res);
+    Assert.Equal(lzma2Stream.Length, consumed);
+    Assert.Equal(plain.Length, written);
+    Assert.Equal(plain, dst);
+  }
+
+  [Fact]
   public void Decode_Works_When_Input_And_Output_Are_Streamed_In_Tiny_Chunks()
   {
     var props = new LzmaProperties(Lc: 3, Lp: 0, Pb: 2);

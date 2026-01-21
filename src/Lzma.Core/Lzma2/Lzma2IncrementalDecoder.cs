@@ -1,5 +1,3 @@
-using System;
-
 namespace Lzma.Core.Lzma2;
 
 // Incremental LZMA2 decoder.
@@ -18,7 +16,7 @@ public sealed class Lzma2IncrementalDecoder
   private uint _copyRemaining;
 
   // LZMA chunk state
-  private const int DefaultLzmaDictionarySize = 1 << 23;
+  private const int _defaultLzmaDictionarySize = 1 << 23;
   private Lzma1.LzmaDecoder? _lzma;
   private uint _lzmaPackRemaining;
   private uint _lzmaUnpackRemaining;
@@ -37,7 +35,7 @@ public sealed class Lzma2IncrementalDecoder
   private readonly int _dictionarySize;
   private LzmaProgress _lastProgress;
 
-  public Lzma2IncrementalDecoder(IProgress<LzmaProgress>? progress = null, int dictionarySize = DefaultLzmaDictionarySize)
+  public Lzma2IncrementalDecoder(IProgress<LzmaProgress>? progress = null, int dictionarySize = _defaultLzmaDictionarySize)
   {
     if (dictionarySize <= 0)
       throw new ArgumentOutOfRangeException(nameof(dictionarySize), "Размер словаря должен быть > 0.");
@@ -79,12 +77,9 @@ public sealed class Lzma2IncrementalDecoder
     bytesWritten = 0;
 
     if (_isTerminal)
-    {
       return _terminalResult;
-    }
 
     while (true)
-    {
       switch (_state)
       {
         case DecoderState.ReadingHeader:
@@ -211,8 +206,7 @@ public sealed class Lzma2IncrementalDecoder
 
           _copyRemaining -= (uint)copyNow;
           continue;
-        case DecoderState.DecodingLzmaPayload:
-          // If we're done producing output for this chunk, skip remaining compressed bytes.
+        case DecoderState.DecodingLzmaPayload: // If we're done producing output for this chunk, skip remaining compressed bytes.
           if (_lzmaUnpackRemaining == 0)
           {
             if (_lzmaPackRemaining > 0)
@@ -289,7 +283,6 @@ public sealed class Lzma2IncrementalDecoder
           _isTerminal = true;
           return _terminalResult;
       }
-    }
   }
 
   private Lzma2DecodeResult SetError(Lzma2DecodeResult result)
@@ -323,7 +316,10 @@ public sealed class Lzma2IncrementalDecoder
     if ((control & 0x80) == 0)
       return 1; // invalid control -> TryRead will return InvalidData
 
-    return control >= 0xE0 ? 6 : 5;
+    // Для LZMA-чанков (control с установленным битом 7) наличие properties байта
+    // определяется битом 6 (mode 2/3 => props присутствует).
+    bool hasProps = (control & 0x40) != 0;
+    return hasProps ? 6 : 5;
   }
 
   private enum DecoderState

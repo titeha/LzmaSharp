@@ -88,6 +88,61 @@ internal static class Lzma2TestStreamBuilder
     return SingleLzmaChunkWithProps(lzmaPayload, unpackSize, propByte, endMarker: true);
   }
 
+  public static byte[] SingleLzmaChunkWithNewPropsNoResetDictionaryThenEnd(
+    LzmaProperties props,
+    byte[] lzmaPayload,
+    int unpackSize)
+  {
+    // control 0xC0..0xDF: reset state + new props, без reset dictionary
+    byte propByte = props.ToByteOrThrow();
+
+    ArgumentNullException.ThrowIfNull(lzmaPayload);
+
+    if (unpackSize <= 0)
+      throw new ArgumentOutOfRangeException(nameof(unpackSize), "unpackSize должен быть > 0.");
+
+    if (unpackSize > (1 << 21))
+      throw new ArgumentOutOfRangeException(nameof(unpackSize), "Для одного LZMA2-чанка unpackSize не должен превышать 2 MiB.");
+
+    if (lzmaPayload.Length == 0)
+      throw new ArgumentOutOfRangeException(nameof(lzmaPayload), "lzmaPayload не должен быть пустым.");
+
+    if (lzmaPayload.Length > 0x10000)
+      throw new ArgumentOutOfRangeException(nameof(lzmaPayload), "packSize не должен превышать 65536 байт.");
+
+    int unpackMinus1 = unpackSize - 1;
+    int packMinus1 = lzmaPayload.Length - 1;
+
+    // reset state + new props, без reset dictionary
+    // high5bits(unpackMinus1) кладём в low5bits control.
+    byte control = (byte)(0xC0 | ((unpackMinus1 >> 16) & 0x1F));
+
+    // Заголовок LZMA-чанка: 1 (control) + 2 (unpack) + 2 (pack) + 1 (props)
+    var data = new byte[6 + lzmaPayload.Length + 1];
+
+    int i = 0;
+
+    byte u1 = (byte)(unpackMinus1 >> 8);
+    byte u0 = (byte)(unpackMinus1 >> 0);
+    byte p1 = (byte)(packMinus1 >> 8);
+    byte p0 = (byte)(packMinus1 >> 0);
+
+    data[i++] = control;
+    data[i++] = u1;
+    data[i++] = u0;
+    data[i++] = p1;
+    data[i++] = p0;
+    data[i++] = propByte;
+
+    Buffer.BlockCopy(lzmaPayload, 0, data, i, lzmaPayload.Length);
+    i += lzmaPayload.Length;
+
+    // End marker
+    data[i++] = 0x00;
+
+    return data;
+  }
+
   /// <summary>
   /// Собирает поток:
   /// <list type="bullet">
@@ -120,8 +175,7 @@ internal static class Lzma2TestStreamBuilder
 
   private static byte[] SingleLzmaChunkNoPropsResetState(byte[] lzmaPayload, int unpackSize, bool endMarker)
   {
-    if (lzmaPayload is null)
-      throw new ArgumentNullException(nameof(lzmaPayload));
+    ArgumentNullException.ThrowIfNull(lzmaPayload);
 
     if (unpackSize <= 0)
       throw new ArgumentOutOfRangeException(nameof(unpackSize), "unpackSize должен быть > 0.");
