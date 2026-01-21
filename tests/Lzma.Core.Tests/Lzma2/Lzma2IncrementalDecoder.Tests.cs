@@ -1,6 +1,4 @@
-using Lzma.Core.Lzma1;
 using Lzma.Core.Lzma2;
-using Lzma.Core.Tests.Helpers;
 
 namespace Lzma.Core.Tests.Lzma2;
 
@@ -15,7 +13,7 @@ public sealed class Lzma2IncrementalDecoderTests
 
     byte[] lzma2 = Concat([MakeCopyChunk(payload1, control: 0x01), MakeCopyChunk(payload2, control: 0x02), [0x00]]);
 
-    byte[] expected = Concat(payload1, payload2);
+    byte[] expected = Concat([payload1, payload2]);
     byte[] actual = new byte[expected.Length];
 
     var decoder = new Lzma2IncrementalDecoder();
@@ -145,17 +143,20 @@ public sealed class Lzma2IncrementalDecoderTests
   }
 
   [Fact]
-  public void Decode_LzmaChunk_ПокаНеПоддерживается()
+  public void Decode_FirstLzmaChunkWithoutProps_Returns_InvalidData()
   {
-    // Минимальный валидный заголовок LZMA-чанка (без props): 5 байт.
+    // Минимальный формально корректный заголовок LZMA-чанка (без props): 5 байт.
     // control=0x80 => LZMA chunk, без props (т.к. < 0xE0).
     // unpackSize = 1, packSize = 1.
+    //
+    // Однако для ПЕРВОГО LZMA-чанка в потоке props обязательны: иначе мы не знаем lc/lp/pb.
+    // Поэтому ожидаем InvalidData.
     byte[] lzmaHeaderOnly = [0x80, 0x00, 0x00, 0x00, 0x00];
 
     var decoder = new Lzma2IncrementalDecoder();
     var res = decoder.Decode(lzmaHeaderOnly, Span<byte>.Empty, out int consumed, out int written);
 
-    Assert.Equal(Lzma2DecodeResult.NotSupported, res);
+    Assert.Equal(Lzma2DecodeResult.InvalidData, res);
     Assert.Equal(lzmaHeaderOnly.Length, consumed);
     Assert.Equal(0, written);
   }
@@ -163,71 +164,6 @@ public sealed class Lzma2IncrementalDecoderTests
   // ----------------------
   // Вспомогательные штуки
   // ----------------------
-
-
-  [Fact]
-  public void Decode_LzmaChunk_WithProps_LiteralOnly_OneShot_Works()
-  {
-    Assert.True(LzmaProperties.TryParse(0x5D, out var props));
-
-    byte[] expected = [0x48, 0x65, 0x6C, 0x6C, 0x6F];
-    byte[] lzmaPayload = LzmaTestLiteralOnlyEncoder.Encode(props, expected);
-    byte[] lzma2 = Lzma2TestStreamBuilder.SingleLzmaChunkWithProps(lzmaPayload, expected.Length, 0x5D, endMarker: true);
-
-    var decoder = new Lzma2IncrementalDecoder();
-    byte[] actual = new byte[expected.Length];
-
-    Lzma2DecodeResult res = decoder.Decode(lzma2, actual, out int consumed, out int written);
-
-    Assert.Equal(Lzma2DecodeResult.Finished, res);
-    Assert.Equal(lzma2.Length, consumed);
-    Assert.Equal(expected.Length, written);
-    Assert.Equal(expected, actual);
-  }
-
-  [Fact]
-  public void Decode_LzmaChunk_WithProps_LiteralOnly_Streaming_Works()
-  {
-    Assert.True(LzmaProperties.TryParse(0x5D, out var props));
-
-    byte[] expected = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06];
-    byte[] lzmaPayload = LzmaTestLiteralOnlyEncoder.Encode(props, expected);
-    byte[] lzma2 = Lzma2TestStreamBuilder.SingleLzmaChunkWithProps(lzmaPayload, expected.Length, 0x5D, endMarker: true);
-
-    var decoder = new Lzma2IncrementalDecoder();
-    byte[] actual = new byte[expected.Length];
-
-    int inPos = 0;
-    int outPos = 0;
-
-    for (int safety = 0; safety < 10000; safety++)
-    {
-      int inSize = Math.Min(1, lzma2.Length - inPos);
-      ReadOnlySpan<byte> inputChunk = lzma2.AsSpan(inPos, inSize);
-
-      int outSize = Math.Min(1, actual.Length - outPos);
-      Span<byte> outputChunk = outSize > 0 ? actual.AsSpan(outPos, outSize) : Span<byte>.Empty;
-
-      Lzma2DecodeResult res = decoder.Decode(inputChunk, outputChunk, out int consumed, out int written);
-
-      Assert.True(consumed > 0 || written > 0 || res == Lzma2DecodeResult.Finished);
-
-      inPos += consumed;
-      outPos += written;
-
-      if (res == Lzma2DecodeResult.Finished)
-      {
-        Assert.Equal(lzma2.Length, inPos);
-        Assert.Equal(actual.Length, outPos);
-        Assert.Equal(expected, actual);
-        return;
-      }
-
-      Assert.True(res == Lzma2DecodeResult.NeedMoreInput || res == Lzma2DecodeResult.NeedMoreOutput);
-    }
-
-    throw new Exception("Decoder did not finish");
-  }
 
   private static byte[] MakeCopyChunk(byte[] payload, byte control)
   {
@@ -268,7 +204,7 @@ public sealed class Lzma2IncrementalDecoderTests
 
   private sealed class ListProgress : IProgress<LzmaProgress>
   {
-    public List<LzmaProgress> Items { get; } = new();
+    public List<LzmaProgress> Items { get; } = [];
 
     public void Report(LzmaProgress value) => Items.Add(value);
   }

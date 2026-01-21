@@ -23,6 +23,9 @@ public sealed class Lzma2IncrementalDecoder
   private uint _lzmaPackRemaining;
   private uint _lzmaUnpackRemaining;
 
+  private Lzma1.LzmaProperties _lastLzmaProps;
+  private bool _hasLastLzmaProps;
+
   private DecoderState _state = DecoderState.ReadingHeader;
   private bool _isTerminal;
   private Lzma2DecodeResult _terminalResult;
@@ -58,6 +61,9 @@ public sealed class Lzma2IncrementalDecoder
     _lzmaPackRemaining = 0;
     _lzmaUnpackRemaining = 0;
 
+    _lastLzmaProps = default;
+    _hasLastLzmaProps = false;
+
     _state = DecoderState.ReadingHeader;
     _isTerminal = false;
     _terminalResult = default;
@@ -73,7 +79,9 @@ public sealed class Lzma2IncrementalDecoder
     bytesWritten = 0;
 
     if (_isTerminal)
+    {
       return _terminalResult;
+    }
 
     while (true)
     {
@@ -135,12 +143,29 @@ public sealed class Lzma2IncrementalDecoder
 
           if (header.Kind == Lzma2ChunkKind.Lzma)
           {
-            // For now we only support LZMA chunks that include the properties byte.
-            if (!header.HasProperties)
-              return SetError(Lzma2DecodeResult.NotSupported);
+            // Step24: support LZMA chunks without properties *when* they reset LZMA state (control 0xA0..0xBF).
+            // True continuation chunks (control 0x80..0x9F) would require preserving the range decoder state
+            // across chunk boundaries, and are still NotSupported for now.
+            Lzma1.LzmaProperties props;
 
-            if (!header.Properties.HasValue || !Lzma1.LzmaProperties.TryParse(header.Properties.Value, out var props))
-              return SetError(Lzma2DecodeResult.InvalidData);
+            if (header.HasProperties)
+            {
+              if (!header.Properties.HasValue || !Lzma1.LzmaProperties.TryParse(header.Properties.Value, out props))
+                return SetError(Lzma2DecodeResult.InvalidData);
+
+              _lastLzmaProps = props;
+              _hasLastLzmaProps = true;
+            }
+            else
+            {
+              if (!_hasLastLzmaProps) // A no-properties LZMA chunk before we've ever seen properties is invalid.
+                return SetError(Lzma2DecodeResult.InvalidData);
+
+              if (!header.ResetState)
+                return SetError(Lzma2DecodeResult.NotSupported);
+
+              props = _lastLzmaProps;
+            }
 
             try
             {
@@ -256,7 +281,6 @@ public sealed class Lzma2IncrementalDecoder
             return SetError(Lzma2DecodeResult.InvalidData);
 
           continue;
-
         case DecoderState.Finished:
           _isTerminal = true;
           _terminalResult = Lzma2DecodeResult.Finished;
