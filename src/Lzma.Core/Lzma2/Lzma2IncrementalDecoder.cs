@@ -162,14 +162,23 @@ public sealed class Lzma2IncrementalDecoder
               props = _lastLzmaProps;
             }
 
-            try
-            {
-              _lzma = new Lzma1.LzmaDecoder(props, _dictionarySize);
-            }
-            catch (ArgumentOutOfRangeException)
-            {
-              return SetError(Lzma2DecodeResult.InvalidData);
-            }
+            // LZMA2 can keep the LZMA dictionary between chunks.
+            // Create a new decoder only when the LZMA2 header explicitly resets the dictionary
+            // (or when this is the first LZMA chunk we see).
+            if (_lzma is null || header.ResetDictionary)
+              try
+              {
+                _lzma = new Lzma1.LzmaDecoder(props, _dictionarySize);
+              }
+              catch (ArgumentOutOfRangeException)
+              {
+                return SetError(Lzma2DecodeResult.InvalidData);
+              }
+            else if (header.HasProperties) // Properties can be reset without resetting the dictionary.
+              _lzma.SetProperties(props);
+
+            // Each LZMA2 LZMA chunk starts a new range-coded stream, and may also reset LZMA state.
+            _lzma.BeginNewChunk(resetState: header.ResetState, resetDictionary: header.ResetDictionary);
 
             _lzmaPackRemaining = (uint)header.PackSize;
             _lzmaUnpackRemaining = (uint)header.UnpackSize;
@@ -230,13 +239,6 @@ public sealed class Lzma2IncrementalDecoder
 
           if (output.IsEmpty)
             return ReturnWithProgress(Lzma2DecodeResult.NeedMoreOutput);
-
-          if (_lzmaPackRemaining == 0)
-            return SetError(Lzma2DecodeResult.InvalidData);
-
-          if (input.IsEmpty)
-            return ReturnWithProgress(Lzma2DecodeResult.NeedMoreInput);
-
           int inLimit = (int)Math.Min(_lzmaPackRemaining, (uint)input.Length);
           int outLimit = (int)Math.Min(_lzmaUnpackRemaining, (uint)output.Length);
 
@@ -248,7 +250,20 @@ public sealed class Lzma2IncrementalDecoder
               out _);
 
           if (lzConsumed == 0 && lzWritten == 0)
+          {
+            // This can happen when the LZMA decoder needs more input, but we couldn't (or didn't) provide any
+            // bytes to it (e.g. we're at the end of the current input chunk). In that case just propagate
+            // NeedMoreInput. If the chunk has no packed bytes left, then the stream is truncated/invalid.
+            if (lzRes == Lzma1.LzmaDecodeResult.NeedsMoreInput)
+            {
+              if (_lzmaPackRemaining == 0)
+                return SetError(Lzma2DecodeResult.InvalidData);
+
+              return ReturnWithProgress(Lzma2DecodeResult.NeedMoreInput);
+            }
+
             return SetError(Lzma2DecodeResult.InvalidData);
+          }
 
           input = input[lzConsumed..];
           output = output[lzWritten..];

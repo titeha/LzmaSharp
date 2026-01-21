@@ -155,6 +155,14 @@ internal static class LzmaTestSimpleMatchEncoder
       LzmaProbability.Reset(_probs);
     }
 
+    /// <summary>
+    /// Сбрасывает вероятности дерева к начальному состоянию.
+    /// </summary>
+    public void Reset()
+    {
+      LzmaProbability.Reset(_probs);
+    }
+
     public void EncodeSymbol(LzmaTestRangeEncoder range, uint symbol)
     {
       uint m = 1;
@@ -184,7 +192,7 @@ internal static class LzmaTestSimpleMatchEncoder
       Reset();
     }
 
-    private void Reset()
+    public void Reset()
     {
       _choice[0] = LzmaProbability.Initial;
       _choice[1] = LzmaProbability.Initial;
@@ -201,5 +209,57 @@ internal static class LzmaTestSimpleMatchEncoder
       uint sym = matchLen - LzmaConstants.MatchMinLen;
       _low[posState].EncodeSymbol(range, sym);
     }
+  }
+
+  /// <summary>
+  /// Encodes a single LZMA match (distance=1) without any preceding literals.
+  /// Useful for testing LZMA2 dictionary carry-over between chunks.
+  /// </summary>
+  public static byte[] Encode_MatchOnly_Distance1_MatchLen5_9(LzmaProperties props, long pos, uint matchLen)
+  {
+    if (matchLen < 5 || matchLen > 9)
+      throw new ArgumentOutOfRangeException(nameof(matchLen));
+
+    int numPosStates = 1 << props.Pb;
+    int posStateMask = numPosStates - 1;
+    int posState = (int)pos & posStateMask;
+
+    var isMatch = new ushort[LzmaConstants.NumStates * numPosStates];
+    var isRep = new ushort[LzmaConstants.NumStates];
+
+    var len = new LenEncoderForTests(numPosStates);
+    var posSlot = new BitTreeEncoderForTests(LzmaConstants.NumPosSlotBits);
+
+    LzmaProbability.Reset(isMatch);
+    LzmaProbability.Reset(isRep);
+    len.Reset();
+    posSlot.Reset();
+
+    var state = new LzmaState();
+    state.Reset();
+
+    var range = new LzmaTestRangeEncoder();
+    range.WriteInitBytes();
+
+    // isMatch = 1 (match)
+    ref ushort pIsMatch = ref isMatch[state.Value * numPosStates + posState];
+    range.EncodeBit(ref pIsMatch, 1);
+
+    // isRep = 0 (normal match, not rep)
+    ref ushort pIsRep = ref isRep[state.Value];
+    range.EncodeBit(ref pIsRep, 0);
+
+    len.EncodeLowOnly(range, posState, matchLen);
+
+    int lenToPosState = matchLen < 6 ? (int)matchLen - 2 : 3;
+    if (lenToPosState != 3)
+      throw new NotSupportedException("This helper supports only lenToPosState=3 (matchLen 5..9).");
+
+    // distance=1 => posSlot=0
+    posSlot.EncodeSymbol(range, 0);
+
+    state.UpdateMatch();
+
+    return range.Finish();
   }
 }

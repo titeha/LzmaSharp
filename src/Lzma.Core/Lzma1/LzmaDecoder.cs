@@ -72,19 +72,19 @@ public sealed class LzmaDecoder
     Literal,
   }
 
-  private readonly LzmaProperties _properties;
+  private LzmaProperties _properties;
   // Важно: LzmaRangeDecoder — struct с изменяемым состоянием (Code/Range и т.п.).
   // Если сделать поле readonly, компилятор начнёт делать защитные копии при вызове методов,
   // и состояние range decoder'а перестанет сохраняться между вызовами (а иногда даже внутри одного Decode).
   private LzmaRangeDecoder _range = new();
   private readonly LzmaDictionary _dictionary;
-  private readonly LzmaLiteralDecoder _literal;
+  private LzmaLiteralDecoder _literal;
   private readonly LzmaLenDecoder _lenDecoder;
   private readonly LzmaLenDecoder _repLenDecoder;
   private readonly LzmaDistanceDecoder _distanceDecoder;
 
   // isMatch[state][posState]
-  private readonly ushort[] _isMatch;
+  private ushort[] _isMatch;
 
   // isRep[state]
   private readonly ushort[] _isRep;
@@ -97,10 +97,10 @@ public sealed class LzmaDecoder
   private readonly ushort[] _isRepG2;
 
   // isRep0Long[state][posState]
-  private readonly ushort[] _isRep0Long;
+  private ushort[] _isRep0Long;
 
-  private readonly int _numPosStates;
-  private readonly int _posStateMask;
+  private int _numPosStates;
+  private int _posStateMask;
 
   private LzmaState _state;
   private byte _previousByte;
@@ -417,12 +417,13 @@ public sealed class LzmaDecoder
 
         // rep1: используем _rep1 как distance и поднимаем его в rep0.
         // История rep-ов: [rep0, rep1, rep2, rep3] -> [rep1, rep0, rep2, rep3]
-        (_rep0, _rep1) = (_rep1, _rep0);
+        int dist = _rep1;
+        _rep1 = _rep0;
+        _rep0 = dist;
 
         _step = Step.DecodeRepLen;
         continue;
       }
-
 
       if (_step == Step.IsRepG2)
       {
@@ -702,5 +703,74 @@ public sealed class LzmaDecoder
 
     progress = new LzmaProgress(_totalInputBytes, _dictionary.TotalWritten);
     return result;
+  }
+
+  /// <summary>
+  /// Updates LZMA properties (lc/lp/pb) without touching the dictionary.
+  /// Intended for LZMA2 where properties can be reset while keeping the dictionary.
+  /// </summary>
+  internal void SetProperties(LzmaProperties properties)
+  {
+    if (properties.Equals(_properties))
+      return;
+
+    // Reconfigure pos-state dependent tables when PB changes.
+    int newNumPosStates = 1 << properties.Pb;
+    if (newNumPosStates != _numPosStates)
+    {
+      _numPosStates = newNumPosStates;
+      _posStateMask = _numPosStates - 1;
+
+      // These tables are indexed by [state * numPosStates + posState].
+      _isMatch = new ushort[LzmaConstants.NumStates * _numPosStates];
+      _isRep0Long = new ushort[LzmaConstants.NumStates * _numPosStates];
+    }
+
+    // Literal decoder depends on LC/LP.
+    if (properties.Lc != _properties.Lc || properties.Lp != _properties.Lp)
+      _literal = new LzmaLiteralDecoder(properties.Lc, properties.Lp);
+
+    _properties = properties;
+
+    // Properties reset in LZMA2 also implies state reset for the next chunk.
+    _step = Step.RangeInit;
+  }
+
+  /// <summary>
+  /// Prepares the decoder for a new LZMA2 LZMA chunk.
+  /// LZMA2 restarts the range coder at each chunk boundary; the dictionary and/or state may also be reset.
+  /// </summary>
+  internal void BeginNewChunk(bool resetState, bool resetDictionary)
+  {
+    if (resetDictionary)
+    {
+      // Do NOT clear the buffer (can be huge) — resetting pointers is enough.
+      _dictionary.Reset(clearBuffer: false);
+    }
+
+    // Each LZMA2 LZMA chunk starts with fresh range-init bytes.
+    _range.Reset();
+    _rangeInitialized = false;
+
+    // Clear terminal latch (LZMA2 can continue after chunk boundaries).
+    _isTerminal = false;
+    _terminalResult = LzmaDecodeResult.Ok;
+
+    // Reset any pending match copy that might be in-flight (shouldn't happen across valid chunk boundaries).
+    _pendingMatchLength = 0;
+    _pendingMatchDistance = 0;
+    _decodedMatchLen = 0;
+
+    // Reset literal decoding scratch state.
+    _literalSubCoderOffset = 0;
+    _literalSymbol = 0;
+    _literalMatchMode = false;
+    _literalMatchByte = 0;
+
+    if (resetState)
+    {
+      // Actual state/probability reset happens in Step.RangeInit after range init bytes are read.
+      _step = Step.RangeInit;
+    }
   }
 }
