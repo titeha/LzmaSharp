@@ -1,3 +1,5 @@
+using System;
+
 namespace Lzma.Core.Lzma2;
 
 // Incremental LZMA2 decoder.
@@ -34,6 +36,48 @@ public sealed class Lzma2IncrementalDecoder
   private readonly IProgress<LzmaProgress>? _progress;
   private readonly int _dictionarySize;
   private LzmaProgress _lastProgress;
+
+  /// <summary>
+  /// Создаёт декодер на основе LZMA2 properties byte (кодирует размер словаря).
+  /// </summary>
+  /// <remarks>
+  /// Этот байт НЕ является частью LZMA2-потока. Обычно он хранится в контейнере.
+  /// </remarks>
+  /// <param name="lzma2PropertiesByte">Байт свойств LZMA2 (0..40).</param>
+  /// <param name="progress">Приёмник прогресса (можно null).</param>
+  public Lzma2IncrementalDecoder(byte lzma2PropertiesByte, IProgress<LzmaProgress>? progress = null)
+    : this(progress, dictionarySize: GetDictionarySizeFromLzma2PropertiesByteOrThrow(lzma2PropertiesByte, nameof(lzma2PropertiesByte)))
+  {
+  }
+
+  /// <summary>
+  /// Создаёт декодер на основе разобранных свойств LZMA2.
+  /// </summary>
+  /// <param name="properties">Свойства LZMA2 (в первую очередь, размер словаря).</param>
+  /// <param name="progress">Приёмник прогресса (можно null).</param>
+  public Lzma2IncrementalDecoder(Lzma2Properties properties, IProgress<LzmaProgress>? progress = null)
+    : this(progress, dictionarySize: GetDictionarySizeFromLzma2PropertiesOrThrow(properties))
+  {
+  }
+
+  private static int GetDictionarySizeFromLzma2PropertiesByteOrThrow(byte value, string paramName)
+  {
+    if (!Lzma2Properties.TryParse(value, out var props))
+      throw new ArgumentOutOfRangeException(paramName, "Некорректный байт свойств LZMA2. Допустимый диапазон: 0..40.");
+
+    if (!props.TryGetDictionarySizeInt32(out int dictionarySize))
+      throw new ArgumentOutOfRangeException(paramName, "Размер словаря, заданный LZMA2 properties byte, слишком большой для текущей реализации.");
+
+    return dictionarySize;
+  }
+
+  private static int GetDictionarySizeFromLzma2PropertiesOrThrow(Lzma2Properties properties)
+  {
+    if (!properties.TryGetDictionarySizeInt32(out int dictionarySize))
+      throw new ArgumentOutOfRangeException(nameof(properties), "Размер словаря слишком большой для текущей реализации.");
+
+    return dictionarySize;
+  }
 
   public Lzma2IncrementalDecoder(IProgress<LzmaProgress>? progress = null, int dictionarySize = _defaultLzmaDictionarySize)
   {
@@ -290,6 +334,7 @@ public sealed class Lzma2IncrementalDecoder
             return SetError(Lzma2DecodeResult.InvalidData);
 
           continue;
+
         case DecoderState.Finished:
           _isTerminal = true;
           _terminalResult = Lzma2DecodeResult.Finished;
