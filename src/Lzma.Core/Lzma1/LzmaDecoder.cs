@@ -262,11 +262,13 @@ public sealed class LzmaDecoder
       progress = new LzmaProgress(_totalInputBytes, _dictionary.TotalWritten);
       return _terminalResult;
     }
-
-    // Если мы на старте потока — обязаны прочитать 5 init-байт range coder.
+    // Range coder в LZMA требует 5 init-байт (чтение "Code").
+    // Это нужно:
+    //  - в начале потока;
+    //  - в начале каждого LZMA-чанка внутри LZMA2 (даже если resetState == false).
     // Важно: мы делаем это ДО основного цикла, чтобы далее TryDecodeBit никогда
     // не вызывался на неинициализированном range decoder'е.
-    if (_step == Step.RangeInit && !_rangeInitialized)
+    if (!_rangeInitialized)
     {
       var init = _range.TryInitialize(src, ref srcPos);
       if (init == LzmaRangeInitResult.NeedMoreInput)
@@ -425,6 +427,7 @@ public sealed class LzmaDecoder
         continue;
       }
 
+
       if (_step == Step.IsRepG2)
       {
         ref ushort prob = ref _isRepG2[_state.Value];
@@ -480,7 +483,9 @@ public sealed class LzmaDecoder
           _step = Step.MatchCopy;
         }
         else
+        {
           _step = Step.DecodeRepLen;
+        }
 
         continue;
       }
@@ -742,11 +747,8 @@ public sealed class LzmaDecoder
   /// </summary>
   internal void BeginNewChunk(bool resetState, bool resetDictionary)
   {
-    if (resetDictionary)
-    {
-      // Do NOT clear the buffer (can be huge) — resetting pointers is enough.
+    if (resetDictionary) // Do NOT clear the buffer (can be huge) — resetting pointers is enough.
       _dictionary.Reset(clearBuffer: false);
-    }
 
     // Each LZMA2 LZMA chunk starts with fresh range-init bytes.
     _range.Reset();
@@ -767,10 +769,7 @@ public sealed class LzmaDecoder
     _literalMatchMode = false;
     _literalMatchByte = 0;
 
-    if (resetState)
-    {
-      // Actual state/probability reset happens in Step.RangeInit after range init bytes are read.
+    if (resetState) // Actual state/probability reset happens in Step.RangeInit after range init bytes are read.
       _step = Step.RangeInit;
-    }
   }
 }

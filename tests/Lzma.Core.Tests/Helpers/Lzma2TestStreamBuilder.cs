@@ -173,9 +173,30 @@ internal static class Lzma2TestStreamBuilder
     return data;
   }
 
+  public static byte[] TwoLzmaChunks_SecondNoPropsNoResetStateThenEnd(
+    LzmaProperties props,
+    byte[] payload1,
+    uint unpackSize1,
+    byte[] payload2,
+    uint unpackSize2)
+  {
+    // 1) Первый LZMA-чанк с properties (reset state + reset dic).
+    // 2) Второй LZMA-чанк без properties и без resetState (control 0x80..0x9F).
+    //    Он использует те же properties, словарь и вероятностные модели, что и предыдущий чанк.
+    byte propByte = props.ToByteOrThrow();
+    byte[] first = SingleLzmaChunkWithProps(payload1, checked((int)unpackSize1), propByte, endMarker: false);
+    byte[] second = SingleLzmaChunkNoPropsNoResetState(payload2, unpackSize2, endMarker: true);
+
+    byte[] data = new byte[first.Length + second.Length];
+    first.CopyTo(data, 0);
+    second.CopyTo(data, first.Length);
+    return data;
+  }
+
   private static byte[] SingleLzmaChunkNoPropsResetState(byte[] lzmaPayload, int unpackSize, bool endMarker)
   {
-    ArgumentNullException.ThrowIfNull(lzmaPayload);
+    if (lzmaPayload is null)
+      throw new ArgumentNullException(nameof(lzmaPayload));
 
     if (unpackSize <= 0)
       throw new ArgumentOutOfRangeException(nameof(unpackSize), "unpackSize должен быть > 0.");
@@ -220,6 +241,38 @@ internal static class Lzma2TestStreamBuilder
 
     if (endMarker)
       data[i++] = 0x00;
+
+    return data;
+  }
+
+
+  private static byte[] SingleLzmaChunkNoPropsNoResetState(
+    byte[] payload,
+    uint unpackSize,
+    bool endMarker)
+  {
+    // control 0x80..0x9F: LZMA, без properties, без resetState, без resetDictionary.
+    byte control = (byte)(0x80 | (((unpackSize - 1) >> 16) & 0x1F));
+
+    ushort unpackSizeMinus1Lo = (ushort)((unpackSize - 1) & 0xFFFF);
+    ushort packSizeMinus1 = (ushort)(payload.Length - 1);
+
+    // Заголовок LZMA2 LZMA-чанка без properties: 1 (control) + 2 (unpackSize-1) + 2 (packSize-1) = 5 байт.
+    const int headerSize = 5;
+    int endSize = endMarker ? 1 : 0;
+
+    byte[] data = new byte[headerSize + payload.Length + endSize];
+
+    data[0] = control;
+    data[1] = (byte)(unpackSizeMinus1Lo >> 8);
+    data[2] = (byte)(unpackSizeMinus1Lo & 0xFF);
+    data[3] = (byte)(packSizeMinus1 >> 8);
+    data[4] = (byte)(packSizeMinus1 & 0xFF);
+
+    payload.CopyTo(data, headerSize);
+
+    if (endMarker)
+      data[^1] = 0x00;
 
     return data;
   }

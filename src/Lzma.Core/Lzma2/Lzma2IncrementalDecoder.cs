@@ -1,5 +1,3 @@
-using System;
-
 namespace Lzma.Core.Lzma2;
 
 // Incremental LZMA2 decoder.
@@ -126,8 +124,7 @@ public sealed class Lzma2IncrementalDecoder
     while (true)
       switch (_state)
       {
-        case DecoderState.ReadingHeader:
-          // Need at least 1 byte to know the expected header size.
+        case DecoderState.ReadingHeader: // Need at least 1 byte to know the expected header size.
           if (input.IsEmpty)
             return ReturnWithProgress(Lzma2DecodeResult.NeedMoreInput);
 
@@ -182,9 +179,11 @@ public sealed class Lzma2IncrementalDecoder
 
           if (header.Kind == Lzma2ChunkKind.Lzma)
           {
-            // Step24: support LZMA chunks without properties *when* they reset LZMA state (control 0xA0..0xBF).
-            // True continuation chunks (control 0x80..0x9F) would require preserving the range decoder state
-            // across chunk boundaries, and are still NotSupported for now.
+            // В LZMA2 properties могут быть не в каждом LZMA-чанке.
+            // Если properties отсутствуют — используем последние известные из потока.
+            //
+            // - control 0xA0..0xBF: resetState=1, properties отсутствуют (сбрасываем модели/состояние).
+            // - control 0x80..0x9F: resetState=0, properties отсутствуют (сохраняем модели/состояние).
             Lzma1.LzmaProperties props;
 
             if (header.HasProperties)
@@ -197,12 +196,13 @@ public sealed class Lzma2IncrementalDecoder
             }
             else
             {
-              if (!_hasLastLzmaProps) // A no-properties LZMA chunk before we've ever seen properties is invalid.
+              if (!_hasLastLzmaProps) // LZMA-чанк без properties до первого чанка с properties — это битый поток.
                 return SetError(Lzma2DecodeResult.InvalidData);
 
-              if (!header.ResetState)
-                return SetError(Lzma2DecodeResult.NotSupported);
-
+              // LZMA-чанк без properties: используем последние известные properties из потока.
+              //
+              // Важно: в LZMA2 range coder всё равно переинициализируется на границе каждого LZMA-чанка.
+              // Разница между control 0x80..0x9F и 0xA0..0xBF только в том, сбрасываем ли мы LZMA-состояние/модели.
               props = _lastLzmaProps;
             }
 
@@ -334,7 +334,6 @@ public sealed class Lzma2IncrementalDecoder
             return SetError(Lzma2DecodeResult.InvalidData);
 
           continue;
-
         case DecoderState.Finished:
           _isTerminal = true;
           _terminalResult = Lzma2DecodeResult.Finished;
