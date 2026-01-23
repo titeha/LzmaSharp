@@ -13,7 +13,7 @@ public sealed class Lzma2CopyEncoderTests
   [Fact]
   public void Encode_Empty_Produces_EndMarkerOnly_And_Roundtrips()
   {
-    byte[] encoded = Lzma2CopyEncoder.Encode(ReadOnlySpan<byte>.Empty);
+    byte[] encoded = Lzma2CopyEncoder.Encode([]);
 
     Assert.Single(encoded);
     Assert.Equal(0x00, encoded[0]);
@@ -57,7 +57,7 @@ public sealed class Lzma2CopyEncoderTests
     for (int i = 0; i < input.Length; i++)
       input[i] = (byte)i;
 
-    byte[] encoded = Lzma2CopyEncoder .Encode(input);
+    byte[] encoded = Lzma2CopyEncoder.Encode(input);
 
     // Для 2 чанков: вход + 3*2 заголовка + 1 end marker
     Assert.Equal(input.Length + (3 * 2) + 1, encoded.Length);
@@ -68,7 +68,7 @@ public sealed class Lzma2CopyEncoderTests
     Assert.Equal(0xFF, encoded[2]); // 65536 - 1 = 0xFFFF
 
     // Второй чанк начинается сразу после payload первого
-    const int secondChunkHeader = 3 + Lzma2CopyEncoder.MaxChunkSize;
+    int secondChunkHeader = 3 + Lzma2CopyEncoder.MaxChunkSize;
     Assert.Equal(0x02, encoded[secondChunkHeader + 0]); // без reset dictionary
 
     // sizeMinus1 для 5 байт => 4
@@ -80,6 +80,26 @@ public sealed class Lzma2CopyEncoderTests
 
     byte[] decoded = DecodeAllStreamed(encoded, expectedOutputSize: input.Length);
     Assert.True(decoded.AsSpan().SequenceEqual(input));
+  }
+
+
+  [Fact]
+  public void Encode_Возвращает_PropertiesByte_ДляЗаданногоСловаря()
+  {
+    // Для COPY-потока properties byte не влияет на распаковку,
+    // но он нужен для контейнеров (например, 7z).
+    const int dictionarySize = 1 << 20;
+
+    byte[] input = [1, 2, 3, 4, 5];
+
+    byte[] encoded = Lzma2CopyEncoder.Encode(input, dictionarySize, out byte propsByte);
+
+    Assert.True(Lzma2Properties.TryEncode(dictionarySize, out byte expected));
+    Assert.Equal(expected, propsByte);
+
+    // И на всякий случай проверим, что сам поток по-прежнему декодируется корректно.
+    byte[] decoded = DecodeAllStreamed(encoded, expectedOutputSize: input.Length);
+    Assert.Equal(input, decoded);
   }
 
   private static byte[] DecodeAllStreamed(byte[] encoded, int expectedOutputSize)

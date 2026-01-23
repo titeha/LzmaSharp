@@ -4,6 +4,20 @@ namespace Lzma.Core.Tests.Lzma2;
 
 public class Lzma2CopyIncrementalEncoderTests
 {
+
+  [Fact]
+  public void Ctor_Экспортирует_PropertiesByte_И_SizeСловаря()
+  {
+    const int dictionarySize = 1 << 20;
+
+    var enc = new Lzma2CopyIncrementalEncoder(dictionarySize: dictionarySize);
+
+    Assert.Equal(dictionarySize, enc.DictionarySize);
+
+    Assert.True(Lzma2Properties.TryEncode(dictionarySize, out byte expected));
+    Assert.Equal(expected, enc.PropertiesByte);
+  }
+
   [Fact]
   public void Encode_OneShot_СовпадаетС_ОбычнымLzma2CopyEncoder()
   {

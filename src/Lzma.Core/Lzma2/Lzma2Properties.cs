@@ -157,6 +157,41 @@ public readonly struct Lzma2Properties
     return true;
   }
 
+  /// <summary>
+  /// Пытается закодировать размер словаря в «properties byte» (DictionaryProp) для LZMA2.
+  /// </summary>
+  /// <param name="dictionarySize">Размер словаря в байтах.</param>
+  /// <param name="propertiesByte">Байт свойств LZMA2 (DictionaryProp).</param>
+  /// <returns><see langword="true"/>, если удалось закодировать; иначе <see langword="false"/>.</returns>
+  public static bool TryEncode(int dictionarySize, out byte propertiesByte)
+  {
+    if (dictionarySize <= 0)
+    {
+      propertiesByte = 0;
+      return false;
+    }
+
+    return TryEncode((uint)dictionarySize, out propertiesByte);
+  }
+
+  /// <summary>
+  /// Пытается закодировать размер словаря в «properties byte» (DictionaryProp) для LZMA2.
+  /// </summary>
+  /// <param name="dictionarySize">Размер словаря в байтах.</param>
+  /// <param name="propertiesByte">Байт свойств LZMA2 (DictionaryProp).</param>
+  /// <returns><see langword="true"/>, если удалось закодировать; иначе <see langword="false"/>.</returns>
+  public static bool TryEncode(uint dictionarySize, out byte propertiesByte)
+  {
+    if (!TryCreateFromDictionarySize(dictionarySize, out var props))
+    {
+      propertiesByte = 0;
+      return false;
+    }
+
+    propertiesByte = props.DictionaryProp;
+    return true;
+  }
+
   private static uint ComputeDictionarySize(byte dictionaryProp)
   {
     // Формула из SDK. Для пропов 0..39 значения помещаются в UInt32.

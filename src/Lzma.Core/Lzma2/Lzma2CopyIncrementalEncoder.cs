@@ -15,7 +15,7 @@ namespace Lzma.Core.Lzma2;
 /// - поддерживает очень маленькие буферы output (может дописывать заголовок/данные по частям).
 /// </para>
 /// </summary>
-public sealed class Lzma2CopyIncrementalEncoder(IProgress<LzmaProgress>? progress = null)
+public sealed class Lzma2CopyIncrementalEncoder
 {
   private enum State
   {
@@ -34,7 +34,7 @@ public sealed class Lzma2CopyIncrementalEncoder(IProgress<LzmaProgress>? progres
   private const byte _copyNoResetDictionaryControl = 0x02;
   private const byte _endMarkerControl = 0x00;
 
-  private readonly IProgress<LzmaProgress>? _progress = progress;
+  private readonly IProgress<LzmaProgress>? _progress;
 
   // Заголовок COPY-чанка: 1 байт control + 2 байта (size-1) big-endian.
   private readonly byte[] _header = new byte[3];
@@ -48,6 +48,17 @@ public sealed class Lzma2CopyIncrementalEncoder(IProgress<LzmaProgress>? progres
   private long _totalInputBytes;
   private long _totalOutputBytes;
 
+  public Lzma2CopyIncrementalEncoder(IProgress<LzmaProgress>? progress = null, int dictionarySize = Lzma2CopyEncoder.DefaultDictionarySize)
+  {
+    if (!Lzma2Properties.TryEncode(dictionarySize, out byte props))
+      throw new ArgumentOutOfRangeException(nameof(dictionarySize), "Некорректный размер словаря для LZMA2.");
+
+    DictionarySize = dictionarySize;
+    PropertiesByte = props;
+
+    _progress = progress;
+  }
+
   /// <summary>
   /// Сколько байт всего принято во вход (с начала потока).
   /// </summary>
@@ -57,6 +68,17 @@ public sealed class Lzma2CopyIncrementalEncoder(IProgress<LzmaProgress>? progres
   /// Сколько байт всего записано в выход (с начала потока).
   /// </summary>
   public long TotalBytesWritten => _totalOutputBytes;
+
+  /// <summary>
+  /// Размер словаря, для которого вычислен <see cref="PropertiesByte"/>.
+  /// (Для COPY-чанков на декодирование не влияет, но нужен контейнерам.)
+  /// </summary>
+  public int DictionarySize { get; }
+
+  /// <summary>
+  /// LZMA2 properties byte (как в 7z): кодированное значение размера словаря.
+  /// </summary>
+  public byte PropertiesByte { get; }
 
   /// <summary>
   /// Сбрасывает состояние энкодера, чтобы начать новый LZMA2-поток.
@@ -199,12 +221,14 @@ public sealed class Lzma2CopyIncrementalEncoder(IProgress<LzmaProgress>? progres
           continue;
         }
         case State.WritingEndMarker:
+        {
           if (output.Length - outPos <= 0)
             goto Done;
 
           output[outPos++] = _endMarkerControl;
           _state = State.Finished;
           goto Done;
+        }
         default:
           goto Done;
       }
