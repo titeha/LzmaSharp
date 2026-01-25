@@ -100,6 +100,12 @@ public static class LzmaConstants
   public const int NumHighLenSymbols = 1 << LenNumHighBits;
 
   /// <summary>
+  /// Число high-символов в моделях длины. Это синоним к <see cref="NumHighLenSymbols"/>.
+  /// Нужен, чтобы не разъезжались имена констант между частями реализации.
+  /// </summary>
+  public const int LenNumHighSymbols = NumHighLenSymbols;
+
+  /// <summary>
   /// Общее количество кодируемых значений длины.
   /// </summary>
   public const int NumLenSymbols = LenNumLowSymbols + LenNumMidSymbols + NumHighLenSymbols;
@@ -127,6 +133,13 @@ public static class LzmaConstants
   /// Максимальное количество posState = 2^pb, где pb ∈ [0..4].
   /// </summary>
   public const int NumPosStatesMax = 1 << NumPosStatesBitsEncodingMax; // 16
+
+  /// <summary>
+  /// Максимальное число posState, которое поддерживает кодирование длины.
+  /// Это синоним к <see cref="NumPosStatesMax"/> — добавлен, чтобы энкодер и декодер
+  /// могли использовать единые имена без лишней путаницы.
+  /// </summary>
+  public const int LenNumPosStatesMax = NumPosStatesMax;
 
   /// <summary>
   /// Начальное значение вероятности для всех моделей.
