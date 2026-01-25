@@ -50,7 +50,7 @@ public sealed class LzmaLiteralDecoder
   }
 
   public LzmaRangeDecodeResult TryDecodeNormal(
-      LzmaRangeDecoder rangeDecoder,
+      ref LzmaRangeDecoder rangeDecoder,
       ReadOnlySpan<byte> input,
       ref int offset,
       byte previousByte,
@@ -81,7 +81,7 @@ public sealed class LzmaLiteralDecoder
   }
 
   public LzmaRangeDecodeResult TryDecodeWithMatchByte(
-      LzmaRangeDecoder rangeDecoder,
+      ref LzmaRangeDecoder rangeDecoder,
       ReadOnlySpan<byte> input,
       ref int offset,
       byte previousByte,

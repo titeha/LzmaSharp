@@ -42,9 +42,8 @@ public sealed class LzmaLiteralDecoderTests
     var range = InitWith([0, 0, 0, 0, 0]);
 
     int inputOffset = 0;
-    var res = dec.TryDecodeNormal(
-        range,
-        input: ReadOnlySpan<byte>.Empty,
+    var res = dec.TryDecodeNormal(ref range,
+        input: [],
         ref inputOffset,
         previousByte: 0,
         position: 0,
@@ -62,9 +61,8 @@ public sealed class LzmaLiteralDecoderTests
     var range = InitWith([0xFF, 0xFF, 0xFF, 0xFF, 0xFF]);
 
     int inputOffset = 0;
-    var res = dec.TryDecodeNormal(
-        range,
-        input: ReadOnlySpan<byte>.Empty,
+    var res = dec.TryDecodeNormal(ref range,
+        input: [],
         ref inputOffset,
         previousByte: 0,
         position: 0,
@@ -82,9 +80,8 @@ public sealed class LzmaLiteralDecoderTests
     var range = InitWith([0, 0, 0, 0, 0]);
 
     int inputOffset = 0;
-    var res = dec.TryDecodeWithMatchByte(
-        range,
-        input: ReadOnlySpan<byte>.Empty,
+    var res = dec.TryDecodeWithMatchByte(ref range,
+        input: [],
         ref inputOffset,
         previousByte: 0,
         position: 0,
@@ -103,9 +100,8 @@ public sealed class LzmaLiteralDecoderTests
     var range = InitWith([0xFF, 0xFF, 0xFF, 0xFF, 0xFF]);
 
     int inputOffset = 0;
-    var res = dec.TryDecodeWithMatchByte(
-        range,
-        input: ReadOnlySpan<byte>.Empty,
+    var res = dec.TryDecodeWithMatchByte(ref range,
+        input: [],
         ref inputOffset,
         previousByte: 0,
         position: 0,
@@ -132,9 +128,8 @@ public sealed class LzmaLiteralDecoderTests
     int inputOffset = 0;
 
     // Декодируем один байт в контексте 0 (position=0).
-    var res = dec.TryDecodeNormal(
-        range,
-        input: ReadOnlySpan<byte>.Empty,
+    var res = dec.TryDecodeNormal(ref range,
+        input: [],
         ref inputOffset,
         previousByte: 0,
         position: 0,
