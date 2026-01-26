@@ -67,6 +67,17 @@ internal sealed class LzmaBitTreeEncoder
   }
 
   /// <summary>
+  /// Синоним для <see cref="EncodeReverseSymbol"/>.
+  /// </summary>
+  /// <remarks>
+  /// В коде энкодера расстояний естественнее видеть <c>EncodeReverse</c>,
+  /// но реализация исторически называлась <c>EncodeReverseSymbol</c>.
+  /// Поддерживаем оба имени, чтобы не разъезжались сигнатуры между шагами.
+  /// </remarks>
+  public void EncodeReverse(LzmaRangeEncoder range, uint symbol) => EncodeReverseSymbol(range, symbol);
+
+
+  /// <summary>
   /// Кодирует символ «обратным» (LSB-first) обходом дерева.
   /// </summary>
   /// <remarks>

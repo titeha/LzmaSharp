@@ -19,7 +19,7 @@ internal sealed class LzmaRangeEncoder
   // В LZMA «нормализация» происходит, когда range становится меньше 1<<24.
   // Это значение уже вынесено в константы, используем их.
 
-  private readonly List<byte> _output = [];
+  private readonly List<byte> _output = new();
 
   private ulong _low;
   private uint _range;
@@ -89,6 +89,36 @@ internal sealed class LzmaRangeEncoder
     {
       _range <<= 8;
       ShiftLow();
+    }
+  }
+
+  /// <summary>
+  /// Кодирует <paramref name="numBits"/> «прямых» бит без вероятностной модели.
+  /// </summary>
+  /// <remarks>
+  /// В LZMA это используется при кодировании больших расстояний (distance/pos),
+  /// когда часть бит пишется напрямую (без bit model).
+  /// Парный метод на стороне декодера — <see cref="LzmaRangeDecoder.TryDecodeDirectBits"/>.
+  /// </remarks>
+  public void EncodeDirectBits(uint value, int numBits)
+  {
+    if (numBits < 0 || numBits > 32)
+      throw new ArgumentOutOfRangeException(nameof(numBits), "numBits должен быть в диапазоне 0..32.");
+
+    // Пишем биты от старшего к младшему.
+    for (int i = numBits - 1; i >= 0; i--)
+    {
+      _range >>= 1;
+
+      uint bit = (value >> i) & 1u;
+      if (bit != 0)
+        _low += _range;
+
+      if (_range < LzmaConstants.RangeTopValue)
+      {
+        _range <<= 8;
+        ShiftLow();
+      }
     }
   }
 
