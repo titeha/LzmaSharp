@@ -188,4 +188,43 @@ public sealed class LzmaDictionary
       throw new ArgumentOutOfRangeException(nameof(distance), distance, "Недопустимое расстояние для словаря.");
     return b;
   }
+  /// <summary>
+  /// Добавляет байт в словарь БЕЗ записи во внешний выходной буфер.
+  /// Нужен энкодеру, который сам знает исходные данные и поддерживает словарь
+  /// для контекстов и match-копирования.
+  /// </summary>
+  internal void PutByte(byte value)
+  {
+    if (_buffer.Length == 0)
+      throw new InvalidOperationException("Буфер словаря пуст.");
+
+    _buffer[_pos] = value;
+    _pos++;
+    if (_pos == _buffer.Length)
+      _pos = 0;
+
+    _totalWritten++;
+  }
+
+  /// <summary>
+  /// Копирует <paramref name="length"/> байт из словаря на расстоянии <paramref name="distance"/>
+  /// (distance в LZMA 1-based) БЕЗ записи во внешний выходной буфер.
+  /// </summary>
+  internal void CopyMatch(int distance, int length)
+  {
+    ArgumentOutOfRangeException.ThrowIfNegative(length);
+    ArgumentOutOfRangeException.ThrowIfNegativeOrZero(distance);
+
+    // Валидируем один раз (так же, как TryCopyMatch).
+    if (distance > _totalWritten)
+      throw new ArgumentOutOfRangeException(nameof(distance), "Расстояние больше текущего размера словаря.");
+    if (distance > _buffer.Length)
+      throw new ArgumentOutOfRangeException(nameof(distance), "Расстояние больше ёмкости словаря.");
+
+    for (int i = 0; i < length; i++)
+    {
+      byte b = PeekBackByte(distance);
+      PutByte(b);
+    }
+  }
 }
