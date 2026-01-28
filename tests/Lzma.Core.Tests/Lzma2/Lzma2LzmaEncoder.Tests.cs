@@ -45,6 +45,49 @@ public sealed class Lzma2LzmaEncoderTests
     Assert.Equal(Encoding.ASCII.GetBytes("ABCABCD"), decoded);
   }
 
+  [Fact]
+  public void EncodeLiteralOnlyChunked_ПустойВход_ВозвращаетТолькоEndMarker()
+  {
+    var props = new LzmaProperties(Lc: 3, Lp: 0, Pb: 2);
+    const int dict = 1 << 20;
+
+    byte[] encoded = Lzma2LzmaEncoder.EncodeLiteralOnlyChunked(
+      ReadOnlySpan<byte>.Empty,
+      props,
+      dict,
+      maxUnpackChunkSize: 16,
+      out _);
+
+    Assert.Equal([0x00], encoded);
+  }
+
+  [Fact]
+  public void EncodeDecode_LiteralOnlyChunked_НесколькоЧанков_ДаетТочныйРезультат()
+  {
+    // Делаем вход заметно больше, чем maxUnpackChunkSize, чтобы гарантированно получилось несколько чанков.
+    byte[] data = new byte[200];
+    for (int i = 0; i < data.Length; i++)
+      data[i] = (byte)((i * 31 + 7) & 0xFF);
+
+    var props = new LzmaProperties(Lc: 3, Lp: 0, Pb: 2);
+    const int dict = 1 << 20;
+
+    byte[] encoded = Lzma2LzmaEncoder.EncodeLiteralOnlyChunked(
+      data,
+      props,
+      dict,
+      maxUnpackChunkSize: 50,
+      out _);
+
+    // В конце должен быть end-marker.
+    Assert.Equal((byte)0x00, encoded[^1]);
+
+    // Проверяем корректность декодирования (и заодно потоковую подачу).
+    byte[] decoded = DecodeAllStreamed(encoded, expectedOutputSize: data.Length, dictionarySize: dict, maxInChunk: 3, maxOutChunk: 7);
+
+    Assert.Equal(data, decoded);
+  }
+
   private static byte[] DecodeAllOneShot(byte[] encoded, int expectedOutputSize, int dictionarySize)
   {
     var decoder = new Lzma2IncrementalDecoder(progress: null, dictionarySize: dictionarySize);
