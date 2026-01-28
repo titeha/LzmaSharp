@@ -88,6 +88,57 @@ public sealed class Lzma2LzmaEncoderTests
     Assert.Equal(data, decoded);
   }
 
+  [Fact]
+  public void EncodeLiteralOnlyChunked_СвойстваПишутсяТолькоВПервомЧанке()
+  {
+    // Делаем так, чтобы гарантированно получилось несколько чанков.
+    byte[] data = new byte[100];
+    for (int i = 0; i < data.Length; i++)
+      data[i] = (byte)i;
+
+    var props = new LzmaProperties(3, 0, 2);
+
+    byte propsByte;
+    byte[] encoded = Lzma2LzmaEncoder.EncodeLiteralOnlyChunked(
+      data,
+      props,
+      dictionarySize: 1 << 20,
+      maxUnpackChunkSize: 16,
+      out propsByte);
+
+    Assert.Equal(props.ToByteOrThrow(), propsByte);
+
+    int offset = 0;
+    int chunkIndex = 0;
+
+    while (true)
+    {
+      var headerRes = Lzma2ChunkHeader.TryRead(encoded.AsSpan(offset), out var header, out int headerBytes);
+      Assert.Equal(Lzma2ReadHeaderResult.Ok, headerRes);
+
+      if (header.Kind == Lzma2ChunkKind.End)
+        break;
+
+      if (chunkIndex == 0)
+      {
+        Assert.True(header.HasProperties);
+        Assert.True(header.ResetDictionary);
+      }
+      else
+      {
+        Assert.False(header.HasProperties);
+        Assert.False(header.ResetDictionary);
+      }
+
+      Assert.True(header.ResetState);
+
+      offset += headerBytes + header.PackSize;
+      chunkIndex++;
+    }
+
+    Assert.True(chunkIndex >= 2);
+  }
+
   private static byte[] DecodeAllOneShot(byte[] encoded, int expectedOutputSize, int dictionarySize)
   {
     var decoder = new Lzma2IncrementalDecoder(progress: null, dictionarySize: dictionarySize);

@@ -35,68 +35,83 @@ public static class Lzma2LzmaEncoder
   }
 
   /// <summary>
-  /// Кодирует <paramref name="data"/> в LZMA2 как <b>несколько</b> независимых LZMA-чанков
-  /// (каждый: reset dic/state + props), а затем дописывает end-marker (0x00).
+  /// Кодирует <paramref name="data"/> в LZMA2 как несколько LZMA-чанков (LZMA compressed chunks)
+  /// и дописывает end-marker (0x00).
   /// </summary>
   /// <remarks>
-  /// <para>
-  /// Это намеренно простой режим для тестов: каждый чанк кодируется отдельно и не использует словарь/состояние
-  /// предыдущих чанков.
-  /// </para>
-  /// <para>
-  /// Такой поток валиден, но хуже сжимает — зато позволяет малыми шагами проверять инфраструктуру LZMA2.
-  /// </para>
+  /// На этом шаге мы делаем простой (но валидный) вариант:
+  /// <list type="bullet">
+  /// <item><description>первый чанк: reset dictionary + reset state + properties;</description></item>
+  /// <item><description>последующие чанки: reset state, но <b>без</b> properties (props берутся из первого чанка).</description></item>
+  /// </list>
+  /// Это уменьшает накладные расходы (не повторяем 1 байт properties для каждого чанка).
   /// </remarks>
   public static byte[] EncodeLiteralOnlyChunked(
     ReadOnlySpan<byte> data,
-    LzmaProperties lzmaProperties,
+    LzmaProperties lzmaProps,
     int dictionarySize,
     int maxUnpackChunkSize,
     out byte lzmaPropertiesByte)
   {
-    if (dictionarySize <= 0)
-      throw new ArgumentOutOfRangeException(nameof(dictionarySize), "Размер словаря должен быть > 0.");
+    ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxUnpackChunkSize);
 
-    if (maxUnpackChunkSize <= 0)
-      throw new ArgumentOutOfRangeException(nameof(maxUnpackChunkSize), "Размер чанка должен быть > 0.");
-
-    // В LZMA2 (uncompressed_size - 1) хранится в 21 бите.
-    const int Lzma2MaxUnpackSize = 1 << 21; // 2 MiB
-    if (maxUnpackChunkSize > Lzma2MaxUnpackSize)
-      throw new ArgumentOutOfRangeException(nameof(maxUnpackChunkSize), $"maxUnpackChunkSize не должен превышать {Lzma2MaxUnpackSize}.");
-
-    lzmaPropertiesByte = lzmaProperties.ToByteOrThrow();
-
-    if (data.Length == 0)
-      return [0x00];
+    // Properties byte мы пишем только в первом LZMA-чанке.
+    // Для последующих чанков (с reset state) декодер берёт props из предыдущего чанка.
+    lzmaPropertiesByte = lzmaProps.ToByteOrThrow();
 
     using var ms = new MemoryStream();
 
     int offset = 0;
-    while (offset < data.Length)
+    for (int chunkIndex = 0; offset < data.Length; chunkIndex++)
     {
       int chunkSize = Math.Min(maxUnpackChunkSize, data.Length - offset);
-      ReadOnlySpan<byte> chunk = data.Slice(offset, chunkSize);
+      var chunk = data.Slice(offset, chunkSize);
 
-      // "Сырой" LZMA-поток для конкретного чанка.
-      var enc = new LzmaEncoder(lzmaProperties, dictionarySize);
-      byte[] lzmaPayload = enc.EncodeLiteralOnly(chunk);
+      // Пакуем текущий кусок в «обычный» LZMA1 поток.
+      // На этом шаге мы кодируем только литералы и каждый чанк делает reset state,
+      // поэтому чанки независимы по вероятностным моделям/предыдущему байту.
+      var lzma = new LzmaEncoder(lzmaProps, dictionarySize);
+      byte[] lzmaPayload = lzma.EncodeLiteralOnly(chunk);
 
-      // Пишем заголовок LZMA-чанка с props.
-      uint usm1 = (uint)chunkSize - 1;
-      uint psm1 = (uint)lzmaPayload.Length - 1;
+      uint unpackSizeMinus1 = (uint)chunkSize - 1;
+      uint packSizeMinus1 = (uint)lzmaPayload.Length - 1;
 
-      // control = 0xE0..0xFF: reset dic + reset state + props, плюс 5 старших бит unpackSize-1.
-      byte control = (byte)(0xE0 | ((usm1 >> 16) & 0x1F));
+      bool isFirst = chunkIndex == 0;
 
-      byte b1 = (byte)((usm1 >> 8) & 0xFF);
-      byte b2 = (byte)(usm1 & 0xFF);
-      byte b3 = (byte)((psm1 >> 8) & 0xFF);
-      byte b4 = (byte)(psm1 & 0xFF);
+      // control:
+      // - 0xE0..0xFF: reset dictionary + reset state + properties
+      // - 0xA0..0xBF: reset state, properties НЕ пишем
+      byte controlBase = isFirst ? (byte)0xE0 : (byte)0xA0;
+      byte control = (byte)(controlBase | ((unpackSizeMinus1 >> 16) & 0x1F));
 
-      Span<byte> header = [control, b1, b2, b3, b4, lzmaPropertiesByte];
+      if (isFirst)
+      {
+        Span<byte> header =
+        [
+          control,
+          (byte)(unpackSizeMinus1 >> 8),
+          (byte)(unpackSizeMinus1),
+          (byte)(packSizeMinus1 >> 8),
+          (byte)(packSizeMinus1),
+          lzmaPropertiesByte,
+        ];
 
-      ms.Write(header);
+        ms.Write(header);
+      }
+      else
+      {
+        Span<byte> header =
+        [
+          control,
+          (byte)(unpackSizeMinus1 >> 8),
+          (byte)(unpackSizeMinus1),
+          (byte)(packSizeMinus1 >> 8),
+          (byte)(packSizeMinus1),
+        ];
+
+        ms.Write(header);
+      }
+
       ms.Write(lzmaPayload);
 
       offset += chunkSize;
