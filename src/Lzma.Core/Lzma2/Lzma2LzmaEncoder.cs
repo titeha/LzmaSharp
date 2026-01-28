@@ -1,117 +1,111 @@
 using Lzma.Core.Lzma1;
 
 namespace Lzma.Core.Lzma2;
-
 /// <summary>
-/// Минимальный LZMA2-энкодер, который пишет один сжатый (LZMA) чанк.
+/// Вспомогательный энкодер для тестов/прототипов: кодирует данные в LZMA2 как один LZMA-чанк (с properties).
 /// </summary>
 /// <remarks>
-/// <para>
-/// На этом шаге мы делаем самый простой вариант:
-/// - один LZMA-чанк;
-/// - resetDictionary = true;
-/// - resetState = true;
-/// - includeProps = true;
-/// - payload получаем через <see cref="LzmaEncoder"/>, кодируя вход как последовательность литералов.
-/// </para>
-/// <para>
-/// Это не «настоящий» компрессор (пока не ищем совпадения), но поток валидный и успешно
-/// распаковывается нашим <see cref="Lzma2IncrementalDecoder"/>.
-/// </para>
+/// <para>На этом шаге энкодер делает один LZMA-чанк вида control >= 0xE0 (reset dic + reset state + props) + end-marker.</para>
+/// <para>Payload внутри чанка — это "сырой" LZMA-поток, который выдаёт <see cref="LzmaEncoder"/>.</para>
+/// <para>Это не полноценный production-энкодер LZMA2, а удобный генератор валидных потоков для тестов.</para>
 /// </remarks>
 public static class Lzma2LzmaEncoder
 {
-  // Ограничения LZMA2-формата для LZMA-чанка:
-  // unpackSizeMinus1 хранится в 21 бите (5 бит в control + 16 бит дальше).
-  private const int _maxChunkUnpackSize = 1 << 21; // 2_097_152
-
-  // packSizeMinus1 хранится в 16 битах.
-  private const int _maxChunkPackSize = 1 << 16; // 65_536
-
   /// <summary>
-  /// Кодирует вход как один LZMA-чанк внутри LZMA2-потока.
+  /// Кодирует <paramref name="data"/> в LZMA2 как один LZMA-чанк (reset dic/state + props) + end-marker.
+  /// Внутри чанка кодирование LZMA выполняется в режиме "только литералы".
   /// </summary>
-  /// <param name="input">Несжатые данные.</param>
-  /// <param name="lzmaProps">Параметры LZMA (lc/lp/pb), которые будут записаны в заголовок чанка.</param>
-  /// <param name="dictionarySize">Размер словаря LZMA/LZMA2.</param>
-  /// <param name="lzma2PropertiesByte">Выходной properties byte для LZMA2 (кодирует размер словаря).</param>
   public static byte[] EncodeLiteralOnly(
-    ReadOnlySpan<byte> input,
-    LzmaProperties lzmaProps,
+    ReadOnlySpan<byte> data,
+    LzmaProperties lzmaProperties,
     int dictionarySize,
-    out byte lzma2PropertiesByte)
+    out byte lzmaPropertiesByte)
   {
     if (dictionarySize <= 0)
       throw new ArgumentOutOfRangeException(nameof(dictionarySize), "Размер словаря должен быть > 0.");
 
-    if (!Lzma2Properties.TryEncode(dictionarySize, out lzma2PropertiesByte))
-      throw new ArgumentOutOfRangeException(nameof(dictionarySize), "Некорректный размер словаря для LZMA2.");
+    lzmaPropertiesByte = lzmaProperties.ToByteOrThrow();
 
-    // Пустой вход: просто END (0x00). Такой поток распакуется в пустоту.
-    if (input.Length == 0)
-      return [0x00];
+    // "Сырой" LZMA-поток.
+    var enc = new LzmaEncoder(lzmaProperties, dictionarySize);
+    byte[] payload = enc.EncodeLiteralOnly(data);
 
-    if (input.Length > _maxChunkUnpackSize)
-      throw new ArgumentOutOfRangeException(nameof(input), $"На данном шаге поддерживаем только один чанк: unpackSize <= {_maxChunkUnpackSize}.");
+    return WrapSingleLzmaChunkWithProps(payload, unpackSize: data.Length, lzmaPropertiesByte);
+  }
 
-    if (!lzmaProps.TryToByte(out byte lzmaPropsByte))
-      throw new ArgumentException("Некорректные параметры LZMA (lc/lp/pb).", nameof(lzmaProps));
+  /// <summary>
+  /// Кодирует скрипт (литералы + обычные match) в LZMA2 как один LZMA-чанк (reset dic/state + props) + end-marker.
+  /// </summary>
+  /// <remarks>
+  /// Метод internal, потому что тип <see cref="LzmaEncodeOp"/> у нас internal.
+  /// Тестовый проект имеет доступ через InternalsVisibleTo.
+  /// </remarks>
+  internal static byte[] EncodeScript(
+    ReadOnlySpan<LzmaEncodeOp> script,
+    LzmaProperties lzmaProperties,
+    int dictionarySize,
+    out byte lzmaPropertiesByte)
+  {
+    if (dictionarySize <= 0)
+      throw new ArgumentOutOfRangeException(nameof(dictionarySize), "Размер словаря должен быть > 0.");
 
-    // 1) Строим «скрипт» из одних литералов.
-    var script = new LzmaEncodeOp[input.Length];
-    for (int i = 0; i < input.Length; i++)
-      script[i] = LzmaEncodeOp.Lit(input[i]);
+    lzmaPropertiesByte = lzmaProperties.ToByteOrThrow();
 
-    // 2) Кодируем LZMA-полезную нагрузку.
-    var lzma = new LzmaEncoder(lzmaProps, dictionarySize);
-    byte[] lzmaPayload = lzma.EncodeScript(script);
+    int unpackSize = EstimateUnpackSize(script);
 
-    int unpackSize = input.Length;
-    int packSize = lzmaPayload.Length;
+    var enc = new LzmaEncoder(lzmaProperties, dictionarySize);
+    byte[] payload = enc.EncodeScript(script);
 
-    if (packSize <= 0)
-      throw new InvalidOperationException("Внутренняя ошибка: LZMA payload оказался пустым.");
+    return WrapSingleLzmaChunkWithProps(payload, unpackSize, lzmaPropertiesByte);
+  }
 
-    if (packSize > _maxChunkPackSize)
-      throw new ArgumentOutOfRangeException(nameof(input), $"На данном шаге поддерживаем только один чанк: packSize <= {_maxChunkPackSize}.");
-
-    // 3) Формируем LZMA2 поток: [LZMA chunk] + [END].
-    int unpackSizeMinus1 = unpackSize - 1;
-    int packSizeMinus1 = packSize - 1;
-
-    // control (LZMA chunk + reset dic + reset state + has props)
-    // 0x80 (LZMA) | 0x40 (dic reset) | 0x20 (state reset) | 0x10 (props) = 0xF0,
-    // но верхние 5 бит unpackSizeMinus1 кладём в младшие 5 бит control (как в спецификации).
-    byte control = (byte)(0xE0 | ((unpackSizeMinus1 >> 16) & 0x1F));
-
-    var output = new List<byte>(
-      capacity: 1 /*control*/ +
-               2 /*unpackSize*/ +
-               2 /*packSize*/ +
-               1 /*lzmaProps*/ +
-               packSize +
-               1 /*end*/)
+  private static int EstimateUnpackSize(ReadOnlySpan<LzmaEncodeOp> script)
+  {
+    long total = 0;
+    for (int i = 0; i < script.Length; i++)
     {
-      control,
+      var op = script[i];
+      total += op.Kind == LzmaEncodeOpKind.Literal ? 1 : op.Length;
+      if (total > int.MaxValue)
+        throw new ArgumentOutOfRangeException(nameof(script), "Слишком большой ожидаемый распакованный размер для тестового энкодера.");
+    }
+    return (int)total;
+  }
 
-      // unpackSizeMinus1: низшие 16 бит.
-      (byte)((unpackSizeMinus1 >> 8) & 0xFF),
-      (byte)(unpackSizeMinus1 & 0xFF),
+  private static byte[] WrapSingleLzmaChunkWithProps(byte[] lzmaPayload, int unpackSize, byte lzmaPropertiesByte)
+  {
+    ArgumentOutOfRangeException.ThrowIfNegative(unpackSize);
+    if (unpackSize == 0)
+      return [0x00]; // пустой поток — просто end-marker
 
-      // packSizeMinus1: 16 бит.
-      (byte)((packSizeMinus1 >> 8) & 0xFF),
-      (byte)(packSizeMinus1 & 0xFF),
+    if (lzmaPayload is null || lzmaPayload.Length == 0)
+      throw new ArgumentOutOfRangeException(nameof(lzmaPayload), "LZMA payload не должен быть пустым при unpackSize > 0.");
 
-      // LZMA properties byte (lc/lp/pb)
-      lzmaPropsByte
-    };
+    uint usm1 = (uint)unpackSize - 1;
+    uint psm1 = (uint)lzmaPayload.Length - 1;
 
-    // Payload
-    output.AddRange(lzmaPayload);
+    // control = 0xE0..0xFF: reset dic + reset state + props, плюс 5 старших бит unpackSize-1.
+    byte control = (byte)(0xE0 | ((usm1 >> 16) & 0x1F));
 
-    // END marker
-    output.Add(0x00);
+    byte b1 = (byte)((usm1 >> 8) & 0xFF);
+    byte b2 = (byte)(usm1 & 0xFF);
+    byte b3 = (byte)((psm1 >> 8) & 0xFF);
+    byte b4 = (byte)(psm1 & 0xFF);
 
-    return [.. output];
+    // Заголовок LZMA-чанка с props: 6 байт.
+    byte[] result = new byte[6 + lzmaPayload.Length + 1];
+    int o = 0;
+    result[o++] = control;
+    result[o++] = b1;
+    result[o++] = b2;
+    result[o++] = b3;
+    result[o++] = b4;
+    result[o++] = lzmaPropertiesByte;
+
+    Buffer.BlockCopy(lzmaPayload, 0, result, o, lzmaPayload.Length);
+    o += lzmaPayload.Length;
+
+    result[o] = 0x00; // end-marker
+    return result;
   }
 }

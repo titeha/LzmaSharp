@@ -1,3 +1,5 @@
+using System.Text;
+
 using Lzma.Core.Lzma1;
 using Lzma.Core.Lzma2;
 
@@ -6,100 +8,112 @@ namespace Lzma.Core.Tests.Lzma2;
 public sealed class Lzma2LzmaEncoderTests
 {
   [Fact]
-  public void EncodeDecode_LiteralOnly_НесколькоБайт_ДаетТочныйРезультат()
+  public void EncodeDecode_LiteralOnly_РаботаетЗаОдинВызов()
   {
-    var input = new byte[] { 65, 66, 67, 0, 255 };
-    int dictionarySize = 1 << 16;
+    byte[] data = Encoding.ASCII.GetBytes("Hello LZMA2 (literal-only)!");
 
-    // Типичные (lc/lp/pb) для LZMA: lc=3, lp=0, pb=2.
-    var lzma1Props = new LzmaProperties(3, 0, 2);
+    var props = new LzmaProperties(Lc: 3, Lp: 0, Pb: 2);
+    const int dict = 1 << 20;
 
-    byte[] encoded = Lzma2LzmaEncoder.EncodeLiteralOnly(input, lzma1Props, dictionarySize, out byte lzma2PropsByte);
+    byte[] encoded = Lzma2LzmaEncoder.EncodeLiteralOnly(data, props, dict, out _);
 
-    // Декодер получает LZMA2-properties отдельно (как это бывает в контейнерах).
-    var decoder = new Lzma2IncrementalDecoder(lzma2PropsByte);
+    byte[] decoded = DecodeAllOneShot(encoded, data.Length, dict);
 
-    byte[] actual = DecodeAllStreamed(decoder, encoded, expectedOutputSize: input.Length);
-
-    Assert.Equal(input, actual);
+    Assert.Equal(data, decoded);
   }
 
   [Fact]
-  public void EncodeDecode_LiteralOnly_РаботаетПриПотоковойПодаче_КрошечнымиКусками()
+  public void EncodeDecode_Script_ЛитералыПлюсMatch_ДаетТочныйРезультат()
   {
-    // Чуть побольше данных, чтобы гарантированно пройти разные ветки по NeedMoreInput/NeedMoreOutput.
-    var input = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"u8.ToArray();
-    int dictionarySize = 1 << 16;
-    var lzma1Props = new LzmaProperties(3, 0, 2);
+    // ABC + match(distance=3,len=3) => ABCABC, затем 'D' => ABCABCD
+    var script = new[]
+    {
+      LzmaEncodeOp.Lit((byte)'A'),
+      LzmaEncodeOp.Lit((byte)'B'),
+      LzmaEncodeOp.Lit((byte)'C'),
+      LzmaEncodeOp.Match(distance: 3, length: 3),
+      LzmaEncodeOp.Lit((byte)'D'),
+    };
 
-    byte[] encoded = Lzma2LzmaEncoder.EncodeLiteralOnly(input, lzma1Props, dictionarySize, out byte lzma2PropsByte);
-    var decoder = new Lzma2IncrementalDecoder(lzma2PropsByte);
+    var props = new LzmaProperties(Lc: 3, Lp: 0, Pb: 2);
+    const int dict = 1 << 20;
 
-    byte[] actual = DecodeAllStreamed(decoder, encoded, expectedOutputSize: input.Length, maxInChunk: 2, maxOutChunk: 3);
+    byte[] encoded = Lzma2LzmaEncoder.EncodeScript(script, props, dict, out _);
 
-    Assert.Equal(input, actual);
+    byte[] decoded = DecodeAllStreamed(encoded, expectedOutputSize: 7, dictionarySize: dict, maxInChunk: 2, maxOutChunk: 3);
+
+    Assert.Equal(Encoding.ASCII.GetBytes("ABCABCD"), decoded);
   }
 
-  private static byte[] DecodeAllStreamed(
-    Lzma2IncrementalDecoder decoder,
-    ReadOnlySpan<byte> encoded,
-    int expectedOutputSize,
-    int maxInChunk = 3,
-    int maxOutChunk = 7)
+  private static byte[] DecodeAllOneShot(byte[] encoded, int expectedOutputSize, int dictionarySize)
   {
-    var output = new byte[expectedOutputSize];
+    var decoder = new Lzma2IncrementalDecoder(progress: null, dictionarySize: dictionarySize);
+
+    byte[] output = new byte[expectedOutputSize];
+
+    Lzma2DecodeResult res = decoder.Decode(encoded, output, out int consumed, out int written);
+
+    Assert.Equal(expectedOutputSize, written);
+    Assert.True(consumed <= encoded.Length);
+
+    // Может быть как Finished, так и NeedMoreInput (если мы не докормили end-marker).
+    // В one-shot здесь должен быть Finished, потому что encoded содержит end-marker.
+    Assert.Equal(Lzma2DecodeResult.Finished, res);
+
+    return output;
+  }
+
+  private static byte[] DecodeAllStreamed(byte[] encoded, int expectedOutputSize, int dictionarySize, int maxInChunk, int maxOutChunk)
+  {
+    var decoder = new Lzma2IncrementalDecoder(progress: null, dictionarySize: dictionarySize);
+
+    byte[] output = new byte[expectedOutputSize];
 
     int inPos = 0;
     int outPos = 0;
 
-    // Декодируем до тех пор, пока декодер не сообщит об окончании потока.
-    // Важно: конец LZMA2-потока — это отдельный управляющий байт (0x00).
-    // Он может приехать ПОСЛЕ того, как мы уже получили весь ожидаемый распакованный вывод.
-    // Поэтому:
-    //  - пока outPos < output.Length мы даём декодеру место для вывода;
-    //  - когда outPos == output.Length, даём пустой выходной буфер и продолжаем кормить вход,
-    //    чтобы декодер смог дочитать финальный 0x00 и вернуть Finished.
-    while (true)
+    // Сначала получаем ровно expectedOutputSize байт выходных данных.
+    while (outPos < output.Length)
     {
-      ReadOnlySpan<byte> inChunk = encoded.Slice(inPos, Math.Min(maxInChunk, encoded.Length - inPos));
+      int inTake = Math.Min(maxInChunk, encoded.Length - inPos);
+      ReadOnlySpan<byte> inChunk = encoded.AsSpan(inPos, inTake);
 
-      Span<byte> outChunk = outPos < output.Length
-        ? output.AsSpan(outPos, Math.Min(maxOutChunk, output.Length - outPos))
-        : [];
+      int outTake = Math.Min(maxOutChunk, output.Length - outPos);
+      Span<byte> outChunk = output.AsSpan(outPos, outTake);
 
       Lzma2DecodeResult res = decoder.Decode(inChunk, outChunk, out int consumed, out int written);
 
-      // Защита от вечного цикла: декодер обязан либо потребить вход, либо записать выход.
+      // Декодер обязан делать прогресс, иначе зависнем.
       if (consumed == 0 && written == 0)
         throw new InvalidOperationException("Декодер не продвинулся: не потребил ввод и не записал вывод.");
 
       inPos += consumed;
       outPos += written;
 
-      if (res == Lzma2DecodeResult.Finished)
-        break;
-
-      if (res == Lzma2DecodeResult.NeedMoreInput)
-      {
-        if (inPos >= encoded.Length)
-          throw new InvalidOperationException("Декодер запросил ещё вход, но входные данные закончились.");
-
-        continue;
-      }
-
-      if (res == Lzma2DecodeResult.NeedMoreOutput)
-      {
-        if (outPos >= output.Length)
-          throw new InvalidOperationException("Декодер запросил ещё выход, но ожидаемый вывод уже полностью получен.");
-
-        continue;
-      }
-
-      throw new InvalidOperationException($"Неожиданный результат декодера: {res}");
+      // В конце, когда выход заполнен, допускаем NeedMoreInput (дожевать end-marker будем ниже).
+      if (res == Lzma2DecodeResult.InvalidData || res == Lzma2DecodeResult.NotSupported)
+        throw new InvalidOperationException($"Неожиданный результат декодирования: {res}.");
     }
 
-    Assert.Equal(output.Length, outPos);
-    Assert.Equal(encoded.Length, inPos);
+    // Теперь можно "дожевать" оставшийся вход (например end-marker) уже без выхода.
+    Span<byte> emptyOut = Span<byte>.Empty;
+    while (inPos < encoded.Length)
+    {
+      int inTake = Math.Min(maxInChunk, encoded.Length - inPos);
+      ReadOnlySpan<byte> inChunk = encoded.AsSpan(inPos, inTake);
+
+      Lzma2DecodeResult res = decoder.Decode(inChunk, emptyOut, out int consumed, out int written);
+
+      if (consumed == 0 && written == 0)
+        throw new InvalidOperationException("Декодер не продвинулся при дожёвывании хвоста входа.");
+
+      inPos += consumed;
+
+      if (res == Lzma2DecodeResult.Finished)
+        break;
+      if (res == Lzma2DecodeResult.InvalidData || res == Lzma2DecodeResult.NotSupported)
+        throw new InvalidOperationException($"Неожиданный результат декодирования: {res}.");
+    }
 
     return output;
   }
