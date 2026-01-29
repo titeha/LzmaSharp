@@ -132,11 +132,149 @@ public sealed class Lzma2LzmaEncoderTests
 
       Assert.True(header.ResetState);
 
-      offset += headerBytes + header.PackSize;
+      offset += headerBytes + header.PayloadSize;
       chunkIndex++;
     }
 
     Assert.True(chunkIndex >= 2);
+  }
+
+  [Fact]
+  public void EncodeLiteralOnlyChunkedAuto_МожетВыбратьCopyЕслиТакКороче()
+  {
+    // На очень маленьких данных LZMA почти всегда проигрывает по размеру из‑за накладных расходов.
+    byte[] data = new byte[20];
+    for (int i = 0; i < data.Length; i++)
+      data[i] = (byte)i;
+
+    var props = new LzmaProperties(Lc: 3, Lp: 0, Pb: 2);
+    const int dict = 1 << 20;
+
+    byte propsByte;
+    byte[] encoded = Lzma2LzmaEncoder.EncodeLiteralOnlyChunkedAuto(
+      data,
+      props,
+      dict,
+      maxUnpackChunkSize: 32,
+      out propsByte);
+
+    Assert.Equal(props.ToByteOrThrow(), propsByte);
+
+    // Первый чанк должен быть COPY (reset dictionary).
+    var headerRes = Lzma2ChunkHeader.TryRead(encoded, out var header, out _);
+    Assert.Equal(Lzma2ReadHeaderResult.Ok, headerRes);
+    Assert.Equal(Lzma2ChunkKind.Copy, header.Kind);
+    Assert.True(header.ResetDictionary);
+
+    byte[] decoded = DecodeAllStreamed(encoded, expectedOutputSize: data.Length, dictionarySize: dict, maxInChunk: 3, maxOutChunk: 5);
+    Assert.Equal(data, decoded);
+  }
+
+  [Fact]
+  public void EncodeLiteralOnlyChunkedAuto_МожетВыбратьLzmaЕслиТакКороче()
+  {
+    // Повторяющиеся байты хорошо кодируются даже literal-only режимом.
+    byte[] data = new byte[512];
+    for (int i = 0; i < data.Length; i++)
+      data[i] = (byte)0x41;
+
+    var props = new LzmaProperties(Lc: 3, Lp: 0, Pb: 2);
+    const int dict = 1 << 20;
+
+    byte propsByte;
+    byte[] encoded = Lzma2LzmaEncoder.EncodeLiteralOnlyChunkedAuto(
+      data,
+      props,
+      dict,
+      maxUnpackChunkSize: 128,
+      out propsByte);
+
+    Assert.Equal(props.ToByteOrThrow(), propsByte);
+
+    // Первый чанк должен быть LZMA (и с properties).
+    var headerRes = Lzma2ChunkHeader.TryRead(encoded, out var header0, out _);
+    Assert.Equal(Lzma2ReadHeaderResult.Ok, headerRes);
+    Assert.Equal(Lzma2ChunkKind.Lzma, header0.Kind);
+    Assert.True(header0.ResetDictionary);
+    Assert.True(header0.HasProperties);
+
+    // В stream должен быть ровно один LZMA-чанк с properties.
+    int propsChunks = 0;
+    int offset = 0;
+
+    while (true)
+    {
+      var res = Lzma2ChunkHeader.TryRead(encoded.AsSpan(offset), out var header, out int headerBytes);
+      Assert.Equal(Lzma2ReadHeaderResult.Ok, res);
+
+      if (header.Kind == Lzma2ChunkKind.End)
+        break;
+
+      if (header.Kind == Lzma2ChunkKind.Lzma && header.HasProperties)
+        propsChunks++;
+
+      offset += headerBytes + header.PayloadSize;
+    }
+
+    Assert.Equal(1, propsChunks);
+
+    byte[] decoded = DecodeAllStreamed(encoded, expectedOutputSize: data.Length, dictionarySize: dict, maxInChunk: 7, maxOutChunk: 11);
+    Assert.Equal(data, decoded);
+  }
+
+  [Fact]
+  public void EncodeLiteralOnlyChunkedAuto_CopyПотомLzma_ПервыйLzmaЧанкБезResetDictionary()
+  {
+    // Делаем 2 чанка по 32 байта:
+    // - первый: почти "случайные" (чтобы COPY выиграл)
+    // - второй: нули (чтобы LZMA выиграл)
+    byte[] data = new byte[64];
+
+    for (int i = 0; i < 32; i++)
+      data[i] = (byte)((i * 13 + 7) & 0xFF);
+
+    // data[32..] уже заполнен нулями.
+
+    var props = new LzmaProperties(3, 0, 2);
+    const int dict = 1 << 20;
+
+    byte[] encoded = Lzma2LzmaEncoder.EncodeLiteralOnlyChunkedAuto(
+      data,
+      props,
+      dict,
+      maxUnpackChunkSize: 32,
+      out byte propsByte);
+
+    Assert.Equal(props.ToByteOrThrow(), propsByte);
+
+    int offset = 0;
+
+    var res0 = Lzma2ChunkHeader.TryRead(encoded.AsSpan(offset), out var h0, out int hb0);
+    Assert.Equal(Lzma2ReadHeaderResult.Ok, res0);
+    Assert.Equal(Lzma2ChunkKind.Copy, h0.Kind);
+    Assert.True(h0.ResetDictionary);
+    offset += hb0 + h0.PayloadSize;
+
+    var res1 = Lzma2ChunkHeader.TryRead(encoded.AsSpan(offset), out var h1, out int hb1);
+    Assert.Equal(Lzma2ReadHeaderResult.Ok, res1);
+    Assert.Equal(Lzma2ChunkKind.Lzma, h1.Kind);
+
+    // Это первый LZMA-чанк: properties должны быть, но dictionary сбрасывать нельзя (до него был COPY-чанк).
+    Assert.True(h1.HasProperties);
+    Assert.False(h1.ResetDictionary);
+    Assert.True(h1.ResetState);
+
+    // Для LZMA2 это диапазон control base 0xC0..0xDF (props + reset state, без reset dictionary).
+    Assert.InRange(h1.Control, (byte)0xC0, (byte)0xDF);
+
+    offset += hb1 + h1.PayloadSize;
+
+    var res2 = Lzma2ChunkHeader.TryRead(encoded.AsSpan(offset), out var h2, out _);
+    Assert.Equal(Lzma2ReadHeaderResult.Ok, res2);
+    Assert.Equal(Lzma2ChunkKind.End, h2.Kind);
+
+    byte[] decoded = DecodeAllStreamed(encoded, expectedOutputSize: data.Length, dictionarySize: dict, maxInChunk: 3, maxOutChunk: 7);
+    Assert.Equal(data, decoded);
   }
 
   private static byte[] DecodeAllOneShot(byte[] encoded, int expectedOutputSize, int dictionarySize)
