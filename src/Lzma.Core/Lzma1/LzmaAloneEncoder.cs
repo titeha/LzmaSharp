@@ -1,58 +1,86 @@
 namespace Lzma.Core.Lzma1;
 
 /// <summary>
-/// Минимальный энкодер формата «LZMA-Alone».
+/// Утилита для кодирования потока в формате "LZMA Alone".
 /// </summary>
 /// <remarks>
-/// <para>
-/// Формат LZMA-Alone = 13-байтный заголовок + LZMA1-поток.
-/// Заголовок (13 байт):
-///  - 1 байт  : properties (lc/lp/pb)
-///  - 4 байта : dictionary size (LE)
-///  - 8 байт  : uncompressed size (LE), либо 0xFFFF_FFFF_FFFF_FFFF если размер неизвестен.
-/// </para>
-/// <para>
-/// На текущем шаге нам достаточно "literal-only" режима: это нужно в тестах, чтобы
-/// можно было «собрать» небольшой LZMA-Alone поток и затем проверить декодер.
-/// </para>
+/// На данном шаге это в основном тестовый/вспомогательный энкодер:
+/// - умеет собрать заголовок (properties + dictionarySize + uncompressedSize);
+/// - умеет закодировать payload нашим <see cref="LzmaEncoder"/> и склеить с заголовком.
 /// </remarks>
 public static class LzmaAloneEncoder
 {
   /// <summary>
-  /// Кодирует данные в LZMA-Alone, используя упрощённый LZMA1-энкодер,
-  /// который генерирует ТОЛЬКО литералы (без match'ей).
+  /// Кодирует входной буфер в формат LZMA-Alone, используя ТОЛЬКО литералы.
   /// </summary>
-  /// <param name="input">Исходные данные.</param>
-  /// <param name="properties">LZMA properties (lc/lp/pb).</param>
-  /// <param name="dictionarySize">Размер словаря (должен быть &gt; 0).</param>
-  /// <returns>Полный LZMA-Alone поток: header + payload.</returns>
+  /// <remarks>
+  /// Это намеренное упрощение для тестов: на данном шаге энкодер не ищет match'и.
+  /// </remarks>
   public static byte[] EncodeLiteralOnly(ReadOnlySpan<byte> input, LzmaProperties properties, int dictionarySize)
   {
-    if (dictionarySize <= 0)
-      throw new ArgumentOutOfRangeException(nameof(dictionarySize), "Размер словаря должен быть > 0.");
-
-    // Проверяем, что properties действительно кодируются в 1 байт.
-    // (В заголовке LZMA-Alone properties хранятся именно так.)
-    if (!properties.TryToByte(out _))
-      throw new ArgumentOutOfRangeException(nameof(properties), "Некорректные LZMA properties.");
-
-    // Для LZMA-Alone мы пишем известный размер распакованных данных.
-    // (В LZMA-Alone допускается и "неизвестный" размер, но на этом шаге он не нужен.)
-    // Важно: LzmaAloneHeader хранит именно LzmaProperties (а не сырой байт).
     var header = new LzmaAloneHeader(properties, dictionarySize, (ulong)input.Length);
 
-    // Тело: LZMA1-поток (range-coded), в упрощённом варианте без match'ей.
+    // Кодируем payload нашим LZMA-энкодером.
     var encoder = new LzmaEncoder(properties, dictionarySize);
     byte[] payload = encoder.EncodeLiteralOnly(input);
 
-    // Собираем итоговый поток: header + payload.
-    var result = new byte[LzmaAloneHeader.HeaderSize + payload.Length];
+    var output = new byte[LzmaAloneHeader.HeaderSize + payload.Length];
 
-    bool ok = header.TryWrite(result, out int headerWritten);
-    if (!ok || headerWritten != LzmaAloneHeader.HeaderSize)
-      throw new InvalidOperationException("Не удалось записать LZMA-Alone header.");
+    if (!header.TryWrite(output.AsSpan(0, LzmaAloneHeader.HeaderSize), out int headerBytesWritten) ||
+        headerBytesWritten != LzmaAloneHeader.HeaderSize)
+      throw new InvalidOperationException("Не удалось сформировать LZMA-Alone заголовок.");
 
-    payload.AsSpan().CopyTo(result.AsSpan(LzmaAloneHeader.HeaderSize));
-    return result;
+    payload.CopyTo(output, headerBytesWritten);
+    return output;
+  }
+
+  /// <summary>
+  /// Кодирует заданный "скрипт" (литералы + match'и) в поток LZMA-Alone.
+  /// </summary>
+  /// <remarks>
+  /// Это вспомогательный метод для тестов: мы заранее знаем последовательность операций,
+  /// поэтому можем проверять декодер и отдельные блоки энкодера маленькими шагами.
+  /// </remarks>
+  internal static byte[] EncodeScript(
+    ReadOnlySpan<LzmaEncodeOp> script,
+    LzmaProperties properties,
+    int dictionarySize)
+  {
+    // Считаем ожидаемый размер распакованных данных (нужен для заголовка LZMA-Alone).
+    ulong uncompressedSize = 0;
+    foreach (var op in script)
+    {
+      if (op.Kind == LzmaEncodeOpKind.Literal)
+      {
+        uncompressedSize++;
+        continue;
+      }
+
+      if (op.Kind == LzmaEncodeOpKind.Match)
+      {
+        if (op.Length <= 0)
+          throw new ArgumentOutOfRangeException(nameof(script), "Длина match должна быть > 0.");
+
+        uncompressedSize += (ulong)op.Length;
+        continue;
+      }
+
+      throw new InvalidOperationException("Неизвестный тип операции кодирования.");
+    }
+
+    var header = new LzmaAloneHeader(properties, dictionarySize, uncompressedSize);
+
+    // Кодируем payload нашим LZMA-энкодером.
+    var encoder = new LzmaEncoder(properties, dictionarySize);
+    byte[] payload = encoder.EncodeScript(script);
+
+    var output = new byte[LzmaAloneHeader.HeaderSize + payload.Length];
+
+    if (!header.TryWrite(output.AsSpan(0, LzmaAloneHeader.HeaderSize), out int headerBytesWritten) ||
+        headerBytesWritten != LzmaAloneHeader.HeaderSize)
+      throw new InvalidOperationException("Не удалось сформировать LZMA-Alone заголовок.");
+
+    payload.CopyTo(output, headerBytesWritten);
+    return output;
   }
 }

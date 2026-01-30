@@ -19,7 +19,8 @@ public sealed class LzmaAloneEncoderTests
     byte[] encoded = LzmaAloneEncoder.EncodeLiteralOnly(input, props, dictionarySize);
 
     // 1) Проверяем, что заголовок читается обратно и соответствует ожиданиям.
-    Assert.Equal(LzmaAloneHeader.ReadResult.Ok, LzmaAloneHeader.TryRead(encoded, out var header, out int headerBytesRead));
+    var headerRead = LzmaAloneHeader.TryRead(encoded, out var header, out int headerBytesRead);
+    Assert.Equal(LzmaAloneHeader.ReadResult.Ok, headerRead);
     Assert.Equal(LzmaAloneHeader.HeaderSize, headerBytesRead);
     Assert.Equal(props, header.Properties);
     Assert.Equal(dictionarySize, header.DictionarySize);
