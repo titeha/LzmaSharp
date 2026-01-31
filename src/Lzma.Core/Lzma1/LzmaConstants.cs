@@ -100,8 +100,8 @@ public static class LzmaConstants
   public const int NumHighLenSymbols = 1 << LenNumHighBits;
 
   /// <summary>
-  /// Число high-символов в моделях длины. Это синоним к <see cref="NumHighLenSymbols"/>.
-  /// Нужен, чтобы не разъезжались имена констант между частями реализации.
+  /// <para>Синоним для <see cref="NumHighLenSymbols"/>.</para>
+  /// <para>Часть кода оперирует именем LenNumHighSymbols — оставляем его как алиас.</para>
   /// </summary>
   public const int LenNumHighSymbols = NumHighLenSymbols;
 
@@ -130,14 +130,27 @@ public static class LzmaConstants
   public const int NumPosStatesBitsEncodingMax = 4;
 
   /// <summary>
+  /// Максимальное количество бит posState (pb). В LZMA это 4.
+  /// </summary>
+  public const int PosStateBitsMax = NumPosStatesBitsEncodingMax;
+
+  /// <summary>
+  /// Количество бит, достаточное чтобы адресовать <see cref="NumStates"/> (12).
+  /// Используется для упаковки индексов таблиц вероятностей.
+  /// </summary>
+  public const int NumStatesBits = 4;
+
+  /// <summary>
   /// Максимальное количество posState = 2^pb, где pb ∈ [0..4].
   /// </summary>
   public const int NumPosStatesMax = 1 << NumPosStatesBitsEncodingMax; // 16
 
   /// <summary>
-  /// Максимальное число posState, которое поддерживает кодирование длины.
-  /// Это синоним к <see cref="NumPosStatesMax"/> — добавлен, чтобы энкодер и декодер
-  /// могли использовать единые имена без лишней путаницы.
+  /// <para>Синоним для <see cref="NumPosStatesMax"/>.</para>
+  /// <para>
+  /// Исторически часть кода (и некоторые тесты) использовали имя LenNumPosStatesMax.
+  /// Мы оставляем его как алиас, чтобы не ломать вызовы.
+  /// </para>
   /// </summary>
   public const int LenNumPosStatesMax = NumPosStatesMax;
 

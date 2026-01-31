@@ -1,120 +1,149 @@
+using System.Diagnostics;
+
 namespace Lzma.Core.Lzma1;
 
 /// <summary>
-/// Range encoder (арифметический кодер), парный к <see cref="LzmaRangeDecoder"/>.
+/// Энкодер диапазона (range coder) для LZMA.
+///
+/// Это «низкоуровневый» компонент, который кодирует биты в байтовый поток.
 /// </summary>
-/// <remarks>
-/// <para>
-/// LZMA (и LZMA2 внутри сжатых чанков) кодирует биты через range coder.
-/// На данном шаге мы добавляем минимальную рабочую реализацию энкодера,
-/// чтобы дальше можно было собирать полноценный LZMA-энкодер.
-/// </para>
-/// <para>
-/// Важно: эта реализация сознательно «простая и понятная».
-/// Оптимизации будем делать позже, когда функциональность будет закрыта тестами.
-/// </para>
-/// </remarks>
 internal sealed class LzmaRangeEncoder
 {
-  // В LZMA «нормализация» происходит, когда range становится меньше 1<<24.
-  // Это значение уже вынесено в константы, используем их.
+  private const uint _topValue = 1u << 24;
 
+  // Замечание по реализации:
+  // Мы храним выход в List<byte>. Для инкрементального режима (стриминг) добавили
+  // простую «дренажную» механику (DrainTo), чтобы можно было постепенно вычитывать
+  // готовые байты, не копируя каждый раз весь массив.
   private readonly List<byte> _output = new();
+  private int _readPos;
 
-  private ulong _low;
   private uint _range;
+  private ulong _low;
 
-  // «Кэш» для корректной обработки переносов при записи старшего байта low.
   private byte _cache;
   private uint _cacheSize;
 
-  public LzmaRangeEncoder()
-  {
-    Reset();
-  }
+  public LzmaRangeEncoder() => Reset();
 
   /// <summary>
-  /// Сбрасывает состояние энкодера и очищает накопленный выход.
+  /// Сбрасывает состояние энкодера и очищает накопленный вывод.
   /// </summary>
   public void Reset()
   {
     _output.Clear();
+    _readPos = 0;
 
+    _range = uint.MaxValue;
     _low = 0;
-    _range = uint.MaxValue; // 0xFFFF_FFFF
 
     _cache = 0;
     _cacheSize = 1;
   }
 
   /// <summary>
-  /// Возвращает все закодированные байты (копией).
+  /// Сколько байт готово к выдаче наружу (ещё не было «сдренировано»).
   /// </summary>
-  public byte[] ToArray() => [.. _output];
+  internal int PendingBytes => _output.Count - _readPos;
 
   /// <summary>
-  /// Кодирует один бит с вероятностной моделью LZMA (bit model).
+  /// Пытается скопировать часть накопленного вывода в <paramref name="destination"/>.
+  /// Возвращает, сколько байт записали.
   /// </summary>
-  /// <param name="prob">
-  /// Вероятность (0..2048). Значение обновляется внутри метода так же,
-  /// как это делает декодер.
-  /// </param>
-  /// <param name="bit">Бит (0 или 1).</param>
-  public void EncodeBit(ref ushort prob, uint bit)
+  internal int DrainTo(Span<byte> destination)
   {
-    if (bit > 1)
-      throw new ArgumentOutOfRangeException(nameof(bit), "Бит должен быть 0 или 1.");
+    if (destination.Length == 0)
+      return 0;
 
-    uint p = prob;
+    int available = PendingBytes;
+    if (available <= 0)
+      return 0;
 
-    // bound = (range >> 11) * p
-    uint bound = (_range >> LzmaConstants.NumBitModelTotalBits) * p;
+    int toCopy = Math.Min(available, destination.Length);
 
-    if (bit == 0)
+    // List<byte> не даёт Span напрямую без unsafe/CollectionsMarshal.
+    // Здесь важнее простота; оптимизацию сделаем позже.
+    for (int i = 0; i < toCopy; i++)
+      destination[i] = _output[_readPos + i];
+
+    _readPos += toCopy;
+
+    // Если вычитали всё – очищаем полностью (быстро).
+    if (_readPos == _output.Count)
+    {
+      _output.Clear();
+      _readPos = 0;
+      return toCopy;
+    }
+
+    // Периодическая компактация, чтобы список не рос бесконечно.
+    // Порог подобран «на глаз»; оптимизируем позже.
+    if (_readPos > 4096 && _readPos > (_output.Count / 2))
+    {
+      _output.RemoveRange(0, _readPos);
+      _readPos = 0;
+    }
+
+    return toCopy;
+  }
+
+  /// <summary>
+  /// Возвращает (копию) всех байт, которые ещё не были вычитаны через <see cref="DrainTo"/>.
+  /// </summary>
+  public byte[] ToArray()
+  {
+    int available = PendingBytes;
+    if (available <= 0)
+      return Array.Empty<byte>();
+
+    var arr = new byte[available];
+    for (int i = 0; i < available; i++)
+      arr[i] = _output[_readPos + i];
+
+    return arr;
+  }
+
+  /// <summary>
+  /// Заканчивает поток (дописать оставшиеся байты).
+  /// </summary>
+  public void Flush()
+  {
+    for (int i = 0; i < 5; i++)
+      ShiftLow();
+  }
+
+  public void EncodeBit(ref ushort prob, uint symbol)
+  {
+    uint bound = (_range >> LzmaConstants.NumBitModelTotalBits) * prob;
+
+    if (symbol == 0)
     {
       _range = bound;
-      p += (LzmaConstants.BitModelTotal - p) >> LzmaConstants.NumMoveBits;
+      prob += (ushort)((LzmaConstants.BitModelTotal - prob) >> LzmaConstants.NumMoveBits);
     }
     else
     {
       _low += bound;
       _range -= bound;
-      p -= p >> LzmaConstants.NumMoveBits;
+      prob -= (ushort)(prob >> LzmaConstants.NumMoveBits);
     }
 
-    prob = (ushort)p;
-
-    // Нормализация.
-    while (_range < LzmaConstants.RangeTopValue)
+    if (_range < _topValue)
     {
       _range <<= 8;
       ShiftLow();
     }
   }
 
-  /// <summary>
-  /// Кодирует <paramref name="numBits"/> «прямых» бит без вероятностной модели.
-  /// </summary>
-  /// <remarks>
-  /// В LZMA это используется при кодировании больших расстояний (distance/pos),
-  /// когда часть бит пишется напрямую (без bit model).
-  /// Парный метод на стороне декодера — <see cref="LzmaRangeDecoder.TryDecodeDirectBits"/>.
-  /// </remarks>
-  public void EncodeDirectBits(uint value, int numBits)
+  public void EncodeDirectBits(uint value, int numTotalBits)
   {
-    if (numBits < 0 || numBits > 32)
-      throw new ArgumentOutOfRangeException(nameof(numBits), "numBits должен быть в диапазоне 0..32.");
-
-    // Пишем биты от старшего к младшему.
-    for (int i = numBits - 1; i >= 0; i--)
+    for (int i = numTotalBits - 1; i >= 0; i--)
     {
       _range >>= 1;
-
-      uint bit = (value >> i) & 1u;
-      if (bit != 0)
+      if (((value >> i) & 1) != 0)
         _low += _range;
 
-      if (_range < LzmaConstants.RangeTopValue)
+      if (_range < _topValue)
       {
         _range <<= 8;
         ShiftLow();
@@ -122,29 +151,12 @@ internal sealed class LzmaRangeEncoder
     }
   }
 
-  /// <summary>
-  /// «Финализирует» поток range coder'а: дописывает хвостовые байты.
-  /// </summary>
-  /// <remarks>
-  /// В классическом LZMA после окончания кодирования делают 5 раз ShiftLow().
-  /// Это гарантирует, что декодер сможет прочитать начальные 5 байт Code.
-  /// </remarks>
-  public void Flush()
-  {
-    for (int i = 0; i < 5; i++)
-      ShiftLow();
-  }
-
   private void ShiftLow()
   {
     uint lowHi = (uint)(_low >> 32);
-
-    if (lowHi != 0 || (uint)_low < 0xFF00_0000)
+    if (lowHi != 0 || _low < 0xFF000000UL)
     {
       byte temp = _cache;
-
-      // Выгружаем «кэш»; если был перенос (lowHi != 0),
-      // он протаскивается через цепочку 0xFF.
       do
       {
         _output.Add((byte)(temp + lowHi));
@@ -152,10 +164,18 @@ internal sealed class LzmaRangeEncoder
       }
       while (--_cacheSize != 0);
 
-      _cache = (byte)(((uint)_low) >> 24);
+      _cache = (byte)(_low >> 24);
     }
 
     _cacheSize++;
-    _low = ((uint)_low) << 8;
+    _low = (_low & 0x00FFFFFFUL) << 8;
   }
+
+#if DEBUG
+  // Небольшая страховка для отладки: убедимся, что диапазон не «ломается».
+  private void AssertInvariant()
+  {
+    Debug.Assert(_range != 0);
+  }
+#endif
 }
