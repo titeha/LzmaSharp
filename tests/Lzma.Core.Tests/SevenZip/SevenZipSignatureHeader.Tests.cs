@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 
+using Lzma.Core.Checksums;
 using Lzma.Core.SevenZip;
 
 namespace Lzma.Core.Tests.SevenZip;
@@ -7,84 +8,119 @@ namespace Lzma.Core.Tests.SevenZip;
 public sealed class SevenZipSignatureHeaderTests
 {
   [Fact]
-  public void TryRead_NeedMoreInput_ЕслиМеньше6Байт()
+  public void TryRead_Ok_ПарситПоля_ИПроверяетCRC()
   {
-    byte[] input = [0x37, 0x7A, 0xBC, 0xAF, 0x27];
+    const byte versionMajor = 0;
+    const byte versionMinor = 4;
 
-    var res = SevenZipSignatureHeader.TryRead(input, out var header, out int consumed);
+    const ulong nextHeaderOffset = 123;
+    const ulong nextHeaderSize = 456;
+    const uint nextHeaderCrc = 0x11223344;
 
-    Assert.Equal(SevenZipSignatureHeaderReadResult.NeedMoreInput, res);
-    Assert.Equal(0, consumed);
-    Assert.Equal(default, header);
+    byte[] input = new byte[SevenZipSignatureHeader.Size];
+
+    // signature "7z\xBC\xAF\x27\x1C"
+    input[0] = 0x37;
+    input[1] = 0x7A;
+    input[2] = 0xBC;
+    input[3] = 0xAF;
+    input[4] = 0x27;
+    input[5] = 0x1C;
+
+    // version
+    input[6] = versionMajor;
+    input[7] = versionMinor;
+
+    // StartHeaderCRC (8..11) заполним после того, как положим StartHeader.
+
+    BinaryPrimitives.WriteUInt64LittleEndian(input.AsSpan(12, 8), nextHeaderOffset);
+    BinaryPrimitives.WriteUInt64LittleEndian(input.AsSpan(20, 8), nextHeaderSize);
+    BinaryPrimitives.WriteUInt32LittleEndian(input.AsSpan(28, 4), nextHeaderCrc);
+
+    uint startHeaderCrc = Crc32.Compute(input.AsSpan(12, 20));
+    BinaryPrimitives.WriteUInt32LittleEndian(input.AsSpan(8, 4), startHeaderCrc);
+
+    var result = SevenZipSignatureHeader.TryRead(input, out var header, out int consumed);
+
+    Assert.Equal(SevenZipSignatureHeaderReadResult.Ok, result);
+    Assert.Equal(SevenZipSignatureHeader.Size, consumed);
+
+    Assert.Equal(versionMajor, header.VersionMajor);
+    Assert.Equal(versionMinor, header.VersionMinor);
+    Assert.Equal(startHeaderCrc, header.StartHeaderCrc);
+    Assert.Equal(nextHeaderOffset, header.NextHeaderOffset);
+    Assert.Equal(nextHeaderSize, header.NextHeaderSize);
+    Assert.Equal(nextHeaderCrc, header.NextHeaderCrc);
+  }
+
+  [Fact]
+  public void TryRead_NeedMoreInput_ЕслиНеХватаетДанных()
+  {
+    // меньше, чем сигнатура
+    byte[] tooSmall1 = [0x37, 0x7A, 0xBC, 0xAF, 0x27];
+
+    var result1 = SevenZipSignatureHeader.TryRead(tooSmall1, out _, out int consumed1);
+    Assert.Equal(SevenZipSignatureHeaderReadResult.NeedMoreInput, result1);
+    Assert.Equal(0, consumed1);
+
+    // сигнатура есть, но не хватает до 32 байт
+    byte[] tooSmall2 = new byte[SevenZipSignatureHeader.Size - 1];
+    tooSmall2[0] = 0x37;
+    tooSmall2[1] = 0x7A;
+    tooSmall2[2] = 0xBC;
+    tooSmall2[3] = 0xAF;
+    tooSmall2[4] = 0x27;
+    tooSmall2[5] = 0x1C;
+
+    var result2 = SevenZipSignatureHeader.TryRead(tooSmall2, out _, out int consumed2);
+    Assert.Equal(SevenZipSignatureHeaderReadResult.NeedMoreInput, result2);
+    Assert.Equal(0, consumed2);
   }
 
   [Fact]
   public void TryRead_InvalidData_ЕслиСигнатураНеСовпадает()
   {
-    // Первые 6 байт не совпадают с 37 7A BC AF 27 1C.
-    byte[] input = [0x00, 0x7A, 0xBC, 0xAF, 0x27, 0x1C, 0x00, 0x04];
+    byte[] input = new byte[SevenZipSignatureHeader.Size];
+    input[0] = 0x00;
+    input[1] = 0x7A;
+    input[2] = 0xBC;
+    input[3] = 0xAF;
+    input[4] = 0x27;
+    input[5] = 0x1C;
 
-    var res = SevenZipSignatureHeader.TryRead(input, out _, out int consumed);
+    var result = SevenZipSignatureHeader.TryRead(input, out _, out int consumed);
 
-    Assert.Equal(SevenZipSignatureHeaderReadResult.InvalidData, res);
+    Assert.Equal(SevenZipSignatureHeaderReadResult.InvalidData, result);
     Assert.Equal(0, consumed);
   }
 
   [Fact]
-  public void TryRead_NeedMoreInput_ЕслиЗаголовокОбрезан()
+  public void TryRead_InvalidData_ЕслиCRCНеСовпадает()
   {
-    // Сигнатура есть, но до 32 байт не дотягиваем.
-    byte[] input =
-    [
-      0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C, // signature
-      0x00, 0x04, // version
-      0x01, 0x02, 0x03, 0x04, // start header crc
-      // дальше байт нет
-    ];
+    byte[] input = new byte[SevenZipSignatureHeader.Size];
 
-    var res = SevenZipSignatureHeader.TryRead(input, out _, out int consumed);
+    // signature "7z\xBC\xAF\x27\x1C"
+    input[0] = 0x37;
+    input[1] = 0x7A;
+    input[2] = 0xBC;
+    input[3] = 0xAF;
+    input[4] = 0x27;
+    input[5] = 0x1C;
 
-    Assert.Equal(SevenZipSignatureHeaderReadResult.NeedMoreInput, res);
+    input[6] = 0;
+    input[7] = 4;
+
+    // заполняем StartHeader
+    BinaryPrimitives.WriteUInt64LittleEndian(input.AsSpan(12, 8), 1);
+    BinaryPrimitives.WriteUInt64LittleEndian(input.AsSpan(20, 8), 2);
+    BinaryPrimitives.WriteUInt32LittleEndian(input.AsSpan(28, 4), 0xAABBCCDD);
+
+    // Пишем заведомо неверную CRC.
+    BinaryPrimitives.WriteUInt32LittleEndian(input.AsSpan(8, 4), 0xDEADBEEF);
+
+    var result = SevenZipSignatureHeader.TryRead(input, out _, out int consumed);
+
+    Assert.Equal(SevenZipSignatureHeaderReadResult.InvalidData, result);
     Assert.Equal(0, consumed);
-  }
-
-  [Fact]
-  public void TryRead_Ok_ПарситПоляКакОжидается()
-  {
-    byte[] bytes = new byte[SevenZipSignatureHeader.Size];
-
-    // signature
-    bytes[0] = 0x37;
-    bytes[1] = 0x7A;
-    bytes[2] = 0xBC;
-    bytes[3] = 0xAF;
-    bytes[4] = 0x27;
-    bytes[5] = 0x1C;
-
-    // version
-    bytes[6] = 0x00; // major
-    bytes[7] = 0x04; // minor
-
-    // start header crc
-    BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(8, 4), 0xA1B2C3D4);
-
-    // start header
-    BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(12, 8), 0x0102030405060708UL); // NextHeaderOffset
-    BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(20, 8), 0x0A0B0C0D0E0F1011UL); // NextHeaderSize
-    BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(28, 4), 0x11223344); // NextHeaderCrc
-
-    var res = SevenZipSignatureHeader.TryRead(bytes, out var header, out int consumed);
-
-    Assert.Equal(SevenZipSignatureHeaderReadResult.Ok, res);
-    Assert.Equal(SevenZipSignatureHeader.Size, consumed);
-
-    Assert.Equal((byte)0x00, header.VersionMajor);
-    Assert.Equal((byte)0x04, header.VersionMinor);
-    Assert.Equal(0xA1B2C3D4u, header.StartHeaderCrc);
-    Assert.Equal(0x0102030405060708UL, header.NextHeaderOffset);
-    Assert.Equal(0x0A0B0C0D0E0F1011UL, header.NextHeaderSize);
-    Assert.Equal(0x11223344u, header.NextHeaderCrc);
-
-    Assert.Equal(SevenZipSignatureHeader.Size + header.NextHeaderOffset, header.NextHeaderAbsoluteOffset);
   }
 }

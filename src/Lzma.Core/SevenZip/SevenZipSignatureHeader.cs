@@ -1,41 +1,25 @@
 using System.Buffers.Binary;
 
+using Lzma.Core.Checksums;
+
 namespace Lzma.Core.SevenZip;
 
 /// <summary>
-/// Результат попытки прочитать 7z SignatureHeader (первые 32 байта файла .7z).
-/// </summary>
-public enum SevenZipSignatureHeaderReadResult
-{
-  /// <summary>
-  /// Заголовок успешно прочитан.
-  /// </summary>
-  Ok,
-
-  /// <summary>
-  /// Входного буфера не хватило (нужно больше байт).
-  /// </summary>
-  NeedMoreInput,
-
-  /// <summary>
-  /// Данные некорректны (не похожи на 7z).
-  /// </summary>
-  InvalidData,
-}
-
-/// <summary>
-/// <para>7z SignatureHeader.</para>
+/// Сигнатурный заголовок 7z (первые 32 байта файла).
+///
 /// <para>
-/// Формат (всего 32 байта):
-/// - Signature (6 байт): 37 7A BC AF 27 1C
-/// - Version (2 байта): major/minor
-/// - StartHeaderCRC (4 байта, LE)
-/// - NextHeaderOffset (8 байт, LE)
-/// - NextHeaderSize (8 байт, LE)
-/// - NextHeaderCRC (4 байта, LE)
+/// Формат (Little Endian):
+/// [0..5]   - signature "7z\xBC\xAF\x27\x1C"
+/// [6]      - versionMajor
+/// [7]      - versionMinor
+/// [8..11]  - StartHeaderCRC (CRC32 от 20 байт StartHeader)
+/// [12..19] - NextHeaderOffset (UInt64 LE)
+/// [20..27] - NextHeaderSize (UInt64 LE)
+/// [28..31] - NextHeaderCRC (UInt32 LE)
 /// </para>
+///
 /// <para>
-/// На этом шаге мы только читаем структуру заголовка. Проверку CRC добавим отдельным шагом.
+/// На данном шаге мы валидируем StartHeaderCRC сразу при чтении.
 /// </para>
 /// </summary>
 public readonly record struct SevenZipSignatureHeader(
@@ -47,21 +31,23 @@ public readonly record struct SevenZipSignatureHeader(
   uint NextHeaderCrc)
 {
   /// <summary>
-  /// Длина SignatureHeader в байтах.
+  /// Размер сигнатурного заголовка 7z в байтах.
   /// </summary>
   public const int Size = 32;
 
   /// <summary>
-  /// Абсолютная позиция NextHeader в файле (в байтах от начала файла).
+  /// Размер сигнатуры.
   /// </summary>
-  public ulong NextHeaderAbsoluteOffset => Size + NextHeaderOffset;
+  public const int SignatureSize = 6;
+
+  private const int _startHeaderSize = 20;
+
+  // 7z signature: 37 7A BC AF 27 1C
+  private static ReadOnlySpan<byte> SignatureBytes => [0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C];
 
   /// <summary>
-  /// Пробует прочитать SignatureHeader.
+  /// Пытается прочитать сигнатурный заголовок 7z.
   /// </summary>
-  /// <param name="input">Входные данные.</param>
-  /// <param name="header">Распарсенный заголовок (если Ok).</param>
-  /// <param name="bytesConsumed">Сколько байт было прочитано из input.</param>
   public static SevenZipSignatureHeaderReadResult TryRead(
     ReadOnlySpan<byte> input,
     out SevenZipSignatureHeader header,
@@ -70,36 +56,32 @@ public readonly record struct SevenZipSignatureHeader(
     header = default;
     bytesConsumed = 0;
 
-    // Минимум 6 байт нужно хотя бы чтобы проверить сигнатуру.
-    if (input.Length < 6)
+    if (input.Length < SignatureSize)
       return SevenZipSignatureHeaderReadResult.NeedMoreInput;
 
-    // Signature: 37 7A BC AF 27 1C
-    if (input[0] != 0x37 ||
-        input[1] != 0x7A ||
-        input[2] != 0xBC ||
-        input[3] != 0xAF ||
-        input[4] != 0x27 ||
-        input[5] != 0x1C)
-    {
+    if (!input.Slice(0, SignatureSize).SequenceEqual(SignatureBytes))
       return SevenZipSignatureHeaderReadResult.InvalidData;
-    }
 
-    // Теперь нам нужно целиком 32 байта.
     if (input.Length < Size)
       return SevenZipSignatureHeaderReadResult.NeedMoreInput;
 
-    byte major = input[6];
-    byte minor = input[7];
+    byte versionMajor = input[6];
+    byte versionMinor = input[7];
 
     uint startHeaderCrc = BinaryPrimitives.ReadUInt32LittleEndian(input.Slice(8, 4));
+
+    // StartHeaderCRC считается по 20 байт StartHeader (смещения 12..31).
+    uint expectedStartHeaderCrc = Crc32.Compute(input.Slice(12, _startHeaderSize));
+    if (expectedStartHeaderCrc != startHeaderCrc)
+      return SevenZipSignatureHeaderReadResult.InvalidData;
+
     ulong nextHeaderOffset = BinaryPrimitives.ReadUInt64LittleEndian(input.Slice(12, 8));
     ulong nextHeaderSize = BinaryPrimitives.ReadUInt64LittleEndian(input.Slice(20, 8));
     uint nextHeaderCrc = BinaryPrimitives.ReadUInt32LittleEndian(input.Slice(28, 4));
 
     header = new SevenZipSignatureHeader(
-      major,
-      minor,
+      versionMajor,
+      versionMinor,
       startHeaderCrc,
       nextHeaderOffset,
       nextHeaderSize,
@@ -108,4 +90,14 @@ public readonly record struct SevenZipSignatureHeader(
     bytesConsumed = Size;
     return SevenZipSignatureHeaderReadResult.Ok;
   }
+}
+
+/// <summary>
+/// Результат чтения сигнатурного заголовка 7z.
+/// </summary>
+public enum SevenZipSignatureHeaderReadResult
+{
+  Ok,
+  NeedMoreInput,
+  InvalidData,
 }
