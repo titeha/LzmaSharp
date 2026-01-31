@@ -77,7 +77,7 @@ public sealed class SevenZipNextHeaderReaderTests
     byte[] file = Build7zFile(nextHeaderOffset: 0, nextHeader, out _);
 
     // Обрезаем файл: не хватает одного байта NextHeader.
-    byte[] truncated = file.Take(file.Length - 1).ToArray();
+    byte[] truncated = [.. file.Take(file.Length - 1)];
 
     var reader = new SevenZipNextHeaderReader();
     var res = reader.Read(truncated, out int consumed);
@@ -88,8 +88,7 @@ public sealed class SevenZipNextHeaderReaderTests
 
   private static byte[] Build7zFile(ulong nextHeaderOffset, byte[] nextHeader, out SevenZipSignatureHeader signatureHeader)
   {
-    if (nextHeader is null)
-      throw new ArgumentNullException(nameof(nextHeader));
+    ArgumentNullException.ThrowIfNull(nextHeader);
 
     // Поля StartHeader.
     ulong nextHeaderSize = (ulong)nextHeader.Length;
@@ -97,7 +96,7 @@ public sealed class SevenZipNextHeaderReaderTests
 
     // Собираем StartHeader (20 байт).
     Span<byte> startHeader = stackalloc byte[20];
-    WriteUInt64LE(startHeader.Slice(0, 8), nextHeaderOffset);
+    WriteUInt64LE(startHeader[..8], nextHeaderOffset);
     WriteUInt64LE(startHeader.Slice(8, 8), nextHeaderSize);
     WriteUInt32LE(startHeader.Slice(16, 4), nextHeaderCrc);
 
