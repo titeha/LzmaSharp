@@ -4,29 +4,28 @@ namespace Lzma.Core.Tests.SevenZip;
 
 public sealed class SevenZipEncodedUInt64Tests
 {
-  public static IEnumerable<object[]> Examples()
+  // Вместо IEnumerable<object[]> используем TheoryData<...>.
+  // Это не влияет на выполнение тестов, но даёт больше типобезопасности
+  // и убирает предупреждение анализаторов xUnit.
+  public static TheoryData<ulong, byte[]> Examples => new()
   {
     // 1 байт
-    yield return new object[] { 0UL, new byte[] { 0x00 } };
-    yield return new object[] { 1UL, new byte[] { 0x01 } };
-    yield return new object[] { 127UL, new byte[] { 0x7F } };
+    { 0UL, new byte[] { 0x00 } },
+    { 1UL, new byte[] { 0x01 } },
+    { 127UL, new byte[] { 0x7F } },
 
     // 2 байта (N=1)
-    yield return new object[] { 128UL, new byte[] { 0x80, 0x80 } };
-    yield return new object[] { 255UL, new byte[] { 0x80, 0xFF } };
-    yield return new object[] { 256UL, new byte[] { 0x81, 0x00 } };
-    yield return new object[] { 16383UL, new byte[] { 0xBF, 0xFF } };
+    { 128UL, new byte[] { 0x80, 0x80 } },
+    { 255UL, new byte[] { 0x80, 0xFF } },
+    { 256UL, new byte[] { 0x81, 0x00 } },
+    { 16383UL, new byte[] { 0xBF, 0xFF } },
 
     // 3 байта (N=2)
-    yield return new object[] { 16384UL, new byte[] { 0xC0, 0x00, 0x40 } };
+    { 16384UL, new byte[] { 0xC0, 0x00, 0x40 } },
 
     // 9 байт (0xFF + 8 байт значения)
-    yield return new object[]
-    {
-      ulong.MaxValue,
-      new byte[] { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF }
-    };
-  }
+    { ulong.MaxValue, new byte[] { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF } },
+  };
 
   [Theory]
   [MemberData(nameof(Examples))]
