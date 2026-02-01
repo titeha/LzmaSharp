@@ -32,8 +32,8 @@ public static class SevenZipNextHeaderKindDetector
   // В формате 7z NextHeader начинается с NID:
   // 0x01 = Header
   // 0x17 = EncodedHeader
-  private const byte NID_Header = 0x01;
-  private const byte NID_EncodedHeader = 0x17;
+  private const byte _nID_Header = SevenZipNid.Header;
+  private const byte _nID_EncodedHeader = SevenZipNid.EncodedHeader;
 
   /// <summary>
   /// Пытается определить, какой тип NextHeader находится в <paramref name="nextHeader"/>.
@@ -49,13 +49,13 @@ public static class SevenZipNextHeaderKindDetector
     }
 
     byte id = nextHeader[0];
-    if (id == NID_Header)
+    if (id == _nID_Header)
     {
       kind = SevenZipNextHeaderKind.Header;
       return SevenZipNextHeaderKindDetectResult.Ok;
     }
 
-    if (id == NID_EncodedHeader)
+    if (id == _nID_EncodedHeader)
     {
       kind = SevenZipNextHeaderKind.EncodedHeader;
       return SevenZipNextHeaderKindDetectResult.Ok;
