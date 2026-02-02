@@ -7,7 +7,7 @@ public sealed class SevenZipNextHeaderKindDetectorTests
   [Fact]
   public void TryDetect_ПустойВход_NeedMoreInput()
   {
-    var res = SevenZipNextHeaderKindDetector.TryDetect(ReadOnlySpan<byte>.Empty, out _);
+    var res = SevenZipNextHeaderKindDetector.TryDetect([], out _);
     Assert.Equal(SevenZipNextHeaderKindDetectResult.NeedMoreInput, res);
   }
 
