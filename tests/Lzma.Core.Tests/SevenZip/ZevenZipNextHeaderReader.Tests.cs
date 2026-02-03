@@ -125,7 +125,7 @@ public sealed class SevenZipNextHeaderReaderTests
 
     // Проверим, что наш builder собрал корректный header.
     var readRes = SevenZipSignatureHeader.TryRead(header, out signatureHeader, out _);
-    Assert.Equal(SevenZipSignatureHeaderReadResult.Ok, readRes);
+    Assert.Equal(SevenZipSignatureHeaderReadResult.Done, readRes);
 
     byte[] file = new byte[header.Length + (int)nextHeaderOffset + nextHeader.Length];
     header.CopyTo(file, 0);

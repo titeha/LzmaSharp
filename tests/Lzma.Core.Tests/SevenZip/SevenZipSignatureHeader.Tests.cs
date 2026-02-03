@@ -42,7 +42,7 @@ public sealed class SevenZipSignatureHeaderTests
 
     var result = SevenZipSignatureHeader.TryRead(input, out var header, out int consumed);
 
-    Assert.Equal(SevenZipSignatureHeaderReadResult.Ok, result);
+    Assert.Equal(SevenZipSignatureHeaderReadResult.Done, result);
     Assert.Equal(SevenZipSignatureHeader.Size, consumed);
 
     Assert.Equal(versionMajor, header.VersionMajor);
