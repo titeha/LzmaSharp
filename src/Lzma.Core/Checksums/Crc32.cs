@@ -13,14 +13,14 @@ namespace Lzma.Core.Checksums;
 internal static class Crc32
 {
   // Реверсивный полином CRC-32/ISO-HDLC (Zip, Ethernet, PNG и т.п.).
-  private const uint Polynomial = 0xEDB88320u;
+  private const uint _polynomial = 0xEDB88320u;
 
   /// <summary>
   /// Начальное состояние (стандартное для CRC32/PKZIP).
   /// </summary>
   public const uint InitialState = 0xFFFF_FFFFu;
 
-  private static readonly uint[] Table = CreateTable();
+  private static readonly uint[] _table = CreateTable();
 
   /// <summary>
   /// Обновляет CRC-состояние на очередной порции данных.
@@ -38,7 +38,7 @@ internal static class Crc32
     foreach (byte b in data)
     {
       uint idx = (crc ^ b) & 0xFFu;
-      crc = Table[idx] ^ (crc >> 8);
+      crc = _table[idx] ^ (crc >> 8);
     }
 
     return crc;
@@ -67,7 +67,7 @@ internal static class Crc32
       uint crc = i;
 
       for (int bit = 0; bit < 8; bit++)
-        crc = (crc & 1u) != 0 ? (crc >> 1) ^ Polynomial : (crc >> 1);
+        crc = (crc & 1u) != 0 ? (crc >> 1) ^ _polynomial : (crc >> 1);
 
       table[i] = crc;
     }

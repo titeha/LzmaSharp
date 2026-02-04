@@ -22,13 +22,17 @@ public sealed class SevenZipNextHeaderReaderTests
     Assert.Equal(expectedSigHeader.NextHeaderSize, reader.SignatureHeader.NextHeaderSize);
     Assert.Equal(expectedSigHeader.NextHeaderCrc, reader.SignatureHeader.NextHeaderCrc);
     Assert.Equal(nextHeader, reader.NextHeader.ToArray());
+
+    Assert.Equal(
+      file.AsSpan(SevenZipSignatureHeader.Size, (int)expectedSigHeader.NextHeaderOffset).ToArray(),
+      reader.PackedStreams.ToArray());
   }
 
   [Fact]
   public void Read_ПотоковоКрошечнымиКусками_Работает()
   {
     byte[] nextHeader = [10, 11, 12];
-    byte[] file = Build7zFile(nextHeaderOffset: 0, nextHeader, out _);
+    byte[] file = Build7zFile(nextHeaderOffset: 0, nextHeader, out var expectedSigHeader);
 
     var reader = new SevenZipNextHeaderReader();
 
@@ -52,6 +56,10 @@ public sealed class SevenZipNextHeaderReaderTests
 
     Assert.Equal(file.Length, pos);
     Assert.Equal(nextHeader, reader.NextHeader.ToArray());
+
+    Assert.Equal(
+      file.AsSpan(SevenZipSignatureHeader.Size, (int)expectedSigHeader.NextHeaderOffset).ToArray(),
+      reader.PackedStreams.ToArray());
   }
 
   [Fact]
@@ -74,7 +82,7 @@ public sealed class SevenZipNextHeaderReaderTests
   public void Read_ВозвращаетNeedMoreInput_ЕслиNextHeaderНеДочитан()
   {
     byte[] nextHeader = [1, 2, 3, 4, 5];
-    byte[] file = Build7zFile(nextHeaderOffset: 0, nextHeader, out _);
+    byte[] file = Build7zFile(nextHeaderOffset: 0, nextHeader, out var expectedSigHeader);
 
     // Обрезаем файл: не хватает одного байта NextHeader.
     byte[] truncated = [.. file.Take(file.Length - 1)];
@@ -88,7 +96,8 @@ public sealed class SevenZipNextHeaderReaderTests
 
   private static byte[] Build7zFile(ulong nextHeaderOffset, byte[] nextHeader, out SevenZipSignatureHeader signatureHeader)
   {
-    ArgumentNullException.ThrowIfNull(nextHeader);
+    if (nextHeader is null)
+      throw new ArgumentNullException(nameof(nextHeader));
 
     // Поля StartHeader.
     ulong nextHeaderSize = (ulong)nextHeader.Length;
@@ -96,7 +105,7 @@ public sealed class SevenZipNextHeaderReaderTests
 
     // Собираем StartHeader (20 байт).
     Span<byte> startHeader = stackalloc byte[20];
-    WriteUInt64LE(startHeader[..8], nextHeaderOffset);
+    WriteUInt64LE(startHeader.Slice(0, 8), nextHeaderOffset);
     WriteUInt64LE(startHeader.Slice(8, 8), nextHeaderSize);
     WriteUInt32LE(startHeader.Slice(16, 4), nextHeaderCrc);
 

@@ -12,10 +12,11 @@ public enum SevenZipHeaderReadResult
 }
 
 /// <summary>
+/// <para>
 /// Читает NextHeader (не EncodedHeader) и собирает минимальную модель заголовка:
 /// MainStreamsInfo + FilesInfo.
-/// 
-/// На этом шаге мы НЕ поддерживаем EncodedHeader, ArchiveProperties и AdditionalStreamsInfo.
+/// </para>
+/// <para>На этом шаге мы НЕ поддерживаем EncodedHeader, ArchiveProperties и AdditionalStreamsInfo.</para>
 /// </summary>
 public static class SevenZipHeaderReader
 {
@@ -69,7 +70,7 @@ public static class SevenZipHeaderReader
 
         offset++; // пропускаем NID.MainStreamsInfo
 
-        var res = SevenZipStreamsInfoReader.TryRead(input.Slice(offset), out streamsInfo, out int consumed);
+        var res = SevenZipStreamsInfoReader.TryRead(input[offset..], out streamsInfo, out int consumed);
         if (res == SevenZipStreamsInfoReadResult.NeedMoreInput)
           return SevenZipHeaderReadResult.NeedMoreInput;
         if (res == SevenZipStreamsInfoReadResult.InvalidData)
@@ -87,7 +88,7 @@ public static class SevenZipHeaderReader
         if (filesInfoRead)
           return SevenZipHeaderReadResult.InvalidData;
 
-        var res = SevenZipFilesInfoReader.TryRead(input.Slice(offset), out filesInfo, out int consumed);
+        var res = SevenZipFilesInfoReader.TryRead(input[offset..], out filesInfo, out int consumed);
         if (res == SevenZipFilesInfoReadResult.NeedMoreInput)
           return SevenZipHeaderReadResult.NeedMoreInput;
         if (res == SevenZipFilesInfoReadResult.InvalidData)

@@ -6,15 +6,9 @@ namespace Lzma.Core.SevenZip;
 /// - MainStreamsInfo (потоки/папки/сабстримы)
 /// - FilesInfo (количество файлов и их свойства)
 /// </summary>
-public readonly struct SevenZipHeader
+public readonly struct SevenZipHeader(SevenZipStreamsInfo streamsInfo, SevenZipFilesInfo filesInfo)
 {
-  public SevenZipHeader(SevenZipStreamsInfo streamsInfo, SevenZipFilesInfo filesInfo)
-  {
-    StreamsInfo = streamsInfo;
-    FilesInfo = filesInfo;
-  }
+  public SevenZipStreamsInfo StreamsInfo { get; } = streamsInfo;
 
-  public SevenZipStreamsInfo StreamsInfo { get; }
-
-  public SevenZipFilesInfo FilesInfo { get; }
+  public SevenZipFilesInfo FilesInfo { get; } = filesInfo;
 }

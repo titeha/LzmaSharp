@@ -55,6 +55,11 @@ public sealed class SevenZipNextHeaderReader
     Error,
   }
 
+  // На текущем этапе мы буферизуем все байты между SignatureHeader и NextHeader,
+  // чтобы позже можно было декодировать EncodedHeader и извлекать упакованные данные.
+  // Ограничиваем размер буфера, чтобы не упасть на очень больших архивах.
+  private const int _maxPackedStreamsBytes = 64 * 1024 * 1024;
+
   // SignatureHeader всегда 32 байта.
   private readonly byte[] _signatureHeaderBuffer = new byte[SevenZipSignatureHeader.Size];
   private int _signatureHeaderFilled;
@@ -64,6 +69,10 @@ public sealed class SevenZipNextHeaderReader
 
   // Сколько байт ещё нужно пропустить (после signature header) до NextHeader.
   private ulong _skipRemaining;
+
+  // Байты между SignatureHeader и NextHeader (упакованные потоки).
+  private byte[] _packedStreams = [];
+  private int _packedStreamsFilled;
 
   // Буфер NextHeader.
   private byte[] _nextHeader = [];
@@ -101,6 +110,11 @@ public sealed class SevenZipNextHeaderReader
   public ReadOnlyMemory<byte> NextHeader => _nextHeader;
 
   /// <summary>
+  /// Байты между сигнатурным заголовком и NextHeader (упакованные данные архива).
+  /// </summary>
+  public ReadOnlyMemory<byte> PackedStreams => _packedStreams.AsMemory(0, _packedStreamsFilled);
+
+  /// <summary>
   /// Сбрасывает состояние и позволяет читать новый 7z-поток.
   /// </summary>
   public void Reset()
@@ -110,6 +124,9 @@ public sealed class SevenZipNextHeaderReader
     _signatureHeader = default;
 
     _skipRemaining = 0;
+
+    _packedStreams = [];
+    _packedStreamsFilled = 0;
 
     _nextHeader = [];
     _nextHeaderFilled = 0;
@@ -173,6 +190,14 @@ public sealed class SevenZipNextHeaderReader
         // Подготовка к следующему шагу.
         _skipRemaining = _signatureHeader.NextHeaderOffset;
 
+        if (_skipRemaining > _maxPackedStreamsBytes)
+          return SetTerminal(SevenZipNextHeaderReadResult.NotSupported);
+
+        _packedStreams = _skipRemaining == 0
+          ? []
+          : new byte[checked((int)_skipRemaining)];
+        _packedStreamsFilled = 0;
+
         // Если NextHeaderSize не помещается в int — пока не поддерживаем.
         if (_signatureHeader.NextHeaderSize > int.MaxValue)
           return SetTerminal(SevenZipNextHeaderReadResult.NotSupported);
@@ -201,6 +226,13 @@ public sealed class SevenZipNextHeaderReader
 
         ulong takeU64 = Math.Min((ulong)available, _skipRemaining);
         int take = (int)takeU64;
+
+        if (take > 0)
+        {
+          input.Slice(bytesConsumed, take)
+            .CopyTo(_packedStreams.AsSpan(_packedStreamsFilled));
+          _packedStreamsFilled += take;
+        }
 
         bytesConsumed += take;
         _skipRemaining -= takeU64;

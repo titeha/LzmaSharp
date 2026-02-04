@@ -101,7 +101,7 @@ public static class SevenZipFilesInfoReader
       if (nameBytes.Length != 0)
         return SevenZipFilesInfoReadResult.InvalidData;
 
-      names = Array.Empty<string>();
+      names = [];
       return SevenZipFilesInfoReadResult.Ok;
     }
 

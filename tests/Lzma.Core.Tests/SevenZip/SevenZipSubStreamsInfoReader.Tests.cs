@@ -117,13 +117,13 @@ public class SevenZipSubStreamsInfoReaderTests
   {
     var coder = new SevenZipCoderInfo(
       methodId: [0x21], // LZMA2 (для теста это не важно)
+      properties: [],
       numInStreams: 1,
-      numOutStreams: 1,
-      properties: Array.Empty<byte>());
+      numOutStreams: 1);
 
     var folder = new SevenZipFolder(
       Coders: [coder],
-      BindPairs: Array.Empty<SevenZipBindPair>(),
+      BindPairs: [],
       PackedStreamIndices: [0],
       NumInStreams: 1,
       NumOutStreams: 1);

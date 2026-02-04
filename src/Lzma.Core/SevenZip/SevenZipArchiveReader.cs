@@ -35,6 +35,12 @@ public sealed class SevenZipArchiveReader
   /// </summary>
   public SevenZipNextHeaderKind NextHeaderKind { get; private set; }
 
+  /// <summary>
+  /// Байты между сигнатурным заголовком и NextHeader (упакованные данные архива).
+  /// На текущем этапе полностью буферизуются внутри SevenZipNextHeaderReader.
+  /// </summary>
+  public ReadOnlyMemory<byte> PackedStreams => _nextHeaderReader.PackedStreams;
+
   public SevenZipArchiveReadResult Read(ReadOnlySpan<byte> input, out int bytesConsumed)
   {
     bytesConsumed = 0;
@@ -92,7 +98,11 @@ public sealed class SevenZipArchiveReader
         throw new InvalidOperationException($"Неизвестный результат определения next header kind: {detectRes}.");
     }
 
-    var headerRes = SevenZipHeaderReader.TryRead(_nextHeaderReader.NextHeader.Span, out var header, out _);
+    // NextHeader уже полностью в памяти, поэтому bytesConsumed нам не важен.
+    var headerRes = SevenZipHeaderReader.TryRead(
+        _nextHeaderReader.NextHeader.Span,
+        out var header,
+        out _);
 
     switch (headerRes)
     {
