@@ -6,9 +6,22 @@ namespace Lzma.Core.SevenZip;
 /// - MainStreamsInfo (потоки/папки/сабстримы)
 /// - FilesInfo (количество файлов и их свойства)
 /// </summary>
-public readonly struct SevenZipHeader(SevenZipStreamsInfo streamsInfo, SevenZipFilesInfo filesInfo)
+public readonly struct SevenZipHeader
 {
-  public SevenZipStreamsInfo StreamsInfo { get; } = streamsInfo;
+  public SevenZipHeader(SevenZipStreamsInfo streamsInfo, SevenZipFilesInfo filesInfo, byte[]? archiveProperties = null)
+  {
+    StreamsInfo = streamsInfo;
+    FilesInfo = filesInfo;
+    ArchiveProperties = archiveProperties;
+  }
 
-  public SevenZipFilesInfo FilesInfo { get; } = filesInfo;
+  public SevenZipStreamsInfo StreamsInfo { get; }
+
+  public SevenZipFilesInfo FilesInfo { get; }
+
+  /// <summary>
+  /// Опциональные свойства архива (NID::kArchiveProperties).
+  /// На текущем этапе мы их не парсим, поэтому здесь может быть null.
+  /// </summary>
+  public byte[]? ArchiveProperties { get; }
 }

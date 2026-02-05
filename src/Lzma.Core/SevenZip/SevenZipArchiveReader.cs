@@ -2,148 +2,127 @@ namespace Lzma.Core.SevenZip;
 
 public enum SevenZipArchiveReadResult
 {
-  Ok = 0,
-  NeedMoreInput = 1,
-  InvalidData = 2,
-  NotSupported = 3,
+  Ok,
+  NeedMoreInput,
+  InvalidData,
+  NotSupported,
 }
 
 /// <summary>
-/// Инкрементальный «сборщик» структуры архива 7z: читает сигнатуру,
-/// NextHeader и затем Header.
+/// <para>Инкрементальный reader для 7z-архивов: читает SignatureHeader, NextHeader и парсит Header.</para>
+/// <para>На этом шаге добавлена поддержка EncodedHeader (когда Header лежит в packed streams и должен быть распакован).</para>
 /// </summary>
 public sealed class SevenZipArchiveReader
 {
   private readonly SevenZipNextHeaderReader _nextHeaderReader = new();
 
-  // После успешного чтения (или фатальной ошибки) считаем ридер «терминальным».
   private bool _isTerminal;
   private SevenZipArchiveReadResult _terminalResult;
 
-  public SevenZipSignatureHeader SignatureHeader => _nextHeaderReader.SignatureHeader;
+  public SevenZipSignatureHeader? SignatureHeader { get; private set; }
 
-  public SevenZipHeader Header { get; private set; }
+  public SevenZipNextHeaderKind? NextHeaderKind { get; private set; }
 
-  /// <summary>
-  /// Последний результат, который вернул <see cref="Read"/>.
-  /// </summary>
-  public SevenZipArchiveReadResult Result { get; private set; }
+  public SevenZipHeader? Header { get; private set; }
 
   /// <summary>
-  /// Тип NextHeader (Header/EncodedHeader/Unknown).
-  /// Заполняется после того, как NextHeader полностью считан.
+  /// Байты packed streams (данные между SignatureHeader и NextHeader).
+  /// Для обычного Header не нужны, а для EncodedHeader содержат упакованный Header.
   /// </summary>
-  public SevenZipNextHeaderKind NextHeaderKind { get; private set; }
+  public ReadOnlyMemory<byte> PackedStreams { get; private set; }
 
   /// <summary>
-  /// Байты между сигнатурным заголовком и NextHeader (упакованные данные архива).
-  /// На текущем этапе полностью буферизуются внутри SevenZipNextHeaderReader.
+  /// Сырые байты NextHeader (то, что лежит в конце файла по смещению/размеру из SignatureHeader).
   /// </summary>
-  public ReadOnlyMemory<byte> PackedStreams => _nextHeaderReader.PackedStreams;
+  public ReadOnlyMemory<byte> NextHeaderBytes { get; private set; }
+
+  /// <summary>
+  /// Если NextHeaderKind == EncodedHeader — здесь будут распакованные байты обычного Header.
+  /// </summary>
+  public ReadOnlyMemory<byte> DecodedHeaderBytes { get; private set; }
 
   public SevenZipArchiveReadResult Read(ReadOnlySpan<byte> input, out int bytesConsumed)
   {
-    bytesConsumed = 0;
-
+    // После терминального результата больше ничего не читаем.
     if (_isTerminal)
     {
-      Result = _terminalResult;
+      bytesConsumed = 0;
       return _terminalResult;
     }
 
-    var nextHeaderRes = _nextHeaderReader.Read(input, out bytesConsumed);
+    var res = _nextHeaderReader.Read(input, out bytesConsumed);
+    if (res == SevenZipNextHeaderReadResult.NeedMoreInput)
+      return SevenZipArchiveReadResult.NeedMoreInput;
 
-    switch (nextHeaderRes)
+    if (res == SevenZipNextHeaderReadResult.InvalidData)
     {
-      case SevenZipNextHeaderReadResult.NeedMoreInput:
-        Result = SevenZipArchiveReadResult.NeedMoreInput;
-        return Result;
-
-      case SevenZipNextHeaderReadResult.InvalidData:
-        _isTerminal = true;
-        _terminalResult = SevenZipArchiveReadResult.InvalidData;
-        Result = _terminalResult;
-        return _terminalResult;
-
-      case SevenZipNextHeaderReadResult.NotSupported:
-        _isTerminal = true;
-        _terminalResult = SevenZipArchiveReadResult.NotSupported;
-        Result = _terminalResult;
-        return _terminalResult;
-
-      case SevenZipNextHeaderReadResult.Ok:
-        break;
-
-      default:
-        throw new InvalidOperationException($"Неизвестный результат чтения next header: {nextHeaderRes}.");
+      MakeTerminal(SevenZipArchiveReadResult.InvalidData);
+      return _terminalResult;
     }
+
+    // res == Ok: у нас есть SignatureHeader + packed streams + NextHeader bytes.
+    SignatureHeader ??= _nextHeaderReader.SignatureHeader;
+    PackedStreams = _nextHeaderReader.PackedStreams;
+    NextHeaderBytes = _nextHeaderReader.NextHeader;
 
     // Определяем тип NextHeader.
-    var detectRes = SevenZipNextHeaderKindDetector.TryDetect(_nextHeaderReader.NextHeader.Span, out var kind);
-    switch (detectRes)
+    var kindDetectRes = SevenZipNextHeaderKindDetector.TryDetect(NextHeaderBytes.Span, out var kind);
+    if (kindDetectRes == SevenZipNextHeaderKindDetectResult.NeedMoreInput)
+      return SevenZipArchiveReadResult.NeedMoreInput;
+
+    if (kindDetectRes == SevenZipNextHeaderKindDetectResult.InvalidData)
     {
-      case SevenZipNextHeaderKindDetectResult.Ok:
-        NextHeaderKind = kind;
-        break;
-
-      case SevenZipNextHeaderKindDetectResult.NeedMoreInput:
-      case SevenZipNextHeaderKindDetectResult.InvalidData:
-        // Неконсистентно: next header уже считан полностью.
-        _isTerminal = true;
-        _terminalResult = SevenZipArchiveReadResult.InvalidData;
-        Result = _terminalResult;
-        return _terminalResult;
-
-      default:
-        throw new InvalidOperationException($"Неизвестный результат определения next header kind: {detectRes}.");
+      MakeTerminal(SevenZipArchiveReadResult.InvalidData);
+      return _terminalResult;
     }
 
-    // NextHeader уже полностью в памяти, поэтому bytesConsumed нам не важен.
-    var headerRes = SevenZipHeaderReader.TryRead(
-        _nextHeaderReader.NextHeader.Span,
-        out var header,
-        out _);
+    NextHeaderKind = kind;
 
-    switch (headerRes)
+    if (kind == SevenZipNextHeaderKind.Header)
     {
-      case SevenZipHeaderReadResult.Ok:
-        Header = header;
-        _isTerminal = true;
-        _terminalResult = SevenZipArchiveReadResult.Ok;
-        Result = _terminalResult;
-        return _terminalResult;
-
-      case SevenZipHeaderReadResult.NeedMoreInput:
-        // Неконсистентно: на этом этапе у нас уже есть весь next header в памяти.
-        _isTerminal = true;
-        _terminalResult = SevenZipArchiveReadResult.InvalidData;
-        Result = _terminalResult;
-        return _terminalResult;
-
-      case SevenZipHeaderReadResult.InvalidData:
-        _isTerminal = true;
-        _terminalResult = SevenZipArchiveReadResult.InvalidData;
-        Result = _terminalResult;
-        return _terminalResult;
-
-      case SevenZipHeaderReadResult.NotSupported:
-        _isTerminal = true;
-        _terminalResult = SevenZipArchiveReadResult.NotSupported;
-        Result = _terminalResult;
-        return _terminalResult;
-
-      default:
-        throw new InvalidOperationException($"Неизвестный результат чтения Header: {headerRes}.");
+      switch (SevenZipHeaderReader.TryRead(NextHeaderBytes.Span, out SevenZipHeader header, out _))
+      {
+        case SevenZipHeaderReadResult.Ok:
+          Header = header;
+          MakeTerminal(SevenZipArchiveReadResult.Ok);
+          return _terminalResult;
+        case SevenZipHeaderReadResult.NeedMoreInput:
+          return SevenZipArchiveReadResult.NeedMoreInput;
+        case SevenZipHeaderReadResult.NotSupported:
+          MakeTerminal(SevenZipArchiveReadResult.NotSupported);
+          return _terminalResult;
+        default:
+          MakeTerminal(SevenZipArchiveReadResult.InvalidData);
+          return _terminalResult;
+      }
     }
+
+    // EncodedHeader
+    var decodeRes = SevenZipEncodedHeaderDecoder.TryDecode(
+      NextHeaderBytes.Span,
+      PackedStreams.Span,
+      out byte[] decodedHeaderBytes,
+      out SevenZipHeader decodedHeader);
+
+    if (decodeRes != SevenZipArchiveReadResult.Ok)
+    {
+      // NeedMoreInput здесь трактуем как повреждение, т.к. NextHeaderReader уже сообщил Ok.
+      MakeTerminal(decodeRes == SevenZipArchiveReadResult.NeedMoreInput
+        ? SevenZipArchiveReadResult.InvalidData
+        : decodeRes);
+      return _terminalResult;
+    }
+
+    DecodedHeaderBytes = decodedHeaderBytes;
+    Header = decodedHeader;
+
+    MakeTerminal(SevenZipArchiveReadResult.Ok);
+    return _terminalResult;
   }
 
-  public void Reset()
+  private void MakeTerminal(SevenZipArchiveReadResult result)
   {
-    _nextHeaderReader.Reset();
-    Header = default;
-    NextHeaderKind = default;
-    _isTerminal = false;
-    _terminalResult = default;
-    Result = default;
+    _isTerminal = true;
+    _terminalResult = result;
   }
 }

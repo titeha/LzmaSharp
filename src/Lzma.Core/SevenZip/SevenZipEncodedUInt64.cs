@@ -151,4 +151,27 @@ internal static class SevenZipEncodedUInt64
     bytesWritten = len;
     return WriteResult.Ok;
   }
+
+  /// <summary>
+  /// Пытается записать UInt64 в 7z-представлении прямо в <see cref="List{T}"/>.
+  /// </summary>
+  /// <remarks>
+  /// Это вспомогательная перегрузка, в первую очередь для тестов/строителей,
+  /// где удобно наращивать буфер через <see cref="List{T}.Add"/>.
+  /// </remarks>
+  internal static WriteResult TryWrite(List<byte> destination, ulong value, out int bytesWritten)
+  {
+    ArgumentNullException.ThrowIfNull(destination);
+
+    // Максимальная длина кодирования UInt64 в 7z-формате: 9 байт.
+    Span<byte> tmp = stackalloc byte[9];
+    var res = TryWrite(value, tmp, out bytesWritten);
+    if (res != WriteResult.Ok)
+      return res;
+
+    for (int i = 0; i < bytesWritten; i++)
+      destination.Add(tmp[i]);
+
+    return WriteResult.Ok;
+  }
 }

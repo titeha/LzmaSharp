@@ -36,10 +36,11 @@ public class SevenZipArchiveReaderTests
     Assert.Equal(expected, reader.SignatureHeader);
 
     Assert.Equal(SevenZipNextHeaderKind.Header, reader.NextHeaderKind);
+    Assert.True(reader.Header.HasValue);
 
     // Заголовок (Header) пустой => StreamsInfo нет, FilesInfo пустой.
-    Assert.Null(reader.Header.StreamsInfo);
-    Assert.Equal(0UL, reader.Header.FilesInfo.FileCount);
+    Assert.Null(reader.Header.Value.StreamsInfo);
+    Assert.Equal(0UL, reader.Header.Value.FilesInfo.FileCount);
   }
 
   [Fact]
@@ -53,7 +54,7 @@ public class SevenZipArchiveReaderTests
 
     byte[] file = new byte[SevenZipSignatureHeader.Size + nextHeaderBytes.Length];
 
-    const ulong nextHeaderOffset = 0;
+    ulong nextHeaderOffset = 0;
     uint nextHeaderCrc = Crc32.Compute(nextHeaderBytes);
 
     WriteSignatureHeader(file, nextHeaderOffset, (ulong)nextHeaderBytes.Length, nextHeaderCrc);
@@ -82,10 +83,9 @@ public class SevenZipArchiveReaderTests
     }
 
     Assert.Equal(file.Length, bytesConsumedTotal);
-    Assert.Equal(SevenZipArchiveReadResult.Ok, reader.Result);
 
-    Assert.Null(reader.Header.StreamsInfo);
-    Assert.Equal(0UL, reader.Header.FilesInfo.FileCount);
+    Assert.Null(reader.Header!.Value.StreamsInfo);
+    Assert.Equal(0UL, reader.Header.Value.FilesInfo.FileCount);
   }
 
   [Fact]
@@ -122,7 +122,7 @@ public class SevenZipArchiveReaderTests
 
     // StartHeader (стартовый заголовок) = NextHeaderOffset (8) + NextHeaderSize (8) + NextHeaderCRC (4)
     Span<byte> startHeader = stackalloc byte[20];
-    BinaryPrimitives.WriteUInt64LittleEndian(startHeader[..8], nextHeaderOffset);
+    BinaryPrimitives.WriteUInt64LittleEndian(startHeader.Slice(0, 8), nextHeaderOffset);
     BinaryPrimitives.WriteUInt64LittleEndian(startHeader.Slice(8, 8), nextHeaderSize);
     BinaryPrimitives.WriteUInt32LittleEndian(startHeader.Slice(16, 4), nextHeaderCrc);
 

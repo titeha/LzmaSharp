@@ -76,4 +76,52 @@ public static class Lzma2CopyEncoder
 
     return Encode(data, resetDictionaryAtStart);
   }
+
+  /// <summary>
+  /// <para>
+  /// Кодирует данные в LZMA2 поток только COPY-чанками, разбивая вход на чанки размером не более
+  /// <paramref name="maxChunkPayloadSize"/>.
+  /// </para>
+  /// <para>Этот метод специально нужен для тестов потокового декодирования, где важно иметь очень маленькие чанки.</para>
+  /// </summary>
+  public static byte[] EncodeChunkedAuto(ReadOnlySpan<byte> data, int dictionarySize, int maxChunkPayloadSize, out byte propertiesByte)
+  {
+    if (!Lzma2Properties.TryEncode(dictionarySize, out propertiesByte))
+      throw new ArgumentOutOfRangeException(nameof(dictionarySize), "Недопустимый размер словаря для LZMA2.");
+
+    if (maxChunkPayloadSize <= 0 || maxChunkPayloadSize > MaxChunkSize)
+      throw new ArgumentOutOfRangeException(
+                nameof(maxChunkPayloadSize),
+                $"Размер payload COPY-чанка должен быть в диапазоне [1..{MaxChunkSize}].");
+
+    int chunks = (data.Length + maxChunkPayloadSize - 1) / maxChunkPayloadSize;
+    int outLen = checked(chunks * 3 + data.Length + 1);
+    byte[] dst = new byte[outLen];
+
+    int o = 0;
+    int pos = 0;
+
+    while (pos < data.Length)
+    {
+      int chunkSize = Math.Min(maxChunkPayloadSize, data.Length - pos);
+
+      // Первый COPY-чанк сбрасывает словарь, следующие — нет.
+      dst[o++] = pos == 0 ? (byte)0x01 : (byte)0x02;
+      dst[o++] = (byte)((chunkSize - 1) >> 8);
+      dst[o++] = (byte)((chunkSize - 1) & 0xFF);
+
+      data.Slice(pos, chunkSize).CopyTo(dst.AsSpan(o, chunkSize));
+      o += chunkSize;
+      pos += chunkSize;
+    }
+
+    // Маркер конца LZMA2 потока.
+    dst[o++] = 0x00;
+
+    if (o != outLen)
+      throw new InvalidOperationException("Внутренняя ошибка: рассчитанный размер LZMA2 потока не совпал.");
+
+    return dst;
+  }
+
 }
