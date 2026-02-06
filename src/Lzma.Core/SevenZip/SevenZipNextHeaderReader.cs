@@ -175,14 +175,13 @@ public sealed class SevenZipNextHeaderReader
         // Парсим signature header (и внутри проверяем CRC start header).
         var res = SevenZipSignatureHeader.TryRead(
           _signatureHeaderBuffer,
-          out _signatureHeader,
-          out _);
+          out _signatureHeader);
 
-        if (res == SevenZipSignatureHeaderReadResult.InvalidData)
+        if (res == SevenZipSignatureHeader.ReadResult.InvalidData)
           return SetTerminal(SevenZipNextHeaderReadResult.InvalidData);
 
         // Теоретически сюда не придём, потому что у нас уже есть все 32 байта.
-        if (res == SevenZipSignatureHeaderReadResult.NeedMoreInput)
+        if (res == SevenZipSignatureHeader.ReadResult.NeedMoreInput)
           return SevenZipNextHeaderReadResult.NeedMoreInput;
 
         _hasSignatureHeader = true;

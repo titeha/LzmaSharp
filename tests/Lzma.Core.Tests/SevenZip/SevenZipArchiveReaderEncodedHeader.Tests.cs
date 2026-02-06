@@ -14,7 +14,7 @@ public class SevenZipArchiveReaderEncodedHeaderTests
     // Минимальный «настоящий» Header (в распакованном виде):
     // Header -> MainStreamsInfo (пусто) -> FilesInfo (0 файлов) -> End.
     byte[] plainHeader =
-    {
+    [
             SevenZipNid.Header,
             SevenZipNid.MainStreamsInfo,
             SevenZipNid.End,
@@ -22,7 +22,7 @@ public class SevenZipArchiveReaderEncodedHeaderTests
             0x00, // fileCount = 0 (EncodedUInt64)
             SevenZipNid.End,
             SevenZipNid.End,
-        };
+        ];
 
     // Сжимаем header в LZMA2 (без LZMA, просто copy-чанк).
     const int dictionarySize = 4096;
@@ -53,22 +53,18 @@ public class SevenZipArchiveReaderEncodedHeaderTests
     Assert.Equal(SevenZipArchiveReadResult.Ok, res);
     Assert.Equal(SevenZipNextHeaderKind.EncodedHeader, reader.NextHeaderKind);
 
-    Assert.NotNull(reader.DecodedHeaderBytes);
     Assert.Equal(plainHeader, reader.DecodedHeaderBytes);
 
     Assert.True(reader.Header.HasValue);
     Assert.Equal(0UL, reader.Header.Value.FilesInfo.FileCount);
 
-    Assert.NotNull(reader.PackedStreams);
     Assert.Equal(packedHeader, reader.PackedStreams);
   }
 
   private static void WriteSignatureHeader(SevenZipSignatureHeader sig, Span<byte> dest)
   {
     if (dest.Length < SevenZipSignatureHeader.Size)
-    {
       throw new ArgumentException("Буфер слишком маленький", nameof(dest));
-    }
 
     // Signature
     SevenZipSignatureHeader.Signature.CopyTo(dest);

@@ -42,7 +42,7 @@ public sealed class SevenZipSignatureHeaderTests
 
     var result = SevenZipSignatureHeader.TryRead(input, out var header, out int consumed);
 
-    Assert.Equal(SevenZipSignatureHeaderReadResult.Done, result);
+    Assert.Equal(SevenZipSignatureHeader.ReadResult.Ok, result);
     Assert.Equal(SevenZipSignatureHeader.Size, consumed);
 
     Assert.Equal(versionMajor, header.VersionMajor);
@@ -60,7 +60,7 @@ public sealed class SevenZipSignatureHeaderTests
     byte[] tooSmall1 = [0x37, 0x7A, 0xBC, 0xAF, 0x27];
 
     var result1 = SevenZipSignatureHeader.TryRead(tooSmall1, out _, out int consumed1);
-    Assert.Equal(SevenZipSignatureHeaderReadResult.NeedMoreInput, result1);
+    Assert.Equal(SevenZipSignatureHeader.ReadResult.NeedMoreInput, result1);
     Assert.Equal(0, consumed1);
 
     // сигнатура есть, но не хватает до 32 байт
@@ -73,7 +73,7 @@ public sealed class SevenZipSignatureHeaderTests
     tooSmall2[5] = 0x1C;
 
     var result2 = SevenZipSignatureHeader.TryRead(tooSmall2, out _, out int consumed2);
-    Assert.Equal(SevenZipSignatureHeaderReadResult.NeedMoreInput, result2);
+    Assert.Equal(SevenZipSignatureHeader.ReadResult.NeedMoreInput, result2);
     Assert.Equal(0, consumed2);
   }
 
@@ -90,7 +90,7 @@ public sealed class SevenZipSignatureHeaderTests
 
     var result = SevenZipSignatureHeader.TryRead(input, out _, out int consumed);
 
-    Assert.Equal(SevenZipSignatureHeaderReadResult.InvalidData, result);
+    Assert.Equal(SevenZipSignatureHeader.ReadResult.InvalidData, result);
     Assert.Equal(0, consumed);
   }
 
@@ -120,7 +120,7 @@ public sealed class SevenZipSignatureHeaderTests
 
     var result = SevenZipSignatureHeader.TryRead(input, out _, out int consumed);
 
-    Assert.Equal(SevenZipSignatureHeaderReadResult.InvalidData, result);
+    Assert.Equal(SevenZipSignatureHeader.ReadResult.InvalidData, result);
     Assert.Equal(0, consumed);
   }
 }

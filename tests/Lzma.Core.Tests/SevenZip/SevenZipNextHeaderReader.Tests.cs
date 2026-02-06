@@ -96,8 +96,7 @@ public sealed class SevenZipNextHeaderReaderTests
 
   private static byte[] Build7zFile(ulong nextHeaderOffset, byte[] nextHeader, out SevenZipSignatureHeader signatureHeader)
   {
-    if (nextHeader is null)
-      throw new ArgumentNullException(nameof(nextHeader));
+    ArgumentNullException.ThrowIfNull(nextHeader);
 
     // Поля StartHeader.
     ulong nextHeaderSize = (ulong)nextHeader.Length;
@@ -134,7 +133,7 @@ public sealed class SevenZipNextHeaderReaderTests
 
     // Проверим, что наш builder собрал корректный header.
     var readRes = SevenZipSignatureHeader.TryRead(header, out signatureHeader, out _);
-    Assert.Equal(SevenZipSignatureHeaderReadResult.Done, readRes);
+    Assert.Equal(SevenZipSignatureHeader.ReadResult.Ok, readRes);
 
     byte[] file = new byte[header.Length + (int)nextHeaderOffset + nextHeader.Length];
     header.CopyTo(file, 0);

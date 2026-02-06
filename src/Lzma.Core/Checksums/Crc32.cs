@@ -58,6 +58,19 @@ internal static class Crc32
     return Finalize(state);
   }
 
+  /// <summary>
+  /// Вычисляет CRC32 для <paramref name="data"/> и сравнивает с ожидаемым значением.
+  /// </summary>
+  /// <param name="data">Блок данных, для которого вычисляется CRC32.</param>
+  /// <param name="expectedCrc">Ожидаемое значение CRC32.</param>
+  /// <param name="actualCrc">Фактически вычисленное значение CRC32.</param>
+  /// <returns><see langword="true"/>, если CRC совпало; иначе <see langword="false"/>.</returns>
+  public static bool TryReadAndCheckCrc(ReadOnlySpan<byte> data, uint expectedCrc, out uint actualCrc)
+  {
+    actualCrc = Compute(data);
+    return actualCrc == expectedCrc;
+  }
+
   private static uint[] CreateTable()
   {
     var table = new uint[256];
