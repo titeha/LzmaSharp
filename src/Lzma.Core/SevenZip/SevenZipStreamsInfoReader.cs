@@ -27,7 +27,7 @@ public static class SevenZipStreamsInfoReader
     int offset = 0;
     while (true)
     {
-      if ((uint)offset >= (uint)input.Length)
+      if (offset >= input.Length)
         return SevenZipStreamsInfoReadResult.NeedMoreInput;
 
       byte nid = input[offset];

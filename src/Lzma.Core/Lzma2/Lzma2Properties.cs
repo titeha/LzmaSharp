@@ -195,7 +195,7 @@ public readonly struct Lzma2Properties
   private static uint ComputeDictionarySize(byte dictionaryProp)
   {
     // Формула из SDK. Для пропов 0..39 значения помещаются в UInt32.
-    int shift = (dictionaryProp / 2) + 11;
+    int shift = dictionaryProp / 2 + 11;
     uint mul = (uint)(2 | (dictionaryProp & 1));
     return mul << shift;
   }

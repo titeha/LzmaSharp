@@ -35,7 +35,7 @@ public static class SevenZipUnpackInfoReader
     cursor++;
 
     // Ожидаем kFolder
-    if ((uint)cursor >= (uint)input.Length)
+    if (cursor >= input.Length)
       return SevenZipUnpackInfoReadResult.NeedMoreInput;
     if (input[cursor] != SevenZipNid.Folder)
       return SevenZipUnpackInfoReadResult.InvalidData;
@@ -54,7 +54,7 @@ public static class SevenZipUnpackInfoReader
     int numFolders = (int)numFoldersU64;
 
     // External (0/1). На данном шаге поддерживаем только External == 0.
-    if ((uint)cursor >= (uint)input.Length)
+    if (cursor >= input.Length)
       return SevenZipUnpackInfoReadResult.NeedMoreInput;
     byte external = input[cursor++];
     if (external != 0)
@@ -85,11 +85,13 @@ public static class SevenZipUnpackInfoReader
 
       for (int c = 0; c < numCoders; c++)
       {
-        if ((uint)cursor >= (uint)input.Length)
+        if (cursor >= input.Length)
           return SevenZipUnpackInfoReadResult.NeedMoreInput;
 
         byte mainByte = input[cursor++];
 
+        // В текущей реализации длина MethodID хранится прямо в младших 4 битах (1..15).
+        // Ноль считаем некорректным значением.
         int codecIdSize = mainByte & 0x0F;
         if (codecIdSize == 0)
           return SevenZipUnpackInfoReadResult.InvalidData;
@@ -229,7 +231,7 @@ public static class SevenZipUnpackInfoReader
     }
 
     // Ожидаем kCodersUnpackSize
-    if ((uint)cursor >= (uint)input.Length)
+    if (cursor >= input.Length)
       return SevenZipUnpackInfoReadResult.NeedMoreInput;
     if (input[cursor] != SevenZipNid.CodersUnpackSize)
       return SevenZipUnpackInfoReadResult.InvalidData;
@@ -260,7 +262,7 @@ public static class SevenZipUnpackInfoReader
     }
 
     // Дальше либо kCRC (пока не поддерживаем), либо kEnd.
-    if ((uint)cursor >= (uint)input.Length)
+    if (cursor >= input.Length)
       return SevenZipUnpackInfoReadResult.NeedMoreInput;
 
     byte nidAfterSizes = input[cursor++];

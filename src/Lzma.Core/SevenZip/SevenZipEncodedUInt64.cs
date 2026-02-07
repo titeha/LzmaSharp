@@ -94,7 +94,7 @@ internal static class SevenZipEncodedUInt64
     for (int n = 0; n < 8; n++)
     {
       int bits = 7 * (n + 1);
-      if (value < (1UL << bits))
+      if (value < 1UL << bits)
         return 1 + n;
     }
 
