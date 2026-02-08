@@ -132,7 +132,7 @@ public readonly record struct SevenZipSignatureHeader(
     if (!Crc32.TryReadAndCheckCrc(startHeader, startHeaderCrc, out _))
       return ReadResult.InvalidData;
 
-    ulong nextHeaderOffset = BinaryPrimitives.ReadUInt64LittleEndian(startHeader.Slice(0, 8));
+    ulong nextHeaderOffset = BinaryPrimitives.ReadUInt64LittleEndian(startHeader[..8]);
     ulong nextHeaderSize = BinaryPrimitives.ReadUInt64LittleEndian(startHeader.Slice(8, 8));
     uint nextHeaderCrc = BinaryPrimitives.ReadUInt32LittleEndian(startHeader.Slice(16, 4));
 
@@ -150,7 +150,7 @@ public readonly record struct SevenZipSignatureHeader(
   private static uint ComputeStartHeaderCrc(ulong nextHeaderOffset, ulong nextHeaderSize, uint nextHeaderCrc)
   {
     Span<byte> startHeader = stackalloc byte[_startHeaderSize];
-    BinaryPrimitives.WriteUInt64LittleEndian(startHeader.Slice(0, 8), nextHeaderOffset);
+    BinaryPrimitives.WriteUInt64LittleEndian(startHeader[..8], nextHeaderOffset);
     BinaryPrimitives.WriteUInt64LittleEndian(startHeader.Slice(8, 8), nextHeaderSize);
     BinaryPrimitives.WriteUInt32LittleEndian(startHeader.Slice(16, 4), nextHeaderCrc);
 
