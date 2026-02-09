@@ -22,8 +22,8 @@ public enum SevenZipFolderDecodeResult
 /// </summary>
 public static class SevenZipFolderDecoder
 {
-  private const byte MethodIdCopy = 0x00;
-  private const byte MethodIdLzma2 = 0x21;
+  private const byte _methodIdCopy = 0x00;
+  private const byte _methodIdLzma2 = 0x21;
 
   public static SevenZipFolderDecodeResult DecodeFolderToArray(
       SevenZipStreamsInfo streamsInfo,
@@ -64,7 +64,22 @@ public static class SevenZipFolderDecoder
     if (folderUnpackSizes is null || folderUnpackSizes.Length == 0)
       return SevenZipFolderDecodeResult.InvalidData;
 
-    uint packStreamIndex = (uint)folder.PackedStreamIndices[0];
+    // В 7z folder хранит индексы packed streams внутри себя, а pack streams в PackInfo идут подряд
+    // по всем folder'ам. Поэтому глобальный индекс pack stream для текущего folder'а вычисляем как
+    // сумму NumPackedStreams у всех предыдущих folder'ов.
+    //
+    // Сейчас поддерживаем только простейший вариант: у folder ровно один packed stream.
+    if (folder.PackedStreamIndices[0] != 0)
+      return SevenZipFolderDecodeResult.NotSupported;
+
+    ulong packStreamIndexU64 = 0;
+    for (int i = 0; i < folderIndex; i++)
+      packStreamIndexU64 += (ulong)unpackInfo.Folders[i].PackedStreamIndices.Length;
+
+    if (packStreamIndexU64 > int.MaxValue)
+      return SevenZipFolderDecodeResult.NotSupported;
+
+    uint packStreamIndex = (uint)packStreamIndexU64;
     if (packStreamIndex >= (uint)packInfo.PackSizes.Length)
       return SevenZipFolderDecodeResult.InvalidData;
 
@@ -79,7 +94,7 @@ public static class SevenZipFolderDecoder
 
     int expectedUnpackSize = (int)unpackSizeU64;
 
-    if (IsSingleByteMethodId(coder.MethodId, MethodIdCopy))
+    if (IsSingleByteMethodId(coder.MethodId, _methodIdCopy))
     {
       // Copy: pack-stream содержит распакованные данные.
       output = packStream.ToArray();
@@ -88,7 +103,7 @@ public static class SevenZipFolderDecoder
           : SevenZipFolderDecodeResult.InvalidData;
     }
 
-    if (IsSingleByteMethodId(coder.MethodId, MethodIdLzma2))
+    if (IsSingleByteMethodId(coder.MethodId, _methodIdLzma2))
     {
       if (coder.Properties is null || coder.Properties.Length != 1)
         return SevenZipFolderDecodeResult.InvalidData;
@@ -134,13 +149,11 @@ public static class SevenZipFolderDecoder
       {
         ReadOnlySpan<byte> tail = packStream[bytesConsumed..];
         for (int i = 0; i < tail.Length; i++)
-        {
           if (tail[i] != 0)
           {
             output = [];
             return SevenZipFolderDecodeResult.InvalidData;
           }
-        }
       }
 
       return SevenZipFolderDecodeResult.Ok;

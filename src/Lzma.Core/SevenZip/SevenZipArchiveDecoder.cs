@@ -1,32 +1,89 @@
 namespace Lzma.Core.SevenZip;
 
-public enum SevenZipArchiveDecodeResult
-{
-  Ok,
-  NeedMoreData,
-  InvalidData,
-  NotSupported,
-}
-
 public static class SevenZipArchiveDecoder
 {
   /// <summary>
-  /// <para>Декодирует 7z-архив целиком и возвращает массив файлов (имя + содержимое).</para>
+  /// <para>Декодирует 7z-архив (в памяти) и возвращает все файлы в виде массива (имя + байты).</para>
   /// <para>
-  /// Ограничения текущей реализации (на этом шаге):
-  /// - Поддерживается только архив с 1 folder (одна цепочка кодеров).
-  /// - Поддерживается только 1 pack stream.
-  /// - Поддерживаются только файлы с потоками (без EmptyStreams).
+  /// Текущая реализация рассчитана на «простой» 7z, который генерируют наши тесты:
+  /// - Только 1 входной поток на folder (NumInStreams = 1)
+  /// - Только 1 выходной поток на coder (NumOutStreams = 1)
+  /// - LZMA2 (включая COPY-режим)
   /// </para>
   /// </summary>
-  public static SevenZipArchiveDecodeResult DecodeAllFilesToArray(ReadOnlySpan<byte> archive, out SevenZipDecodedFile[] files)
-    => DecodeAllFilesToArray(archive, out files, out _);
 
   /// <summary>
-  /// То же самое, что <see cref="DecodeAllFilesToArray(ReadOnlySpan{byte}, out SevenZipDecodedFile[])"/>,
-  /// но дополнительно возвращает количество байт, потреблённых ридером.
+  /// Декодирует 7z-архив, содержащий ровно один файл.
   /// </summary>
-  public static SevenZipArchiveDecodeResult DecodeAllFilesToArray(
+  public static SevenZipArchiveDecodeResult DecodeSingleFileToArray(ReadOnlySpan<byte> archiveBytes, out byte[] fileBytes, out string fileName)
+  {
+    SevenZipArchiveDecodeResult r = DecodeToArray(archiveBytes, out SevenZipDecodedFile[] decodedFiles);
+    if (r != SevenZipArchiveDecodeResult.Ok)
+    {
+      fileBytes = [];
+      fileName = string.Empty;
+      return r;
+    }
+
+    if (decodedFiles.Length != 1)
+    {
+      fileBytes = [];
+      fileName = string.Empty;
+      return SevenZipArchiveDecodeResult.NotSupported;
+    }
+
+    fileBytes = decodedFiles[0].Bytes;
+    fileName = decodedFiles[0].Name;
+    return SevenZipArchiveDecodeResult.Ok;
+  }
+
+  /// <summary>
+  /// Декодирует 7z-архив, содержащий ровно один файл.
+  /// </summary>
+  /// <remarks>
+  /// Этот перегруженный метод оставлен для совместимости с тестами/внешним кодом,
+  /// которому важно знать, сколько байт входа было обработано.
+  /// </remarks>
+  public static SevenZipArchiveDecodeResult DecodeSingleFileToArray(
+    ReadOnlySpan<byte> archiveBytes,
+    out byte[] fileBytes,
+    out string fileName,
+    out int bytesConsumed)
+  {
+    SevenZipArchiveDecodeResult r = DecodeToArray(archiveBytes, out SevenZipDecodedFile[] decodedFiles, out bytesConsumed);
+
+    if (r != SevenZipArchiveDecodeResult.Ok)
+    {
+      fileBytes = [];
+      fileName = string.Empty;
+      return r;
+    }
+
+    if (decodedFiles.Length != 1)
+    {
+      fileBytes = [];
+      fileName = string.Empty;
+      return SevenZipArchiveDecodeResult.NotSupported;
+    }
+
+    fileBytes = decodedFiles[0].Bytes;
+    fileName = decodedFiles[0].Name;
+    return SevenZipArchiveDecodeResult.Ok;
+  }
+
+  /// <summary>
+  /// Декодирует 7z-архив и возвращает все файлы.
+  /// </summary>
+  public static SevenZipArchiveDecodeResult DecodeAllFilesToArray(ReadOnlySpan<byte> archiveBytes, out SevenZipDecodedFile[] files)
+    => DecodeToArray(archiveBytes, out files);
+
+  public static SevenZipArchiveDecodeResult DecodeToArray(ReadOnlySpan<byte> archive, out SevenZipDecodedFile[] files)
+      => DecodeToArray(archive, out files, out _);
+
+  /// <summary>
+  /// То же самое, но дополнительно возвращает количество байт, потреблённых парсером заголовка 7z.
+  /// </summary>
+  public static SevenZipArchiveDecodeResult DecodeToArray(
     ReadOnlySpan<byte> archive,
     out SevenZipDecodedFile[] files,
     out int bytesConsumed)
@@ -34,193 +91,155 @@ public static class SevenZipArchiveDecoder
     files = [];
 
     SevenZipArchiveReader reader = new();
-    SevenZipArchiveReadResult readResult = reader.Read(archive, out bytesConsumed);
+    SevenZipArchiveReadResult read = reader.Read(archive, out bytesConsumed);
 
-    if (readResult == SevenZipArchiveReadResult.NeedMoreInput)
+    if (read == SevenZipArchiveReadResult.NeedMoreInput)
       return SevenZipArchiveDecodeResult.NeedMoreData;
-
-    if (readResult != SevenZipArchiveReadResult.Ok)
+    if (read == SevenZipArchiveReadResult.InvalidData)
       return SevenZipArchiveDecodeResult.InvalidData;
-
-    if (!reader.Header.HasValue)
-      return SevenZipArchiveDecodeResult.InvalidData;
-
-    SevenZipHeader header = reader.Header.Value;
-
-    // StreamsInfo в нашем API не Nullable, но в целях "защиты от некорректных данных"
-    // проверим на null всё равно.
-    SevenZipStreamsInfo? streamsInfoRef = header.StreamsInfo;
-    if (streamsInfoRef is null)
-      return SevenZipArchiveDecodeResult.InvalidData;
-
-    SevenZipStreamsInfo streamsInfo = streamsInfoRef;
-
-    if (!streamsInfo.PackInfo.HasValue)
-      return SevenZipArchiveDecodeResult.InvalidData;
-
-    SevenZipPackInfo packInfo = streamsInfo.PackInfo.Value;
-
-    SevenZipUnpackInfo? unpackInfoRef = streamsInfo.UnpackInfo;
-    if (unpackInfoRef is null)
-      return SevenZipArchiveDecodeResult.InvalidData;
-
-    SevenZipUnpackInfo unpackInfo = unpackInfoRef;
-
-    SevenZipFolder[] folders = unpackInfo.Folders;
-    if (folders.Length != 1)
+    if (read == SevenZipArchiveReadResult.NotSupported)
       return SevenZipArchiveDecodeResult.NotSupported;
+    if (read != SevenZipArchiveReadResult.Ok)
+      return SevenZipArchiveDecodeResult.InternalError;
 
-    // Пока поддерживаем только 1 pack stream.
-    if (packInfo.PackSizes.Length != 1)
-      return SevenZipArchiveDecodeResult.NotSupported;
-
-    int fileCount = (int)header.FilesInfo.FileCount;
-    if (fileCount <= 0)
-      return SevenZipArchiveDecodeResult.NotSupported;
-
-    if (!TryGetFileSizes(streamsInfo, unpackInfo, folderIndex: 0, fileCount, out ulong[] fileSizes))
-      return SevenZipArchiveDecodeResult.NotSupported;
-
-    if (fileSizes.Length != fileCount)
+    // В разных шагах эволюции проекта Header встречался и как SevenZipHeader,
+    // и как SevenZipHeader? — приводим к nullable, чтобы код оставался устойчивым.
+    SevenZipHeader? header = reader.Header;
+    if (!header.HasValue)
       return SevenZipArchiveDecodeResult.InvalidData;
 
-    // Декодируем folder (все sub-stream'ы идут подряд).
-    SevenZipFolderDecodeResult folderDecode = SevenZipFolderDecoder.DecodeFolderToArray(
-      streamsInfo,
-      reader.PackedStreams.Span,
-      folderIndex: 0,
-      out byte[] unpacked);
-
-    if (folderDecode == SevenZipFolderDecodeResult.NotSupported)
-      return SevenZipArchiveDecodeResult.NotSupported;
-
-    if (folderDecode != SevenZipFolderDecodeResult.Ok)
+    SevenZipStreamsInfo streamsInfo = header.Value.StreamsInfo;
+    if (streamsInfo is null)
       return SevenZipArchiveDecodeResult.InvalidData;
 
-    // Имена файлов (если нет имён — создадим заглушки).
-    string[] names = header.FilesInfo.Names ?? BuildFallbackNames(fileCount);
-    if (names.Length != fileCount)
-      names = BuildFallbackNames(fileCount);
+    SevenZipUnpackInfo? unpackInfo = streamsInfo.UnpackInfo;
+    if (streamsInfo.PackInfo is null || unpackInfo is null)
+      return SevenZipArchiveDecodeResult.InvalidData;
 
-    List<SevenZipDecodedFile> result = new(capacity: fileCount);
+    SevenZipFilesInfo filesInfo = header.Value.FilesInfo;
+    if (filesInfo.FileCount <= 0)
+      return SevenZipArchiveDecodeResult.InvalidData;
+    if (filesInfo.Names is null || filesInfo.Names.Length != (int)filesInfo.FileCount)
+      return SevenZipArchiveDecodeResult.InvalidData;
 
-    int cursor = 0;
-    for (int i = 0; i < fileCount; i++)
+    // ---- Подготавливаем «карту» потоков распаковки: folder -> набор unpack-стримов и их размеры.
+
+    int folderCount = unpackInfo.Folders.Length;
+    if (folderCount <= 0)
+      return SevenZipArchiveDecodeResult.InvalidData;
+
+    SevenZipSubStreamsInfo? sub = streamsInfo.SubStreamsInfo;
+
+    ulong[] numUnpackStreamsPerFolder;
+    ulong[][] unpackSizesPerFolder;
+
+    if (sub is not null)
     {
-      ulong sizeU64 = fileSizes[i];
-      if (sizeU64 > int.MaxValue)
+      numUnpackStreamsPerFolder = sub.NumUnpackStreamsPerFolder;
+      unpackSizesPerFolder = sub.UnpackSizesPerFolder;
+
+      if (numUnpackStreamsPerFolder.Length != folderCount)
+        return SevenZipArchiveDecodeResult.InvalidData;
+      if (unpackSizesPerFolder.Length != folderCount)
+        return SevenZipArchiveDecodeResult.InvalidData;
+    }
+    else
+    {
+      // Если SubStreamsInfo отсутствует, считаем что на каждый folder приходится ровно 1 распакованный поток
+      // с размером = общий размер распаковки folder'а.
+      numUnpackStreamsPerFolder = new ulong[folderCount];
+      unpackSizesPerFolder = new ulong[folderCount][];
+
+      if (unpackInfo.FolderUnpackSizes.Length != folderCount)
+        return SevenZipArchiveDecodeResult.InvalidData;
+
+      for (int i = 0; i < folderCount; i++)
+      {
+        numUnpackStreamsPerFolder[i] = 1;
+
+        ulong[] folderSizes = unpackInfo.FolderUnpackSizes[i];
+        if (folderSizes is null || folderSizes.Length == 0)
+          return SevenZipArchiveDecodeResult.InvalidData;
+
+        unpackSizesPerFolder[i] = [folderSizes[0]];
+      }
+    }
+
+    // В этой «учебной» реализации ожидаем, что количество unpack-стримов == количество файлов.
+    // Иначе нужно учитывать EmptyStreams/EmptyFiles, что требует расширенного парсинга FilesInfo.
+    ulong totalUnpackStreamsU64 = 0;
+    for (int i = 0; i < folderCount; i++)
+      totalUnpackStreamsU64 += numUnpackStreamsPerFolder[i];
+
+    if (totalUnpackStreamsU64 > int.MaxValue)
+      return SevenZipArchiveDecodeResult.NotSupported;
+
+    int totalUnpackStreams = (int)totalUnpackStreamsU64;
+    if (totalUnpackStreams != (int)filesInfo.FileCount)
+      return SevenZipArchiveDecodeResult.NotSupported;
+
+    ReadOnlySpan<byte> packed = reader.PackedStreams.Span;
+
+    List<SevenZipDecodedFile> decoded = new((int)filesInfo.FileCount);
+
+    int fileIndex = 0;
+
+    for (int folderIndex = 0; folderIndex < folderCount; folderIndex++)
+    {
+      SevenZipFolderDecodeResult folderRes = SevenZipFolderDecoder.DecodeFolderToArray(
+        streamsInfo,
+        packed,
+        folderIndex,
+        out byte[] folderUnpacked);
+
+      if (folderRes == SevenZipFolderDecodeResult.InvalidData)
+        return SevenZipArchiveDecodeResult.InvalidData;
+      if (folderRes == SevenZipFolderDecodeResult.NotSupported)
         return SevenZipArchiveDecodeResult.NotSupported;
+      if (folderRes != SevenZipFolderDecodeResult.Ok)
+        return SevenZipArchiveDecodeResult.InternalError;
 
-      int size = (int)sizeU64;
+      ulong expectedStreamsU64 = numUnpackStreamsPerFolder[folderIndex];
+      if (expectedStreamsU64 > int.MaxValue)
+        return SevenZipArchiveDecodeResult.NotSupported;
+      int expectedStreams = (int)expectedStreamsU64;
 
-      if ((uint)cursor > (uint)unpacked.Length)
+      ulong[] sizes = unpackSizesPerFolder[folderIndex];
+      if (sizes is null || sizes.Length != expectedStreams)
         return SevenZipArchiveDecodeResult.InvalidData;
 
-      if (cursor + size > unpacked.Length)
+      int cursor = 0;
+
+      for (int s = 0; s < expectedStreams; s++)
+      {
+        if (fileIndex >= (int)filesInfo.FileCount)
+          return SevenZipArchiveDecodeResult.InvalidData;
+
+        ulong sizeU64 = sizes[s];
+        if (sizeU64 > int.MaxValue)
+          return SevenZipArchiveDecodeResult.NotSupported;
+        int size = (int)sizeU64;
+
+        if (size > folderUnpacked.Length - cursor)
+          return SevenZipArchiveDecodeResult.InvalidData;
+
+        byte[] fileBytes = new byte[size];
+        Array.Copy(folderUnpacked, cursor, fileBytes, 0, size);
+        cursor += size;
+
+        decoded.Add(new SevenZipDecodedFile(filesInfo.Names[fileIndex], fileBytes));
+        fileIndex++;
+      }
+
+      // Лишние байты после разбиения по SubStreamsInfo считаем ошибкой формата.
+      if (cursor != folderUnpacked.Length)
         return SevenZipArchiveDecodeResult.InvalidData;
-
-      byte[] bytes = new byte[size];
-      unpacked.AsSpan(cursor, size).CopyTo(bytes);
-
-      result.Add(new SevenZipDecodedFile(names[i], bytes));
-      cursor += size;
     }
 
-    // Если остались лишние байты — на данном шаге считаем это некорректными данными.
-    if (cursor != unpacked.Length)
+    if (fileIndex != (int)filesInfo.FileCount)
       return SevenZipArchiveDecodeResult.InvalidData;
 
-    files = [.. result];
+    files = [.. decoded];
     return SevenZipArchiveDecodeResult.Ok;
-  }
-
-  /// <summary>
-  /// Декодирует 7z-архив с ОДНИМ файлом и возвращает его содержимое.
-  /// </summary>
-  public static SevenZipArchiveDecodeResult DecodeSingleFileToArray(
-    ReadOnlySpan<byte> archive,
-    out byte[] fileBytes,
-    out string? fileName,
-    out int bytesConsumed)
-  {
-    fileBytes = [];
-    fileName = null;
-
-    SevenZipArchiveDecodeResult r = DecodeAllFilesToArray(archive, out SevenZipDecodedFile[] files, out bytesConsumed);
-    if (r != SevenZipArchiveDecodeResult.Ok)
-      return r;
-
-    if (files.Length != 1)
-      return SevenZipArchiveDecodeResult.NotSupported;
-
-    fileName = files[0].Name;
-    fileBytes = files[0].Bytes;
-    return SevenZipArchiveDecodeResult.Ok;
-  }
-
-  private static string[] BuildFallbackNames(int fileCount)
-  {
-    string[] names = new string[fileCount];
-    for (int i = 0; i < fileCount; i++)
-      names[i] = $"file{i}.bin";
-
-    return names;
-  }
-
-  private static bool TryGetFileSizes(
-    SevenZipStreamsInfo streamsInfo,
-    SevenZipUnpackInfo unpackInfo,
-    int folderIndex,
-    int fileCount,
-    out ulong[] fileSizes)
-  {
-    // Для 1 файла без SubStreamsInfo размер берём из folder unpack size (1 out stream).
-    if (fileCount == 1 && streamsInfo.SubStreamsInfo is null)
-    {
-      if ((uint)folderIndex >= (uint)unpackInfo.FolderUnpackSizes.Length)
-      {
-        fileSizes = [];
-        return false;
-      }
-
-      ulong[] outSizes = unpackInfo.FolderUnpackSizes[folderIndex];
-      if (outSizes is null || outSizes.Length != 1)
-      {
-        fileSizes = [];
-        return false;
-      }
-
-      fileSizes = [outSizes[0]];
-      return true;
-    }
-
-    SevenZipSubStreamsInfo? subStreamsInfo = streamsInfo.SubStreamsInfo;
-    if (subStreamsInfo is null)
-    {
-      fileSizes = [];
-      return false;
-    }
-
-    if ((uint)folderIndex >= (uint)subStreamsInfo.UnpackSizesPerFolder.Length)
-    {
-      fileSizes = [];
-      return false;
-    }
-
-    ulong[] sizesForFolder = subStreamsInfo.UnpackSizesPerFolder[folderIndex];
-    if (sizesForFolder is null)
-    {
-      fileSizes = [];
-      return false;
-    }
-
-    if (sizesForFolder.Length != fileCount)
-    {
-      fileSizes = [];
-      return false;
-    }
-
-    fileSizes = sizesForFolder;
-    return true;
   }
 }

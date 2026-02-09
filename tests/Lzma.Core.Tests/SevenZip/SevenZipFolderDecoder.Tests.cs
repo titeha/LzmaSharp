@@ -153,9 +153,9 @@ public class SevenZipFolderDecoderTests
     ulong nextHeaderSize = (ulong)nextHeader.Length;
 
     SevenZipSignatureHeader sig = new(
-        nextHeaderOffset: nextHeaderOffset,
-        nextHeaderSize: nextHeaderSize,
-        nextHeaderCrc: nextHeaderCrc);
+        NextHeaderOffset: nextHeaderOffset,
+        NextHeaderSize: nextHeaderSize,
+        NextHeaderCrc: nextHeaderCrc);
 
     byte[] sigBytes = new byte[SevenZipSignatureHeader.TotalSize];
     sig.Write(sigBytes);

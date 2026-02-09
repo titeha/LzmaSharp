@@ -47,14 +47,14 @@ public readonly record struct SevenZipSignatureHeader(
   /// Удобный конструктор для тестов: версия берётся из констант,
   /// CRC стартового заголовка вычисляется автоматически.
   /// </summary>
-  public SevenZipSignatureHeader(ulong nextHeaderOffset, ulong nextHeaderSize, uint nextHeaderCrc)
+  public SevenZipSignatureHeader(ulong NextHeaderOffset, ulong NextHeaderSize, uint NextHeaderCrc)
     : this(
       MajorVersion,
       MinorVersion,
-      ComputeStartHeaderCrc(nextHeaderOffset, nextHeaderSize, nextHeaderCrc),
-      nextHeaderOffset,
-      nextHeaderSize,
-      nextHeaderCrc)
+      ComputeStartHeaderCrc(NextHeaderOffset, NextHeaderSize, NextHeaderCrc),
+      NextHeaderOffset,
+      NextHeaderSize,
+      NextHeaderCrc)
   {
   }
 
@@ -130,7 +130,9 @@ public readonly record struct SevenZipSignatureHeader(
     // StartHeader = [NextHeaderOffset (8), NextHeaderSize (8), NextHeaderCrc (4)]
     var startHeader = input.Slice(12, _startHeaderSize);
     if (!Crc32.TryReadAndCheckCrc(startHeader, startHeaderCrc, out _))
+    {
       return ReadResult.InvalidData;
+    }
 
     ulong nextHeaderOffset = BinaryPrimitives.ReadUInt64LittleEndian(startHeader[..8]);
     ulong nextHeaderSize = BinaryPrimitives.ReadUInt64LittleEndian(startHeader.Slice(8, 8));

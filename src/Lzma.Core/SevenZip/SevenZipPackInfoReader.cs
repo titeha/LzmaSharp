@@ -54,7 +54,7 @@ public static class SevenZipPackInfoReader
 
     while (true)
     {
-      if ((uint)cursor >= (uint)input.Length)
+      if (cursor >= input.Length)
         return SevenZipPackInfoReadResult.NeedMoreInput;
 
       byte nid = input[cursor++];

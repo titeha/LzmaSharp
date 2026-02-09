@@ -37,9 +37,9 @@ public class SevenZipArchiveReaderEncodedHeaderTests
 
     // 7z signature header указывает, что next header лежит сразу после packed streams.
     SevenZipSignatureHeader sig = new(
-        nextHeaderOffset: (ulong)packedHeader.Length,
-        nextHeaderSize: (ulong)nextHeader.Length,
-        nextHeaderCrc: nextHeaderCrc);
+        NextHeaderOffset: (ulong)packedHeader.Length,
+        NextHeaderSize: (ulong)nextHeader.Length,
+        NextHeaderCrc: nextHeaderCrc);
 
     byte[] archiveBytes = new byte[SevenZipSignatureHeader.Size + packedHeader.Length + nextHeader.Length];
 
