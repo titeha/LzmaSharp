@@ -110,11 +110,27 @@ public static class SevenZipFolderDecoder
 
       byte lzma2PropertiesByte = coder.Properties[0];
 
+      // В 7z LZMA2 properties — это 1 байт, допустимый диапазон: 0..40.
+      // Значения вне диапазона означают битый архив (InvalidData), а не "мы не поддерживаем".
+      if (!SevenZipLzma2Coder.TryDecodeDictionarySize(lzma2PropertiesByte, out uint dictionarySize))
+      {
+        output = [];
+        return SevenZipFolderDecodeResult.InvalidData;
+      }
+
+      // На этапе 1 не поддерживаем словари, которые не помещаются в int (prop=38..40).
+      // Это "валидно по формату", но неприемлемо по ресурсам.
+      if (dictionarySize > int.MaxValue)
+      {
+        output = [];
+        return SevenZipFolderDecodeResult.NotSupported;
+      }
+
       Lzma2DecodeResult decodeResult = Lzma2Decoder.DecodeToArray(
-          input: packStream,
-          dictionaryProp: lzma2PropertiesByte,
-          output: out output,
-          bytesConsumed: out int bytesConsumed);
+    input: packStream,
+    dictionaryProp: lzma2PropertiesByte,
+    output: out output,
+    bytesConsumed: out int bytesConsumed);
 
       // Явные ошибки пробрасываем как есть.
       if (decodeResult == Lzma2DecodeResult.NotSupported)
