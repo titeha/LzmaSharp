@@ -10,7 +10,7 @@ internal static class SevenZipEncodedHeaderDecoder
       out byte[] decodedHeaderBytes,
       out SevenZipHeader decodedHeader)
   {
-    decodedHeaderBytes = Array.Empty<byte>();
+    decodedHeaderBytes = [];
     decodedHeader = default;
 
     if (nextHeaderBytes.IsEmpty)
@@ -21,12 +21,12 @@ internal static class SevenZipEncodedHeaderDecoder
 
     // В 7z после NID.EncodedHeader идёт структура StreamsInfo (без отдельного маркера NID). Она начинается
     // непосредственно с PackInfo/UnpackInfo/... и заканчивается NID.End.
-    int offset = 1;
+    const int offset = 1;
 
     var streamsInfoRead = SevenZipStreamsInfoReader.TryRead(
         nextHeaderBytes[offset..],
         out SevenZipStreamsInfo streamsInfo,
-        out int streamsInfoBytesConsumed);
+        out _);
 
     switch (streamsInfoRead)
     {
@@ -99,7 +99,8 @@ internal static class SevenZipEncodedHeaderDecoder
     if (!Lzma2Properties.TryParse(lzma2PropsByte, out Lzma2Properties props))
       return SevenZipArchiveReadResult.InvalidData;
 
-    int dictionarySize = (int)props.DictionarySize;
+    if (!props.TryGetDictionarySizeInt32(out int dictionarySize))
+      return SevenZipArchiveReadResult.NotSupported;
 
     var decodeResult = Lzma2Decoder.DecodeToArray(payload, dictionarySize, out decodedHeaderBytes, out int bytesConsumed);
     if (decodeResult != Lzma2DecodeResult.Finished)
@@ -110,8 +111,16 @@ internal static class SevenZipEncodedHeaderDecoder
         _ => SevenZipArchiveReadResult.InvalidData,
       };
 
-    if (bytesConsumed != payload.Length)
+    if (bytesConsumed > payload.Length)
       return SevenZipArchiveReadResult.InvalidData;
+
+    if (bytesConsumed != payload.Length)
+    {
+      ReadOnlySpan<byte> tail = payload[bytesConsumed..];
+      for (int i = 0; i < tail.Length; i++)
+        if (tail[i] != 0)
+          return SevenZipArchiveReadResult.InvalidData;
+    }
 
     if (decodedHeaderBytes.Length != (int)unpackSize)
       return SevenZipArchiveReadResult.InvalidData;

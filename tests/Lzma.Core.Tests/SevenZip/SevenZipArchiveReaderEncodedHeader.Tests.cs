@@ -51,6 +51,127 @@ public sealed class SevenZipArchiveReaderEncodedHeaderTests
     Assert.Equal(plain, folderBytes);
   }
 
+  [Fact]
+  public void Read_EncodedHeader_Lzma2Lzma_PackPosNonZero_ДекодируетИЧитаетЗаголовок()
+  {
+    byte[] plainHeader =
+    [
+        SevenZipNid.Header,
+        SevenZipNid.MainStreamsInfo,
+        SevenZipNid.End,
+        SevenZipNid.FilesInfo,
+        0x00, // fileCount = 0 (EncodedUInt64)
+        SevenZipNid.End,
+        SevenZipNid.End,
+    ];
+
+    const int dictionarySize = 4096;
+    Assert.True(Lzma2Properties.TryEncode(dictionarySize, out byte lzma2PropsByte));
+
+    // Сжимаем header в LZMA2, но именно LZMA-чанком (не COPY).
+    var lzmaProps = new LzmaProperties(Lc: 3, Lp: 0, Pb: 2);
+    byte[] packedHeader = Lzma2LzmaEncoder.EncodeLiteralOnly(
+        data: plainHeader,
+        lzmaProperties: lzmaProps,
+        dictionarySize: dictionarySize,
+        out _);
+
+    // Делаем “мусорный” префикс в PackedStreams, чтобы PackPos был ненулевым.
+    byte[] prefix = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+
+    byte[] nextHeader = BuildNextHeader_EncodedHeader(
+        packPos: prefix.Length,
+        packedHeaderSize: packedHeader.Length,
+        unpackedHeaderSize: plainHeader.Length,
+        lzma2PropertiesByte: lzma2PropsByte);
+
+    uint nextHeaderCrc = Crc32.Compute(nextHeader);
+
+    SevenZipSignatureHeader sig = new(
+        NextHeaderOffset: (ulong)(prefix.Length + packedHeader.Length),
+        NextHeaderSize: (ulong)nextHeader.Length,
+        NextHeaderCrc: nextHeaderCrc);
+
+    byte[] archiveBytes = new byte[SevenZipSignatureHeader.Size + prefix.Length + packedHeader.Length + nextHeader.Length];
+    sig.Write(archiveBytes);
+
+    Buffer.BlockCopy(prefix, 0, archiveBytes, SevenZipSignatureHeader.Size, prefix.Length);
+    Buffer.BlockCopy(packedHeader, 0, archiveBytes, SevenZipSignatureHeader.Size + prefix.Length, packedHeader.Length);
+    Buffer.BlockCopy(nextHeader, 0, archiveBytes, SevenZipSignatureHeader.Size + prefix.Length + packedHeader.Length, nextHeader.Length);
+
+    SevenZipArchiveReader reader = new();
+    SevenZipArchiveReadResult res = reader.Read(archiveBytes, out _);
+
+    Assert.Equal(SevenZipArchiveReadResult.Ok, res);
+    Assert.Equal(SevenZipNextHeaderKind.EncodedHeader, reader.NextHeaderKind);
+    Assert.Equal(plainHeader, reader.DecodedHeaderBytes);
+
+    Assert.True(reader.Header.HasValue);
+    Assert.Equal(0UL, reader.Header.Value.FilesInfo.FileCount);
+
+    byte[] expectedPackedStreams = new byte[prefix.Length + packedHeader.Length];
+    Buffer.BlockCopy(prefix, 0, expectedPackedStreams, 0, prefix.Length);
+    Buffer.BlockCopy(packedHeader, 0, expectedPackedStreams, prefix.Length, packedHeader.Length);
+
+    Assert.Equal(expectedPackedStreams, reader.PackedStreams);
+  }
+
+  private static byte[] BuildNextHeader_EncodedHeader(int packPos, int packedHeaderSize, int unpackedHeaderSize, byte lzma2PropertiesByte)
+  {
+    byte[] buf = new byte[256];
+    int o = 0;
+
+    buf[o++] = SevenZipNid.EncodedHeader;
+
+    // StreamsInfo
+    buf[o++] = SevenZipNid.PackInfo;
+
+    // PackPos
+    SevenZipEncodedUInt64.TryWrite((ulong)packPos, buf.AsSpan(o), out int w);
+    o += w;
+
+    // NumPackStreams = 1
+    SevenZipEncodedUInt64.TryWrite(1, buf.AsSpan(o), out w);
+    o += w;
+
+    buf[o++] = SevenZipNid.Size;
+    SevenZipEncodedUInt64.TryWrite((ulong)packedHeaderSize, buf.AsSpan(o), out w);
+    o += w;
+
+    buf[o++] = SevenZipNid.End; // end PackInfo
+
+    // UnpackInfo
+    buf[o++] = SevenZipNid.UnpackInfo;
+    buf[o++] = SevenZipNid.Folder;
+
+    SevenZipEncodedUInt64.TryWrite(1, buf.AsSpan(o), out w); // NumFolders = 1
+    o += w;
+
+    buf[o++] = 0x00; // External = 0
+
+    // Folder
+    SevenZipEncodedUInt64.TryWrite(1, buf.AsSpan(o), out w); // NumCoders = 1
+    o += w;
+
+    buf[o++] = 0x21; // Coder main byte
+    buf[o++] = 0x21; // MethodId (LZMA2)
+
+    SevenZipEncodedUInt64.TryWrite(1, buf.AsSpan(o), out w); // Properties size = 1
+    o += w;
+
+    buf[o++] = lzma2PropertiesByte;
+
+    buf[o++] = SevenZipNid.CodersUnpackSize;
+    SevenZipEncodedUInt64.TryWrite((ulong)unpackedHeaderSize, buf.AsSpan(o), out w);
+    o += w;
+
+    buf[o++] = SevenZipNid.End; // end UnpackInfo
+    buf[o++] = SevenZipNid.End; // end StreamsInfo
+    buf[o++] = SevenZipNid.End; // end EncodedHeader
+
+    return buf.AsSpan(0, o).ToArray();
+  }
+
   private static byte[] Build7zArchive_SingleFile_EncodedHeader_Lzma2Lzma(
       ReadOnlySpan<byte> plainFileBytes,
       string fileName,
