@@ -269,7 +269,16 @@ public static class SevenZipArchiveDecoder
         return SevenZipArchiveDecodeResult.InvalidData;
     }
 
-    if (fileIndex != (int)filesInfo.FileCount)
+    // Если в конце остались файлы без потока (kEmptyStream), возвращаем их как пустые.
+    while (emptyStreams is not null &&
+           fileIndex < fileCount &&
+           emptyStreams[fileIndex])
+    {
+      decoded.Add(new SevenZipDecodedFile(filesInfo.Names[fileIndex], []));
+      fileIndex++;
+    }
+
+    if (fileIndex != fileCount)
       return SevenZipArchiveDecodeResult.InvalidData;
 
     files = [.. decoded];
