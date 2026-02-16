@@ -3,7 +3,7 @@ namespace Lzma.Core.SevenZip;
 /// <summary>
 /// Информация о файлах из блока FilesInfo в заголовке 7z.
 /// </summary>
-public readonly struct SevenZipFilesInfo(ulong fileCount, string[]? names, bool[]? emptyStreams)
+public readonly struct SevenZipFilesInfo(ulong fileCount, string[]? names, bool[]? emptyStreams = null)
 {
   /// <summary>
   /// Количество файлов в архиве.
@@ -25,10 +25,4 @@ public readonly struct SevenZipFilesInfo(ulong fileCount, string[]? names, bool[
   /// Если свойство отсутствует — null.
   /// </summary>
   public bool[]? EmptyStreams { get; } = emptyStreams;
-
-  public SevenZipFilesInfo(ulong fileCount, string[]? names)
-        : this(fileCount, names, emptyStreams: null)
-  {
-  }
-
 }

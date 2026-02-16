@@ -107,4 +107,48 @@ public sealed class SevenZipFilesInfoReaderTests
     Assert.Equal(SevenZipFilesInfoReadResult.InvalidData, r);
     Assert.Equal(0, consumed);
   }
+
+  [Fact]
+  public void TryRead_EmptyStreamVector_ЧитаетсяКорректно()
+  {
+    // numFiles = 3
+    // EmptyStream: [false, true, false] => 0b0100_0000 => 0x40
+    byte[] bytes =
+    [
+        SevenZipNid.FilesInfo,
+        0x03,
+        SevenZipNid.EmptyStream,
+        0x01,   // size = 1
+        0x40,   // bitfield
+        SevenZipNid.End,
+    ];
+
+    var r = SevenZipFilesInfoReader.TryRead(bytes, out SevenZipFilesInfo files, out int consumed);
+
+    Assert.Equal(SevenZipFilesInfoReadResult.Ok, r);
+    Assert.Equal(bytes.Length, consumed);
+
+    Assert.NotNull(files.EmptyStreams);
+    Assert.Equal(new[] { false, true, false }, files.EmptyStreams!);
+  }
+
+  [Fact]
+  public void TryRead_EmptyStreamVector_НеверныйРазмер_ЭтоInvalidData()
+  {
+    // numFiles = 9 => нужен 2-байтовый bitfield, но заявлен/передан 1 байт.
+    byte[] bytes =
+    [
+        SevenZipNid.FilesInfo,
+        0x09,
+        SevenZipNid.EmptyStream,
+        0x01,   // size = 1 (ошибка)
+        0xFF,
+        SevenZipNid.End,
+    ];
+
+    var r = SevenZipFilesInfoReader.TryRead(bytes, out _, out int consumed);
+
+    Assert.Equal(SevenZipFilesInfoReadResult.InvalidData, r);
+    Assert.Equal(0, consumed);
+  }
 }

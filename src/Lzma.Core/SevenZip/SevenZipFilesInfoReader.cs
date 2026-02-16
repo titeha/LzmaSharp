@@ -76,7 +76,7 @@ public static class SevenZipFilesInfoReader
         if (emptyStreams is not null)
           return SevenZipFilesInfoReadResult.InvalidData;
 
-        var vecRes = TryParseBoolVector(payload, fileCountInt, out emptyStreams);
+        var vecRes = TryParseEmptyStreamVector(payload, fileCountInt, out emptyStreams);
         if (vecRes != SevenZipFilesInfoReadResult.Ok)
           return vecRes;
       }
@@ -201,6 +201,42 @@ public static class SevenZipFilesInfoReader
 
       result[i] = (b & mask) != 0;
       mask >>= 1;
+    }
+
+    vector = result;
+    return SevenZipFilesInfoReadResult.Ok;
+  }
+
+  private static SevenZipFilesInfoReadResult TryParseEmptyStreamVector(
+  ReadOnlySpan<byte> payload,
+  int fileCount,
+  out bool[]? vector)
+  {
+    vector = null;
+
+    // kEmptyStream: for(NumFiles) BIT IsEmptyStream
+    // payload = ceil(NumFiles/8) байт, без AllAreDefined и без External.
+    if (fileCount == 0)
+    {
+      if (payload.Length != 0)
+        return SevenZipFilesInfoReadResult.InvalidData;
+
+      vector = [];
+      return SevenZipFilesInfoReadResult.Ok;
+    }
+
+    int bytesRequired = (fileCount + 7) / 8;
+    if (payload.Length != bytesRequired)
+      return SevenZipFilesInfoReadResult.InvalidData;
+
+    bool[] result = new bool[fileCount];
+
+    // Биты MSB -> LSB: 0x80, 0x40, 0x20, ... 0x01
+    for (int i = 0; i < fileCount; i++)
+    {
+      byte b = payload[i >> 3];
+      byte mask = (byte)(0x80 >> (i & 7));
+      result[i] = (b & mask) != 0;
     }
 
     vector = result;

@@ -14,13 +14,12 @@ public class SevenZipFilesInfoReaderEmptyStreamTests
     //   bits: [false, true, false] => 0x40 (0b0100_0000), т.к. биты идут 0x80,0x40,0x20...
     byte[] src =
     [
-        SevenZipNid.FilesInfo,
-            3,
-            SevenZipNid.EmptyStream,
-            2,
-            0,
-            0x40,
-            SevenZipNid.End
+      SevenZipNid.FilesInfo,
+      3,
+      SevenZipNid.EmptyStream,
+      1,
+      0x40,
+      SevenZipNid.End
     ];
 
     SevenZipFilesInfoReadResult r = SevenZipFilesInfoReader.TryRead(src, out SevenZipFilesInfo filesInfo, out int bytesConsumed);
