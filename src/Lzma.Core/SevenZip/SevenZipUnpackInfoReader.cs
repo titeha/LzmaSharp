@@ -261,13 +261,68 @@ public static class SevenZipUnpackInfoReader
       folderUnpackSizes[f] = sizes;
     }
 
-    // Дальше либо kCRC (пока не поддерживаем), либо kEnd.
+    // Дальше либо kCRC (UnPackDigests[NumFolders]), либо kEnd.
     if (cursor >= input.Length)
       return SevenZipUnpackInfoReadResult.NeedMoreInput;
 
     byte nidAfterSizes = input[cursor++];
-    if (nidAfterSizes == SevenZipNid.Crc) // TODO: Digests
-      return SevenZipUnpackInfoReadResult.NotSupported;
+
+    if (nidAfterSizes == SevenZipNid.Crc)
+    {
+      // Digests(NumFolders):
+      // BYTE AllAreDefined
+      // if (AllAreDefined == 0) { for(NumFolders) BIT Defined }
+      // UINT32 CRCs[NumDefined]
+      // См. 7zFormat.txt: Digests + Coders Info. :contentReference[oaicite:3]{index=3}
+
+      if (cursor >= input.Length)
+        return SevenZipUnpackInfoReadResult.NeedMoreInput;
+
+      byte allAreDefined = input[cursor++];
+
+      int definedCount;
+
+      if (allAreDefined == 1)
+        definedCount = numFolders;
+      else if (allAreDefined == 0)
+      {
+        int definedBytes = (numFolders + 7) / 8;
+        if (input.Length - cursor < definedBytes)
+          return SevenZipUnpackInfoReadResult.NeedMoreInput;
+
+        definedCount = 0;
+
+        // Биты MSB->LSB: 0x80, 0x40, ... 0x01
+        for (int i = 0; i < numFolders; i++)
+        {
+          byte b = input[cursor + (i >> 3)];
+          byte mask = (byte)(0x80 >> (i & 7));
+          if ((b & mask) != 0)
+            definedCount++;
+        }
+
+        cursor += definedBytes;
+      }
+      else
+        return SevenZipUnpackInfoReadResult.InvalidData;
+
+      ulong crcBytesU64 = (ulong)definedCount * 4UL;
+      if (crcBytesU64 > (ulong)(input.Length - cursor))
+        return SevenZipUnpackInfoReadResult.NeedMoreInput;
+
+      cursor += (int)crcBytesU64;
+
+      if (cursor >= input.Length)
+        return SevenZipUnpackInfoReadResult.NeedMoreInput;
+
+      byte endAfterCrc = input[cursor++];
+      if (endAfterCrc != SevenZipNid.End)
+        return SevenZipUnpackInfoReadResult.InvalidData;
+
+      unpackInfo = new SevenZipUnpackInfo(folders, folderUnpackSizes);
+      bytesConsumed = cursor;
+      return SevenZipUnpackInfoReadResult.Ok;
+    }
 
     if (nidAfterSizes != SevenZipNid.End)
       return SevenZipUnpackInfoReadResult.InvalidData;

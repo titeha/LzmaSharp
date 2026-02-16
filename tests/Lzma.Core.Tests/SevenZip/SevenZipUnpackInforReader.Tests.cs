@@ -95,29 +95,66 @@ public sealed class SevenZipUnpackInfoReaderTests
   }
 
   [Fact]
-  public void TryRead_Crc_NotSupported()
+  public void TryRead_Crc_Truncated_ReturnsNeedMoreInput_AndConsumesNothing()
   {
-    // То же, что минимальный кейс, но после unpack size идёт kCRC.
+    // То же, что минимальный кейс, но после unpack size идёт kCRC (и дальше данных не хватает).
     byte[] data =
     [
       SevenZipNid.UnpackInfo,
-      SevenZipNid.Folder,
-      0x01,
-      0x00,
+    SevenZipNid.Folder,
+    0x01,
+    0x00,
 
-      0x01,
-      0x01,
-      0x21,
+    0x01,
+    0x01,
+    0x21,
 
-      SevenZipNid.CodersUnpackSize,
-      0x05,
-      SevenZipNid.Crc,
-      0x00,
-    ];
+    SevenZipNid.CodersUnpackSize,
+    0x05,
+
+    SevenZipNid.Crc,
+    0x00, // AllAreDefined = 0, но дальше нужен битовый вектор Defined[NumFolders]
+  ];
 
     var res = SevenZipUnpackInfoReader.TryRead(data, out SevenZipUnpackInfo unpackInfo, out int consumed);
-    Assert.Equal(SevenZipUnpackInfoReadResult.NotSupported, res);
+
+    Assert.Equal(SevenZipUnpackInfoReadResult.NeedMoreInput, res);
     Assert.Equal(0, consumed);
     Assert.Null(unpackInfo);
+  }
+
+  [Fact]
+  public void TryRead_Crc_AllAreDefined_ReturnsOk()
+  {
+    byte[] data =
+    [
+      SevenZipNid.UnpackInfo,
+    SevenZipNid.Folder,
+    0x01,
+    0x00,
+
+    0x01,
+    0x01,
+    0x21,
+
+    SevenZipNid.CodersUnpackSize,
+    0x05,
+
+    SevenZipNid.Crc,
+    0x01,                   // AllAreDefined = 1
+    0x44, 0x33, 0x22, 0x11,  // CRC (1 шт)
+
+    SevenZipNid.End,
+  ];
+
+    var res = SevenZipUnpackInfoReader.TryRead(data, out SevenZipUnpackInfo unpackInfo, out int consumed);
+
+    Assert.Equal(SevenZipUnpackInfoReadResult.Ok, res);
+    Assert.Equal(data.Length, consumed);
+    Assert.NotNull(unpackInfo);
+    Assert.Single(unpackInfo.Folders);
+    Assert.Single(unpackInfo.FolderUnpackSizes);
+    Assert.Single(unpackInfo.FolderUnpackSizes[0]);
+    Assert.Equal((ulong)5, unpackInfo.FolderUnpackSizes[0][0]);
   }
 }
