@@ -33,6 +33,13 @@ public static class SevenZipFilesInfoReader
 
     string[]? names = null;
     bool[]? emptyStreams = null;
+    bool[]? emptyFiles = null;
+    bool[]? anti = null;
+
+    bool emptyFileSeen = false;
+    bool antiSeen = false;
+    ReadOnlySpan<byte> emptyFilePayload = default;
+    ReadOnlySpan<byte> antiPayload = default;
 
     while (true)
     {
@@ -79,13 +86,73 @@ public static class SevenZipFilesInfoReader
         var vecRes = TryParseEmptyStreamVector(payload, fileCountInt, out emptyStreams);
         if (vecRes != SevenZipFilesInfoReadResult.Ok)
           return vecRes;
+
+        if (emptyFileSeen && emptyFiles is null)
+        {
+          var res = TryParseEmptyStreamsSubVector(emptyFilePayload, emptyStreams, fileCountInt, out emptyFiles);
+          if (res != SevenZipFilesInfoReadResult.Ok)
+            return res;
+        }
+
+        if (antiSeen && anti is null)
+        {
+          var res = TryParseEmptyStreamsSubVector(antiPayload, emptyStreams, fileCountInt, out anti);
+          if (res != SevenZipFilesInfoReadResult.Ok)
+            return res;
+        }
+      }
+
+      if (nid == SevenZipNid.EmptyFile)
+      {
+        if (emptyFileSeen)
+          return SevenZipFilesInfoReadResult.InvalidData;
+
+        emptyFileSeen = true;
+        emptyFilePayload = payload;
+
+        if (emptyStreams is not null)
+        {
+          var res = TryParseEmptyStreamsSubVector(payload, emptyStreams, fileCountInt, out emptyFiles);
+          if (res != SevenZipFilesInfoReadResult.Ok)
+            return res;
+        }
+      }
+
+      if (nid == SevenZipNid.Anti)
+      {
+        if (antiSeen)
+          return SevenZipFilesInfoReadResult.InvalidData;
+
+        antiSeen = true;
+        antiPayload = payload;
+
+        if (emptyStreams is not null)
+        {
+          var res = TryParseEmptyStreamsSubVector(payload, emptyStreams, fileCountInt, out anti);
+          if (res != SevenZipFilesInfoReadResult.Ok)
+            return res;
+        }
       }
 
       // Пропускаем данные свойства (в т.ч. kName, мы уже распарсили payload).
       offset += size;
     }
 
-    filesInfo = new SevenZipFilesInfo(fileCount, names, emptyStreams);
+    if (emptyFileSeen && emptyFiles is null)
+    {
+      var res = TryParseEmptyStreamsSubVector(emptyFilePayload, emptyStreams, fileCountInt, out emptyFiles);
+      if (res != SevenZipFilesInfoReadResult.Ok)
+        return res;
+    }
+
+    if (antiSeen && anti is null)
+    {
+      var res = TryParseEmptyStreamsSubVector(antiPayload, emptyStreams, fileCountInt, out anti);
+      if (res != SevenZipFilesInfoReadResult.Ok)
+        return res;
+    }
+
+    filesInfo = new SevenZipFilesInfo(fileCount, names, emptyStreams, emptyFiles, anti);
     bytesConsumed = offset;
     return SevenZipFilesInfoReadResult.Ok;
   }
@@ -240,6 +307,58 @@ public static class SevenZipFilesInfoReader
     }
 
     vector = result;
+    return SevenZipFilesInfoReadResult.Ok;
+  }
+
+  private static SevenZipFilesInfoReadResult TryParseEmptyStreamsSubVector(
+  ReadOnlySpan<byte> payload,
+  bool[]? emptyStreams,
+  int fileCount,
+  out bool[]? perFile)
+  {
+    perFile = null;
+
+    int numEmptyStreams = 0;
+    if (emptyStreams is not null)
+    {
+      if (emptyStreams.Length != fileCount)
+        return SevenZipFilesInfoReadResult.InvalidData;
+
+      for (int i = 0; i < emptyStreams.Length; i++)
+        if (emptyStreams[i])
+          numEmptyStreams++;
+    }
+
+    int bytesRequired = (numEmptyStreams + 7) / 8;
+    if (payload.Length != bytesRequired)
+      return SevenZipFilesInfoReadResult.InvalidData;
+
+    bool[] result = new bool[fileCount];
+
+    if (numEmptyStreams == 0)
+    {
+      perFile = result;
+      return SevenZipFilesInfoReadResult.Ok;
+    }
+
+    int emptyIndex = 0;
+
+    // kEmptyFile/kAnti: for(EmptyStreams) BIT ...
+    // Биты MSB->LSB: 0x80, 0x40, ... 0x01
+    for (int i = 0; i < fileCount; i++)
+    {
+      if (emptyStreams?[i] != true)
+        continue;
+
+      int byteIndex = emptyIndex >> 3;
+      int bitIndex = emptyIndex & 7;
+      byte mask = (byte)(0x80 >> bitIndex);
+
+      result[i] = (payload[byteIndex] & mask) != 0;
+      emptyIndex++;
+    }
+
+    perFile = result;
     return SevenZipFilesInfoReadResult.Ok;
   }
 }

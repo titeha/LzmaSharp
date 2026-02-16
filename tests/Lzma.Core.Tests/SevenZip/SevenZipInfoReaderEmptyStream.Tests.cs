@@ -28,6 +28,6 @@ public class SevenZipFilesInfoReaderEmptyStreamTests
     Assert.Equal(src.Length, bytesConsumed);
 
     Assert.NotNull(filesInfo.EmptyStreams);
-    Assert.Equal(new[] { false, true, false }, filesInfo.EmptyStreams!);
+    Assert.Equal([false, true, false], filesInfo.EmptyStreams!);
   }
 }

@@ -93,7 +93,7 @@ public class Lzma2BlockHeaderTests
   public void Parse_InsufficientData_ReturnsZero()
   {
     var buffer = new byte[] { 0xC0, 0x01 }; // Недостаточно байт
-    var result = Lzma2BlockHeader.TryParse(buffer, out var header);
+    var result = Lzma2BlockHeader.TryParse(buffer, out _);
 
     Assert.Equal(0, result);
   }
@@ -102,7 +102,7 @@ public class Lzma2BlockHeaderTests
   public void Parse_InvalidControlByte_ReturnsZero()
   {
     var buffer = new byte[] { 0x03 }; // Недопустимый control byte
-    var result = Lzma2BlockHeader.TryParse(buffer, out var header);
+    var result = Lzma2BlockHeader.TryParse(buffer, out _);
 
     Assert.Equal(0, result);
   }

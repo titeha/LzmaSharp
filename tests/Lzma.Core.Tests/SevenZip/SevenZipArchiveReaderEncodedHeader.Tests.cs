@@ -200,7 +200,7 @@ public sealed class SevenZipArchiveReaderEncodedHeaderTests
         out _);
 
     // Properties байт (dictionary prop) для LZMA2 в 7z.
-    _ = Lzma2CopyEncoder.Encode(ReadOnlySpan<byte>.Empty, headerDictionarySize, out byte headerLzma2Prop);
+    _ = Lzma2CopyEncoder.Encode([], headerDictionarySize, out byte headerLzma2Prop);
 
     // 4) Outer NextHeader = EncodedHeader (StreamsInfo), который описывает encodedHeaderPackedStream.
     //    Важно: packPos != 0 (после данных файла).

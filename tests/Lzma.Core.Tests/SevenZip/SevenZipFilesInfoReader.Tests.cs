@@ -129,7 +129,7 @@ public sealed class SevenZipFilesInfoReaderTests
     Assert.Equal(bytes.Length, consumed);
 
     Assert.NotNull(files.EmptyStreams);
-    Assert.Equal(new[] { false, true, false }, files.EmptyStreams!);
+    Assert.Equal([false, true, false], files.EmptyStreams!);
   }
 
   [Fact]
