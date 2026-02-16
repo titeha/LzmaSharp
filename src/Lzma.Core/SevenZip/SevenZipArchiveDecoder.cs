@@ -119,8 +119,19 @@ public static class SevenZipArchiveDecoder
     SevenZipFilesInfo filesInfo = header.Value.FilesInfo;
     if (filesInfo.FileCount <= 0)
       return SevenZipArchiveDecodeResult.InvalidData;
-    if (filesInfo.Names is null || filesInfo.Names.Length != (int)filesInfo.FileCount)
+    if (filesInfo.FileCount > int.MaxValue)
+      return SevenZipArchiveDecodeResult.NotSupported;
+
+    int fileCount = (int)filesInfo.FileCount;
+
+    if (filesInfo.Names is null || filesInfo.Names.Length != fileCount)
       return SevenZipArchiveDecodeResult.InvalidData;
+
+    // kEmptyStream уже распарсен в FilesInfoReader; здесь только валидируем длину.
+    bool[]? emptyStreams = filesInfo.EmptyStreams;
+    if (emptyStreams is not null && emptyStreams.Length != fileCount)
+      return SevenZipArchiveDecodeResult.InvalidData;
+
 
     // ---- Подготавливаем «карту» потоков распаковки: folder -> набор unpack-стримов и их размеры.
 
@@ -165,8 +176,8 @@ public static class SevenZipArchiveDecoder
       }
     }
 
-    // В этой «учебной» реализации ожидаем, что количество unpack-стримов == количество файлов.
-    // Иначе нужно учитывать EmptyStreams/EmptyFiles, что требует расширенного парсинга FilesInfo.
+    // В 7z количество unpack-стримов обычно НЕ равно количеству файлов:
+    // kEmptyStream описывает файлы без потока данных.
     ulong totalUnpackStreamsU64 = 0;
     for (int i = 0; i < folderCount; i++)
       totalUnpackStreamsU64 += numUnpackStreamsPerFolder[i];
@@ -175,12 +186,25 @@ public static class SevenZipArchiveDecoder
       return SevenZipArchiveDecodeResult.NotSupported;
 
     int totalUnpackStreams = (int)totalUnpackStreamsU64;
-    if (totalUnpackStreams != (int)filesInfo.FileCount)
+
+    // Считаем количество НЕ-пустых файлов.
+    int nonEmptyFilesCount = fileCount;
+    if (emptyStreams is not null)
+    {
+      int cnt = 0;
+      for (int i = 0; i < fileCount; i++)
+        if (!emptyStreams[i])
+          cnt++;
+
+      nonEmptyFilesCount = cnt;
+    }
+
+    if (totalUnpackStreams != nonEmptyFilesCount)
       return SevenZipArchiveDecodeResult.NotSupported;
 
     ReadOnlySpan<byte> packed = reader.PackedStreams.Span;
 
-    List<SevenZipDecodedFile> decoded = new((int)filesInfo.FileCount);
+    List<SevenZipDecodedFile> decoded = new(fileCount);
 
     int fileIndex = 0;
 
@@ -212,10 +236,19 @@ public static class SevenZipArchiveDecoder
 
       for (int s = 0; s < expectedStreams; s++)
       {
-        if (fileIndex >= (int)filesInfo.FileCount)
-          return SevenZipArchiveDecodeResult.InvalidData;
+          // Пропускаем файлы без потока (kEmptyStream).
+          while (emptyStreams is not null &&
+                 fileIndex < fileCount &&
+                 emptyStreams[fileIndex])
+          {
+            decoded.Add(new SevenZipDecodedFile(filesInfo.Names[fileIndex], []));
+            fileIndex++;
+          }
 
-        ulong sizeU64 = sizes[s];
+          if (fileIndex >= fileCount)
+            return SevenZipArchiveDecodeResult.InvalidData;
+
+          ulong sizeU64 = sizes[s];
         if (sizeU64 > int.MaxValue)
           return SevenZipArchiveDecodeResult.NotSupported;
         int size = (int)sizeU64;
