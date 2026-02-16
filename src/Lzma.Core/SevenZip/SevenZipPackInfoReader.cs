@@ -51,6 +51,7 @@ public static class SevenZipPackInfoReader
 
     bool haveSizes = false;
     ulong[] sizes = [];
+    bool haveCrc = false;
 
     while (true)
     {
@@ -89,8 +90,60 @@ public static class SevenZipPackInfoReader
         continue;
       }
 
-      if (nid == SevenZipNid.Crc) // CRC пока не нужен в наших шагах; добавим поддержку позже.
-        return SevenZipPackInfoReadResult.NotSupported;
+      if (nid == SevenZipNid.Crc)
+      {
+        // kCRC в PackInfo кодируется как Digests(NumPackStreams):
+        // BYTE AllAreDefined; если 0 => далее BIT-вектор Defined[NumStreams]; затем CRCs[NumDefined] (UINT32).
+        // См. 7zFormat.txt: Digests + PackInfo. :contentReference[oaicite:3]{index=3}
+
+        if (!haveSizes)
+          return SevenZipPackInfoReadResult.InvalidData;
+
+        if (haveCrc)
+          return SevenZipPackInfoReadResult.InvalidData;
+
+        haveCrc = true;
+
+        if (cursor >= input.Length)
+          return SevenZipPackInfoReadResult.NeedMoreInput;
+
+        byte allAreDefined = input[cursor++];
+
+        int definedCount;
+
+        if (allAreDefined == 1)
+          definedCount = numPackStreams;
+        else if (allAreDefined == 0)
+        {
+          int definedBytes = (numPackStreams + 7) / 8;
+          if (input.Length - cursor < definedBytes)
+            return SevenZipPackInfoReadResult.NeedMoreInput;
+
+          definedCount = 0;
+
+          // Биты MSB->LSB: 0x80, 0x40, ... 0x01
+          for (int i = 0; i < numPackStreams; i++)
+          {
+            byte b = input[cursor + (i >> 3)];
+            byte mask = (byte)(0x80 >> (i & 7));
+            if ((b & mask) != 0)
+              definedCount++;
+          }
+
+          cursor += definedBytes;
+        }
+        else
+          return SevenZipPackInfoReadResult.InvalidData;
+
+        // CRCs идут подряд только для "defined" элементов.
+        // Каждый CRC = UINT32 (4 байта, little-endian).
+        ulong crcBytesU64 = (ulong)definedCount * 4UL;
+        if (crcBytesU64 > (ulong)(input.Length - cursor))
+          return SevenZipPackInfoReadResult.NeedMoreInput;
+
+        cursor += (int)crcBytesU64;
+        continue;
+      }
 
       return SevenZipPackInfoReadResult.InvalidData;
     }
