@@ -168,6 +168,44 @@ public class SevenZipSubStreamsInfoReaderTests
     Assert.Null(sub);
   }
 
+  [Fact]
+  public void TryRead_Crc_UnknownCountIsZero_ЕслиFolderHasCrc()
+  {
+    var coder = new SevenZipCoderInfo(
+      methodId: [0x21],
+      properties: [],
+      numInStreams: 1,
+      numOutStreams: 1);
+
+    var folder = new SevenZipFolder(
+      Coders: [coder],
+      BindPairs: [],
+      PackedStreamIndices: [0],
+      NumInStreams: 1,
+      NumOutStreams: 1);
+
+    var unpackInfo = new SevenZipUnpackInfo(
+      folders: [folder],
+      folderUnpackSizes: [[10UL]],
+      folderCrcDefined: [true]);
+
+    byte[] src =
+    [
+      SevenZipNid.SubStreamsInfo,
+    SevenZipNid.Crc,
+    0x01, // AllAreDefined=1, но numStreams=0 => CRC bytes отсутствуют
+    SevenZipNid.End,
+  ];
+
+    var result = SevenZipSubStreamsInfoReader.TryRead(src, unpackInfo, out var sub, out var bytesConsumed);
+
+    Assert.Equal(SevenZipSubStreamsInfoReadResult.Ok, result);
+    Assert.Equal(src.Length, bytesConsumed);
+    Assert.NotNull(sub);
+    Assert.Equal([1UL], sub!.NumUnpackStreamsPerFolder);
+    Assert.Equal([10UL], sub.UnpackSizesPerFolder[0]);
+  }
+
   private static SevenZipUnpackInfo CreateUnpackInfo(ulong folderUnpackSize)
   {
     var coder = new SevenZipCoderInfo(

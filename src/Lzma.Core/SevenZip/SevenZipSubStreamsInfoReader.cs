@@ -226,9 +226,38 @@ public static class SevenZipSubStreamsInfoReader
         // На этом этапе мы CRC не используем, но должны корректно пропустить секцию.
         // В нашей текущей модели считаем NumStreams = sum(NumUnpackStreamsPerFolder).
         // (Более точный расчёт зависит от наличия CRC на уровне folder в UnpackInfo.)
+        // kCRC в SubStreamsInfo: Digests для "количества потоков с неизвестным CRC".
+        // Если у folder ровно один sub-stream и CRC задан на уровне folder (UnpackInfo.kCRC),
+        // то для этого sub-stream CRC в SubStreamsInfo не ожидается.
+
+        bool[]? folderCrcDefined = unpackInfo.FolderCrcDefined;
+        if (folderCrcDefined is not null && folderCrcDefined.Length != folderCount)
+        {
+          subStreamsInfo = null;
+          bytesConsumed = 0;
+          return SevenZipSubStreamsInfoReadResult.InvalidData;
+        }
+
         ulong numStreamsU64 = 0;
+
         for (int f = 0; f < folderCount; f++)
-          numStreamsU64 += numUnpackStreamsPerFolder[f];
+        {
+          ulong n = numUnpackStreamsPerFolder[f];
+          if (n == 0)
+          {
+            subStreamsInfo = null;
+            bytesConsumed = 0;
+            return SevenZipSubStreamsInfoReadResult.InvalidData;
+          }
+
+          bool hasFolderCrc = folderCrcDefined is not null && folderCrcDefined[f];
+
+          // 1 stream + CRC на уровне folder => unknown CRC streams = 0
+          if (n == 1 && hasFolderCrc)
+            continue;
+
+          numStreamsU64 += n;
+        }
 
         if (numStreamsU64 > int.MaxValue)
         {
