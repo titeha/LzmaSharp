@@ -273,17 +273,22 @@ public static class SevenZipUnpackInfoReader
       // BYTE AllAreDefined
       // if (AllAreDefined == 0) { for(NumFolders) BIT Defined }
       // UINT32 CRCs[NumDefined]
-      // См. 7zFormat.txt: Digests + Coders Info. :contentReference[oaicite:3]{index=3}
 
       if (cursor >= input.Length)
         return SevenZipUnpackInfoReadResult.NeedMoreInput;
 
       byte allAreDefined = input[cursor++];
 
+      bool[] folderCrcDefined = new bool[numFolders];
       int definedCount;
 
       if (allAreDefined == 1)
+      {
+        for (int i = 0; i < numFolders; i++)
+          folderCrcDefined[i] = true;
+
         definedCount = numFolders;
+      }
       else if (allAreDefined == 0)
       {
         int definedBytes = (numFolders + 7) / 8;
@@ -297,7 +302,10 @@ public static class SevenZipUnpackInfoReader
         {
           byte b = input[cursor + (i >> 3)];
           byte mask = (byte)(0x80 >> (i & 7));
-          if ((b & mask) != 0)
+          bool isDefined = (b & mask) != 0;
+
+          folderCrcDefined[i] = isDefined;
+          if (isDefined)
             definedCount++;
         }
 
@@ -319,7 +327,8 @@ public static class SevenZipUnpackInfoReader
       if (endAfterCrc != SevenZipNid.End)
         return SevenZipUnpackInfoReadResult.InvalidData;
 
-      unpackInfo = new SevenZipUnpackInfo(folders, folderUnpackSizes);
+      // ВАЖНО: теперь передаём folderCrcDefined.
+      unpackInfo = new SevenZipUnpackInfo(folders, folderUnpackSizes, folderCrcDefined);
       bytesConsumed = cursor;
       return SevenZipUnpackInfoReadResult.Ok;
     }

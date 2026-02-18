@@ -4,7 +4,7 @@ namespace Lzma.Core.SevenZip;
 /// UnpackInfo из Next Header (7z).
 /// Здесь хранятся "Folders" (цепочки coder'ов) и размеры выходных потоков.
 /// </summary>
-public sealed class SevenZipUnpackInfo(SevenZipFolder[] folders, ulong[][] folderUnpackSizes)
+public sealed class SevenZipUnpackInfo(SevenZipFolder[] folders, ulong[][] folderUnpackSizes, bool[]? folderCrcDefined = null)
 {
   /// <summary>
   /// Массив папок (Folders) — каждая описывает цепочку coder'ов.
@@ -16,4 +16,12 @@ public sealed class SevenZipUnpackInfo(SevenZipFolder[] folders, ulong[][] folde
   /// [folderIndex][outStreamIndex].
   /// </summary>
   public ulong[][] FolderUnpackSizes { get; } = folderUnpackSizes ?? [];
+
+  /// <summary>
+  /// Если в UnpackInfo присутствует секция kCRC, здесь лежит флаг "CRC определён" для каждого folder.
+  /// Длина массива = Folders.Length.
+  /// </summary>
+  public bool[]? FolderCrcDefined { get; } = folderCrcDefined;
+
+  public bool HasFolderCrcDefined => FolderCrcDefined is not null;
 }
