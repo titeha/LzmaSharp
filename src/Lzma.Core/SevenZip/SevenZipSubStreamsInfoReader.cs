@@ -218,10 +218,80 @@ public static class SevenZipSubStreamsInfoReader
 
       if (nid == SevenZipNid.Crc)
       {
-        // На этом шаге CRC для sub-streams пока не поддерживаем.
-        subStreamsInfo = null;
-        bytesConsumed = 0;
-        return SevenZipSubStreamsInfoReadResult.NotSupported;
+        // kCRC в SubStreamsInfo: Digests(NumStreams)
+        // BYTE AllAreDefined
+        // if (AllAreDefined == 0) { for(NumStreams) BIT Defined }
+        // UINT32 CRCs[NumDefined]
+        //
+        // На этом этапе мы CRC не используем, но должны корректно пропустить секцию.
+        // В нашей текущей модели считаем NumStreams = sum(NumUnpackStreamsPerFolder).
+        // (Более точный расчёт зависит от наличия CRC на уровне folder в UnpackInfo.)
+        ulong numStreamsU64 = 0;
+        for (int f = 0; f < folderCount; f++)
+          numStreamsU64 += numUnpackStreamsPerFolder[f];
+
+        if (numStreamsU64 > int.MaxValue)
+        {
+          subStreamsInfo = null;
+          bytesConsumed = 0;
+          return SevenZipSubStreamsInfoReadResult.NotSupported;
+        }
+
+        int numStreams = (int)numStreamsU64;
+
+        if (offset >= src.Length)
+        {
+          subStreamsInfo = null;
+          bytesConsumed = 0;
+          return SevenZipSubStreamsInfoReadResult.NeedMoreInput;
+        }
+
+        byte allAreDefined = src[offset++];
+
+        int definedCount;
+
+        if (allAreDefined == 1)
+          definedCount = numStreams;
+        else if (allAreDefined == 0)
+        {
+          int definedBytes = (numStreams + 7) / 8;
+          if (src.Length - offset < definedBytes)
+          {
+            subStreamsInfo = null;
+            bytesConsumed = 0;
+            return SevenZipSubStreamsInfoReadResult.NeedMoreInput;
+          }
+
+          definedCount = 0;
+
+          // Биты MSB->LSB: 0x80, 0x40, ... 0x01
+          for (int i = 0; i < numStreams; i++)
+          {
+            byte b = src[offset + (i >> 3)];
+            byte mask = (byte)(0x80 >> (i & 7));
+            if ((b & mask) != 0)
+              definedCount++;
+          }
+
+          offset += definedBytes;
+        }
+        else
+        {
+          subStreamsInfo = null;
+          bytesConsumed = 0;
+          return SevenZipSubStreamsInfoReadResult.InvalidData;
+        }
+
+        ulong crcBytesU64 = (ulong)definedCount * 4UL;
+        if (crcBytesU64 > (ulong)(src.Length - offset))
+        {
+          subStreamsInfo = null;
+          bytesConsumed = 0;
+          return SevenZipSubStreamsInfoReadResult.NeedMoreInput;
+        }
+
+        offset += (int)crcBytesU64;
+        continue;
       }
 
       // Неожиданный/неподдерживаемый элемент.
