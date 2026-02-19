@@ -139,6 +139,35 @@ public class SevenZipFolderDecoderTests
   }
 
   [Fact]
+  public void DecodeSingleFile_ОдинФайл_ОдинFolder_Lzma2LzmaChunkedLiteralOnly_ВозвращаетИсходныеБайты()
+  {
+    // Важно: вход больше maxUnpackChunkSize, чтобы гарантировать несколько LZMA-чанков.
+    var plain = new byte[256];
+    for (int i = 0; i < plain.Length; i++)
+      plain[i] = (byte)(i * 31 + 7);
+
+    const string fileName = "file-lzma2.bin";
+
+    byte[] archive = Build7zArchive_SingleFile_SingleFolder_Lzma2LzmaChunkedLiteralOnly(
+      plainFileBytes: plain,
+      fileName: fileName,
+      dictionarySize: 1 << 20,
+      maxUnpackChunkSize: 64);
+
+    SevenZipArchiveDecodeResult r = SevenZipArchiveDecoder.DecodeSingleFileToArray(
+      archive,
+      out byte[] decoded,
+      out string? decodedName,
+      out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, r);
+    Assert.Equal(plain, decoded);
+    Assert.Equal(fileName, decodedName);
+    Assert.True(bytesConsumed > 0);
+    Assert.True(bytesConsumed <= archive.Length);
+  }
+
+  [Fact]
   public void DecodeFolderToArray_Lzma1_LiteralOnly_Returns_OriginalBytes()
   {
     var plain = new byte[256];
