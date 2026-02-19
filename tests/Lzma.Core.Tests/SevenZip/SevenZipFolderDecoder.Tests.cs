@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Text;
 
 using Lzma.Core.Checksums;
@@ -135,6 +136,57 @@ public class SevenZipFolderDecoderTests
 
     Assert.Equal(SevenZipFolderDecodeResult.Ok, decodeResult);
     Assert.Equal(plain, folderBytes);
+  }
+
+  [Fact]
+  public void DecodeFolderToArray_Lzma1_LiteralOnly_Returns_OriginalBytes()
+  {
+    var plain = new byte[256];
+    for (int i = 0; i < plain.Length; i++)
+      plain[i] = (byte)(i * 17 + 3);
+
+    var lzmaProps = new LzmaProperties(Lc: 3, Lp: 0, Pb: 2);
+    int dictionarySize = 1 << 20;
+
+    // Raw LZMA stream (без LZMA-Alone header).
+    byte[] packed = new LzmaEncoder(lzmaProps, dictionarySize).EncodeLiteralOnly(plain);
+
+    byte[] coderProps = new byte[5];
+    coderProps[0] = lzmaProps.ToByteOrThrow();
+    BinaryPrimitives.WriteUInt32LittleEndian(coderProps.AsSpan(1, 4), (uint)dictionarySize);
+
+    var packInfo = new SevenZipPackInfo(packPos: 0, packSizes: [(ulong)packed.Length]);
+
+    var coder = new SevenZipCoderInfo(
+      methodId: [0x03, 0x01, 0x01], // LZMA
+      properties: coderProps,
+      numInStreams: 1,
+      numOutStreams: 1);
+
+    var folder = new SevenZipFolder(
+      Coders: [coder],
+      BindPairs: [],
+      PackedStreamIndices: [0],
+      NumInStreams: 1,
+      NumOutStreams: 1);
+
+    var unpackInfo = new SevenZipUnpackInfo(
+      folders: [folder],
+      folderUnpackSizes: [[(ulong)plain.Length]]);
+
+    var streamsInfo = new SevenZipStreamsInfo(
+      packInfo: packInfo,
+      unpackInfo: unpackInfo,
+      subStreamsInfo: null);
+
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.DecodeFolderToArray(
+      streamsInfo,
+      packedStreams: packed,
+      folderIndex: 0,
+      output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.Ok, result);
+    Assert.Equal(plain, output);
   }
 
   private static byte[] Build7zArchive_SingleFile_SingleFolder_Lzma2LzmaChunkedLiteralOnly(

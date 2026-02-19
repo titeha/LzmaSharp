@@ -1,3 +1,6 @@
+using System.Buffers.Binary;
+
+using Lzma.Core.Lzma1;
 using Lzma.Core.Lzma2;
 
 namespace Lzma.Core.SevenZip;
@@ -172,6 +175,89 @@ public static class SevenZipFolderDecoder
           }
       }
 
+      return SevenZipFolderDecodeResult.Ok;
+    }
+
+    // LZMA (7z) method id = { 03 01 01 }, properties = 5 bytes:
+    // [0] = LZMA property byte (lc/lp/pb)
+    // [1..4] = dictionary size (UInt32 LE).
+    if (coder.MethodId.Length == 3 &&
+        coder.MethodId[0] == 0x03 &&
+        coder.MethodId[1] == 0x01 &&
+        coder.MethodId[2] == 0x01)
+    {
+      if (coder.Properties is null || coder.Properties.Length != 5)
+      {
+        output = [];
+        return SevenZipFolderDecodeResult.InvalidData;
+      }
+
+      byte lzmaPropsByte = coder.Properties[0];
+      if (!LzmaProperties.TryParse(lzmaPropsByte, out LzmaProperties lzmaProps))
+      {
+        output = [];
+        return SevenZipFolderDecodeResult.InvalidData;
+      }
+
+      uint dictionarySizeU32 = BinaryPrimitives.ReadUInt32LittleEndian(coder.Properties.AsSpan(1, 4));
+      if (dictionarySizeU32 == 0)
+      {
+        output = [];
+        return SevenZipFolderDecodeResult.InvalidData;
+      }
+
+      if (dictionarySizeU32 > int.MaxValue)
+      {
+        output = [];
+        return SevenZipFolderDecodeResult.NotSupported;
+      }
+
+      int dictionarySize = (int)dictionarySizeU32;
+
+      // В 7z ожидаемый размер известен из header'а, поэтому декодируем ровно в буфер нужного размера.
+      output = new byte[expectedUnpackSize];
+      var decoder = new LzmaDecoder(lzmaProps, dictionarySize);
+
+      LzmaDecodeResult decodeResult = decoder.Decode(
+        src: packStream,
+        bytesConsumed: out int bytesConsumed,
+        dst: output,
+        bytesWritten: out int bytesWritten,
+        progress: out _);
+
+      if (decodeResult == LzmaDecodeResult.NotImplemented)
+      {
+        output = [];
+        return SevenZipFolderDecodeResult.NotSupported;
+      }
+
+      if (decodeResult == LzmaDecodeResult.InvalidData)
+      {
+        output = [];
+        return SevenZipFolderDecodeResult.InvalidData;
+      }
+
+      // Для 7z вход уже целиком в памяти: NeedMoreInput означает "поток обрезан/битый".
+      if (decodeResult == LzmaDecodeResult.NeedsMoreInput)
+      {
+        output = [];
+        return SevenZipFolderDecodeResult.InvalidData;
+      }
+
+      if (bytesWritten != expectedUnpackSize)
+      {
+        output = [];
+        return SevenZipFolderDecodeResult.InvalidData;
+      }
+
+      if ((uint)bytesConsumed > (uint)packStream.Length)
+      {
+        output = [];
+        return SevenZipFolderDecodeResult.InvalidData;
+      }
+
+      // В отличие от LZMA2, для raw LZMA мы НЕ валидируем хвост: при известном unpackSize
+      // нормальны случаи, когда часть байт остаётся неиспользованной (flush/range tail).
       return SevenZipFolderDecodeResult.Ok;
     }
 
