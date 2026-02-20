@@ -52,6 +52,78 @@ public sealed class SevenZipArchiveReaderEncodedHeaderTests
   }
 
   [Fact]
+  public void Read_Потоково_EncodedNextHeader_Lzma2Lzma_WithNonZeroPackPos_Ok_AndFileDecodes()
+  {
+    // Небольшой, но не тривиальный вход.
+    byte[] plain = new byte[256];
+    for (int i = 0; i < plain.Length; i++)
+      plain[i] = (byte)(i * 31 + 7);
+
+    byte[] archive = Build7zArchive_SingleFile_EncodedHeader_Lzma2Lzma(
+      plainFileBytes: plain,
+      fileName: "file.bin",
+      fileDictionarySize: 1 << 20,
+      headerDictionarySize: 1 << 20,
+      headerMaxUnpackChunkSize: 64);
+
+    var reader = new SevenZipArchiveReader();
+
+    // Подаём вход кусками (стресс для SignatureHeader / skip / NextHeader).
+    int totalConsumed = 0;
+    int patternIndex = 0;
+    int[] chunkPattern = [1, 2, 3, 4, 5];
+
+    SevenZipArchiveReadResult res = SevenZipArchiveReadResult.NeedMoreInput;
+
+    while (totalConsumed < archive.Length)
+    {
+      int remaining = archive.Length - totalConsumed;
+      int take = Math.Min(remaining, chunkPattern[patternIndex++ % chunkPattern.Length]);
+
+      res = reader.Read(archive.AsSpan(totalConsumed, take), out int consumed);
+
+      Assert.InRange(consumed, 0, take);
+      totalConsumed += consumed;
+
+      if (res == SevenZipArchiveReadResult.Ok)
+        break;
+
+      Assert.Equal(SevenZipArchiveReadResult.NeedMoreInput, res);
+
+      // Контракт: при NeedMoreInput reader должен забирать весь переданный кусок.
+      Assert.Equal(take, consumed);
+      Assert.True(consumed > 0);
+    }
+
+    Assert.Equal(SevenZipArchiveReadResult.Ok, res);
+    Assert.Equal(archive.Length, totalConsumed);
+
+    // Терминальное поведение: после Ok ничего не потребляем.
+    ReadOnlySpan<byte> extra = stackalloc byte[1];
+    Assert.Equal(SevenZipArchiveReadResult.Ok, reader.Read(extra, out int extraConsumed));
+    Assert.Equal(0, extraConsumed);
+
+    // Дальше — те же проверки, что и в непотоковом тесте.
+    Assert.True(reader.Header.HasValue);
+
+    SevenZipHeader header = reader.Header.Value;
+    Assert.Equal(1UL, header.FilesInfo.FileCount);
+    Assert.True(header.FilesInfo.HasNames);
+    Assert.Equal("file.bin", header.FilesInfo.Names![0]);
+
+    ReadOnlySpan<byte> packedStreams = reader.PackedStreams.Span;
+
+    SevenZipFolderDecodeResult decodeResult = SevenZipFolderDecoder.DecodeFolderToArray(
+      streamsInfo: header.StreamsInfo,
+      packedStreams: packedStreams,
+      folderIndex: 0,
+      output: out byte[] folderBytes);
+
+    Assert.Equal(SevenZipFolderDecodeResult.Ok, decodeResult);
+    Assert.Equal(plain, folderBytes);
+  }
+
+  [Fact]
   public void Read_EncodedNextHeader_Lzma2Lzma_InnerHeader_СArchiveProperties_ИAdditionalStreamsInfo_Ok_AndFileDecodes()
   {
     byte[] plain = new byte[256];
