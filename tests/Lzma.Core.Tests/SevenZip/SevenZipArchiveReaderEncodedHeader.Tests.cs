@@ -52,6 +52,52 @@ public sealed class SevenZipArchiveReaderEncodedHeaderTests
   }
 
   [Fact]
+  public void Read_EncodedNextHeader_Lzma2Lzma_InnerHeader_СArchiveProperties_ИAdditionalStreamsInfo_Ok_AndFileDecodes()
+  {
+    byte[] plain = new byte[256];
+    for (int i = 0; i < plain.Length; i++)
+      plain[i] = (byte)(i * 31 + 7);
+
+    byte[] archive = Build7zArchive_SingleFile_EncodedHeader_Lzma2Lzma(
+      plainFileBytes: plain,
+      fileName: "file.bin",
+      fileDictionarySize: 1 << 20,
+      headerDictionarySize: 1 << 20,
+      headerMaxUnpackChunkSize: 64,
+      includeArchivePropertiesAndAdditionalStreamsInfoInInnerHeader: true);
+
+    var reader = new SevenZipArchiveReader();
+    SevenZipArchiveReadResult readResult = reader.Read(archive, out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveReadResult.Ok, readResult);
+    Assert.Equal(archive.Length, bytesConsumed);
+    Assert.Equal(SevenZipNextHeaderKind.EncodedHeader, reader.NextHeaderKind);
+
+    // Фиксируем, что в распакованных байтах Header реально есть эти секции.
+    byte[] decodedHeaderBytes = reader.DecodedHeaderBytes.Span.ToArray();
+    Assert.Contains(SevenZipNid.ArchiveProperties, decodedHeaderBytes);
+    Assert.Contains(SevenZipNid.AdditionalStreamsInfo, decodedHeaderBytes);
+
+    Assert.True(reader.Header.HasValue);
+    SevenZipHeader header = reader.Header.Value;
+
+    Assert.Equal(1UL, header.FilesInfo.FileCount);
+    Assert.True(header.FilesInfo.HasNames);
+    Assert.Equal("file.bin", header.FilesInfo.Names![0]);
+
+    ReadOnlySpan<byte> packedStreams = reader.PackedStreams.Span;
+
+    SevenZipFolderDecodeResult decodeResult = SevenZipFolderDecoder.DecodeFolderToArray(
+      streamsInfo: header.StreamsInfo,
+      packedStreams: packedStreams,
+      folderIndex: 0,
+      output: out byte[] folderBytes);
+
+    Assert.Equal(SevenZipFolderDecodeResult.Ok, decodeResult);
+    Assert.Equal(plain, folderBytes);
+  }
+
+  [Fact]
   public void Read_EncodedHeader_Lzma2Lzma_PackPosNonZero_ДекодируетИЧитаетЗаголовок()
   {
     byte[] plainHeader =
@@ -173,11 +219,12 @@ public sealed class SevenZipArchiveReaderEncodedHeaderTests
   }
 
   private static byte[] Build7zArchive_SingleFile_EncodedHeader_Lzma2Lzma(
-      ReadOnlySpan<byte> plainFileBytes,
-      string fileName,
-      int fileDictionarySize,
-      int headerDictionarySize,
-      int headerMaxUnpackChunkSize)
+    ReadOnlySpan<byte> plainFileBytes,
+    string fileName,
+    int fileDictionarySize,
+    int headerDictionarySize,
+    int headerMaxUnpackChunkSize,
+    bool includeArchivePropertiesAndAdditionalStreamsInfoInInnerHeader = false)
   {
     // 1) Packed stream данных файла (COPY — чтобы изолировать тест на EncodedHeader).
     byte[] filePackedStream = Lzma2CopyEncoder.Encode(plainFileBytes, fileDictionarySize, out byte fileLzma2Prop);
@@ -188,6 +235,9 @@ public sealed class SevenZipArchiveReaderEncodedHeaderTests
         unpackSize: (ulong)plainFileBytes.Length,
         fileName: fileName,
         lzma2PropertiesByte: fileLzma2Prop);
+
+    if (includeArchivePropertiesAndAdditionalStreamsInfoInInnerHeader)
+      innerHeader = AddArchivePropertiesAndAdditionalStreamsInfo(innerHeader);
 
     // 3) Packed stream для EncodedHeader: LZMA2 с LZMA-чанками.
     var lzmaProps = new LzmaProperties(Lc: 3, Lp: 0, Pb: 2);
@@ -234,6 +284,33 @@ public sealed class SevenZipArchiveReaderEncodedHeaderTests
     outerNextHeader.CopyTo(archive.AsSpan(sigBytes.Length + filePackedStream.Length + encodedHeaderPackedStream.Length));
 
     return archive;
+  }
+
+  private static byte[] AddArchivePropertiesAndAdditionalStreamsInfo(byte[] baseHeader)
+  {
+    // baseHeader должен быть валидным Header и начинаться с NID.Header.
+    if (baseHeader.Length == 0 || baseHeader[0] != SevenZipNid.Header)
+      throw new ArgumentException("Ожидается Header, начинающийся с NID.Header.", nameof(baseHeader));
+
+    // Вставляем секции после первого байта (Header), перед MainStreamsInfo.
+    byte[] prefix =
+    [
+      SevenZipNid.Header,
+
+    SevenZipNid.ArchiveProperties,
+    0x19,         // PropertyType (любой != 0)
+    0x01,         // PropertySize = 1 (EncodedUInt64)
+    0xAA,         // PropertyData[1]
+    SevenZipNid.End,
+
+    SevenZipNid.AdditionalStreamsInfo,
+    SevenZipNid.End, // пустой StreamsInfo
+  ];
+
+    byte[] result = new byte[prefix.Length + baseHeader.Length - 1];
+    prefix.CopyTo(result, 0);
+    baseHeader.AsSpan(1).CopyTo(result.AsSpan(prefix.Length));
+    return result;
   }
 
   private static byte[] BuildInnerHeader_SingleFile_SingleFolder_Lzma2(
