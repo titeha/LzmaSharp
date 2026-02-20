@@ -108,6 +108,15 @@ public static class SevenZipArchiveDecoder
     if (!header.HasValue)
       return SevenZipArchiveDecodeResult.InvalidData;
 
+    SevenZipFilesInfo filesInfo = header.Value.FilesInfo;
+
+    // Пустой архив: файлов нет, потоков может не быть.
+    if (filesInfo.FileCount == 0)
+    {
+      files = [];
+      return SevenZipArchiveDecodeResult.Ok;
+    }
+
     SevenZipStreamsInfo streamsInfo = header.Value.StreamsInfo;
     if (streamsInfo is null)
       return SevenZipArchiveDecodeResult.InvalidData;
@@ -116,9 +125,6 @@ public static class SevenZipArchiveDecoder
     if (streamsInfo.PackInfo is null || unpackInfo is null)
       return SevenZipArchiveDecodeResult.InvalidData;
 
-    SevenZipFilesInfo filesInfo = header.Value.FilesInfo;
-    if (filesInfo.FileCount <= 0)
-      return SevenZipArchiveDecodeResult.InvalidData;
     if (filesInfo.FileCount > int.MaxValue)
       return SevenZipArchiveDecodeResult.NotSupported;
 
