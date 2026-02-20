@@ -130,14 +130,27 @@ public static class SevenZipArchiveDecoder
 
     int fileCount = (int)filesInfo.FileCount;
 
-    if (filesInfo.Names is null || filesInfo.Names.Length != fileCount)
-      return SevenZipArchiveDecodeResult.InvalidData;
+    string[] names;
+    if (filesInfo.Names is null)
+    {
+      // В 7z kName может отсутствовать. Чтобы не падать на валидных архивах,
+      // генерируем технические имена.
+      names = new string[fileCount];
+      for (int i = 0; i < fileCount; i++)
+        names[i] = $"file_{i}";
+    }
+    else
+    {
+      if (filesInfo.Names.Length != fileCount)
+        return SevenZipArchiveDecodeResult.InvalidData;
+
+      names = filesInfo.Names;
+    }
 
     // kEmptyStream уже распарсен в FilesInfoReader; здесь только валидируем длину.
     bool[]? emptyStreams = filesInfo.EmptyStreams;
     if (emptyStreams is not null && emptyStreams.Length != fileCount)
       return SevenZipArchiveDecodeResult.InvalidData;
-
 
     // ---- Подготавливаем «карту» потоков распаковки: folder -> набор unpack-стримов и их размеры.
 
@@ -247,7 +260,7 @@ public static class SevenZipArchiveDecoder
                  fileIndex < fileCount &&
                  emptyStreams[fileIndex])
           {
-            decoded.Add(new SevenZipDecodedFile(filesInfo.Names[fileIndex], []));
+            decoded.Add(new SevenZipDecodedFile(names[fileIndex], []));
             fileIndex++;
           }
 
@@ -266,7 +279,7 @@ public static class SevenZipArchiveDecoder
         Array.Copy(folderUnpacked, cursor, fileBytes, 0, size);
         cursor += size;
 
-        decoded.Add(new SevenZipDecodedFile(filesInfo.Names[fileIndex], fileBytes));
+        decoded.Add(new SevenZipDecodedFile(names[fileIndex], fileBytes));
         fileIndex++;
       }
 
@@ -280,7 +293,7 @@ public static class SevenZipArchiveDecoder
            fileIndex < fileCount &&
            emptyStreams[fileIndex])
     {
-      decoded.Add(new SevenZipDecodedFile(filesInfo.Names[fileIndex], []));
+      decoded.Add(new SevenZipDecodedFile(names[fileIndex], []));
       fileIndex++;
     }
 
