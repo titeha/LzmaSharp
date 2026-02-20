@@ -44,6 +44,50 @@ public class SevenZipArchiveReaderTests
   }
 
   [Fact]
+  public void Read_Header_СArchiveProperties_ИAdditionalStreamsInfo_ВозвращаетOk()
+  {
+    byte[] nextHeaderBytes =
+    [
+      SevenZipNid.Header,
+
+    SevenZipNid.ArchiveProperties,
+    0x19,         // PropertyType (любой != 0)
+    0x01,         // PropertySize = 1 (EncodedUInt64)
+    0xAA,         // PropertyData[1]
+    SevenZipNid.End,
+
+    SevenZipNid.AdditionalStreamsInfo,
+    SevenZipNid.End, // StreamsInfo.End
+
+    SevenZipNid.MainStreamsInfo,
+    SevenZipNid.End,
+
+    SevenZipNid.FilesInfo,
+    0x00,            // NumFiles = 0 (EncodedUInt64)
+    SevenZipNid.End, // end FilesInfo properties
+
+    SevenZipNid.End, // end Header
+  ];
+
+    byte[] file = new byte[SevenZipSignatureHeader.Size + nextHeaderBytes.Length];
+    const ulong nextHeaderOffset = 0;
+    uint nextHeaderCrc = Crc32.Compute(nextHeaderBytes);
+
+    WriteSignatureHeader(file, nextHeaderOffset, (ulong)nextHeaderBytes.Length, nextHeaderCrc);
+    nextHeaderBytes.CopyTo(file.AsSpan(SevenZipSignatureHeader.Size));
+
+    var reader = new SevenZipArchiveReader();
+    var res = reader.Read(file, out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveReadResult.Ok, res);
+    Assert.Equal(file.Length, bytesConsumed);
+
+    Assert.Equal(SevenZipNextHeaderKind.Header, reader.NextHeaderKind);
+    Assert.True(reader.Header.HasValue);
+    Assert.Equal(0UL, reader.Header.Value.FilesInfo.FileCount);
+  }
+
+  [Fact]
   public void Read_Потоково_ПустойАрхив_Работает()
   {
     byte[] nextHeaderBytes =
