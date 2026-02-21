@@ -144,6 +144,26 @@ public static class SevenZipArchiveDecoder
     if (emptyStreams is not null && emptyStreams.Length != fileCount)
       return SevenZipArchiveDecodeResult.InvalidData;
 
+    // kAnti: элементы "удаления" (обычно в update-архивах). На этапе 1 не поддерживаем.
+    bool[]? anti = filesInfo.Anti;
+    if (anti is not null && anti.Length != fileCount)
+      return SevenZipArchiveDecodeResult.InvalidData;
+
+    if (anti is not null)
+    {
+      for (int i = 0; i < fileCount; i++)
+      {
+        if (!anti[i])
+          continue;
+
+        // Anti допустим только для EmptyStream элементов.
+        if (emptyStreams?[i] != true)
+          return SevenZipArchiveDecodeResult.InvalidData;
+
+        return SevenZipArchiveDecodeResult.NotSupported;
+      }
+    }
+
     // Считаем количество НЕ-пустых файлов.
     int nonEmptyFilesCount = fileCount;
     if (emptyStreams is not null)
