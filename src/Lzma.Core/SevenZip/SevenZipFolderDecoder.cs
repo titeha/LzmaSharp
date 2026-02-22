@@ -201,6 +201,62 @@ public static class SevenZipFolderDecoder
         return SevenZipFolderDecodeResult.Ok;
       }
 
+      if (IsBcjX86MethodId(coder.MethodId))
+      {
+        // BCJ x86: props обычно нет. Иногда можно встретить startOffset (4 байта LE).
+        uint startOffset = 0;
+
+        if (coder.Properties is not null && coder.Properties.Length != 0)
+        {
+          if (coder.Properties.Length != 4)
+          {
+            decoded = [];
+            return SevenZipFolderDecodeResult.InvalidData;
+          }
+
+          startOffset = BinaryPrimitives.ReadUInt32LittleEndian(coder.Properties);
+        }
+
+        // Фильтр не меняет размер.
+        if (input.Length != expectedUnpackSize)
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.InvalidData;
+        }
+
+        decoded = input.ToArray();
+        BcjX86DecodeInPlace(decoded.AsSpan(), startOffset);
+        return SevenZipFolderDecodeResult.Ok;
+      }
+
+      if (IsBcjArmMethodId(coder.MethodId))
+      {
+        // BCJ ARM: props обычно нет, но допускаем startOffset (4 байта LE), как и для других BCJ.
+        uint startOffset = 0;
+
+        if (coder.Properties is not null && coder.Properties.Length != 0)
+        {
+          if (coder.Properties.Length != 4)
+          {
+            decoded = [];
+            return SevenZipFolderDecodeResult.InvalidData;
+          }
+
+          startOffset = BinaryPrimitives.ReadUInt32LittleEndian(coder.Properties);
+        }
+
+        // Фильтр не меняет размер.
+        if (input.Length != expectedUnpackSize)
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.InvalidData;
+        }
+
+        decoded = input.ToArray();
+        BcjArmDecodeInPlace(decoded.AsSpan(), startOffset);
+        return SevenZipFolderDecodeResult.Ok;
+      }
+
       if (IsSingleByteMethodId(coder.MethodId, _methodIdLzma2))
       {
         if (coder.Properties is null || coder.Properties.Length != 1)
@@ -265,34 +321,6 @@ public static class SevenZipFolderDecoder
           }
         }
 
-        return SevenZipFolderDecodeResult.Ok;
-      }
-
-      if (IsBcjX86MethodId(coder.MethodId))
-      {
-        // BCJ x86: props обычно нет. Иногда можно встретить startOffset (4 байта LE).
-        uint startOffset = 0;
-
-        if (coder.Properties is not null && coder.Properties.Length != 0)
-        {
-          if (coder.Properties.Length != 4)
-          {
-            decoded = [];
-            return SevenZipFolderDecodeResult.InvalidData;
-          }
-
-          startOffset = BinaryPrimitives.ReadUInt32LittleEndian(coder.Properties);
-        }
-
-        // Фильтр не меняет размер.
-        if (input.Length != expectedUnpackSize)
-        {
-          decoded = [];
-          return SevenZipFolderDecodeResult.InvalidData;
-        }
-
-        decoded = input.ToArray();
-        BcjX86DecodeInPlace(decoded.AsSpan(), startOffset);
         return SevenZipFolderDecodeResult.Ok;
       }
 
@@ -476,6 +504,20 @@ public static class SevenZipFolderDecoder
       && methodId[2] == 0x04;
   }
 
+  private static bool IsBcjArmMethodId(byte[] methodId)
+  {
+    // Methods.txt:
+    // 07 - ARM (little-endian)
+    // 03 03 05 01 - 7z Branch Codecs / ARM (little-endian)
+    return
+      methodId.Length == 1 && methodId[0] == 0x07 ||
+      methodId.Length == 4 &&
+      methodId[0] == 0x03 &&
+      methodId[1] == 0x03 &&
+      methodId[2] == 0x05 &&
+      methodId[3] == 0x01;
+  }
+
   private static bool IsBcjX86MethodId(byte[] methodId)
   {
     // В 7z часто используется "длинный" ID для BCJ: { 03 03 01 03 }.
@@ -487,6 +529,38 @@ public static class SevenZipFolderDecoder
       methodId[1] == 0x03 &&
       methodId[2] == 0x01 &&
       methodId[3] == 0x03;
+  }
+
+  private static void BcjArmDecodeInPlace(Span<byte> data, uint startOffset)
+  {
+    // Port из LZMA SDK (Bra.c): ARM_Convert(data, size, ip, encoding=0).
+    // Обрабатывает только выровненные по 4 байтам инструкции.
+    // Патчит BL-инструкции (последний байт == 0xEB), переводя абсолют -> относительный.
+    //
+    // startOffset — виртуальный offset для ip (обычно 0). Если фильтр вызывается кусками,
+    // ip надо накапливать, но у нас сейчас decode целого буфера.
+
+    int size = data.Length & ~3;            // size &= ~(size_t)3
+    uint ip = unchecked(startOffset + 4u);  // ip += 4
+
+    for (int i = 0; i + 4 <= size; i += 4)
+    {
+      if (data[i + 3] != 0xEB)
+        continue;
+
+      uint v = BinaryPrimitives.ReadUInt32LittleEndian(data.Slice(i, 4));
+
+      v <<= 2;
+      // В оригинале используется (p - data), где p уже сдвинут на +4.
+      // То есть добавляется (i + 4).
+      v = unchecked(v - (ip + (uint)(i + 4)));
+      v >>= 2;
+
+      v &= 0x00FFFFFF;
+      v |= 0xEB000000;
+
+      BinaryPrimitives.WriteUInt32LittleEndian(data.Slice(i, 4), v);
+    }
   }
 
   private static void BcjX86DecodeInPlace(Span<byte> data, uint startOffset)
