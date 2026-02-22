@@ -49,15 +49,27 @@ public static class SevenZipFolderDecoder
 
     SevenZipFolder folder = unpackInfo.Folders[folderIndex];
 
-    // Пока поддерживаем только максимально простой вариант.
-    if (folder.Coders.Length != 1)
-      return SevenZipFolderDecodeResult.NotSupported;
-
-    if (folder.BindPairs.Length != 0)
-      return SevenZipFolderDecodeResult.NotSupported;
-
+    // На этапе 1 поддерживаем:
+    // - ровно один packed stream;
+    // - либо 1 coder (без BindPairs),
+    // - либо 2 coders (цепочка 1->1, один BindPair).
     if (folder.PackedStreamIndices.Length != 1)
       return SevenZipFolderDecodeResult.NotSupported;
+
+    if (folder.Coders.Length == 1)
+    {
+      if (folder.BindPairs.Length != 0)
+        return SevenZipFolderDecodeResult.NotSupported;
+    }
+    else if (folder.Coders.Length == 2)
+    {
+      if (folder.BindPairs.Length != 1)
+        return SevenZipFolderDecodeResult.NotSupported;
+    }
+    else
+    {
+      return SevenZipFolderDecodeResult.NotSupported;
+    }
 
     // Размеры распаковки в 7z лежат не в самом Folder, а отдельным массивом в UnpackInfo.
     if ((uint)folderIndex >= (uint)unpackInfo.FolderUnpackSizes.Length)
@@ -66,14 +78,6 @@ public static class SevenZipFolderDecoder
     ulong[]? folderUnpackSizes = unpackInfo.FolderUnpackSizes[folderIndex];
     if (folderUnpackSizes is null || folderUnpackSizes.Length == 0)
       return SevenZipFolderDecodeResult.InvalidData;
-
-    // В 7z folder хранит индексы packed streams внутри себя, а pack streams в PackInfo идут подряд
-    // по всем folder'ам. Поэтому глобальный индекс pack stream для текущего folder'а вычисляем как
-    // сумму NumPackedStreams у всех предыдущих folder'ов.
-    //
-    // Сейчас поддерживаем только простейший вариант: у folder ровно один packed stream.
-    if (folder.PackedStreamIndices[0] != 0)
-      return SevenZipFolderDecodeResult.NotSupported;
 
     ulong packStreamIndexU64 = 0;
     for (int i = 0; i < folderIndex; i++)
@@ -89,175 +93,244 @@ public static class SevenZipFolderDecoder
     if (!TryGetPackStream(packInfo, packedStreams, packStreamIndex, out ReadOnlySpan<byte> packStream))
       return SevenZipFolderDecodeResult.InvalidData;
 
-    SevenZipCoderInfo coder = folder.Coders[0];
-
-    ulong unpackSizeU64 = folderUnpackSizes[^1];
-    if (unpackSizeU64 > int.MaxValue)
-      return SevenZipFolderDecodeResult.NotSupported;
-
-    int expectedUnpackSize = (int)unpackSizeU64;
-
-    if (IsSingleByteMethodId(coder.MethodId, _methodIdCopy))
+    SevenZipFolderDecodeResult DecodeOneCoder(
+      SevenZipCoderInfo coder,
+      ReadOnlySpan<byte> input,
+      int expectedUnpackSize,
+      out byte[] decoded)
     {
-      // Copy: pack-stream содержит распакованные данные.
-      output = packStream.ToArray();
-      return output.Length == expectedUnpackSize
+      decoded = [];
+
+      if (IsSingleByteMethodId(coder.MethodId, _methodIdCopy))
+      {
+        decoded = input.ToArray();
+        return decoded.Length == expectedUnpackSize
           ? SevenZipFolderDecodeResult.Ok
           : SevenZipFolderDecodeResult.InvalidData;
-    }
-
-    if (IsSingleByteMethodId(coder.MethodId, _methodIdLzma2))
-    {
-      if (coder.Properties is null || coder.Properties.Length != 1)
-        return SevenZipFolderDecodeResult.InvalidData;
-
-      byte lzma2PropertiesByte = coder.Properties[0];
-
-      // В 7z LZMA2 properties — это 1 байт, допустимый диапазон: 0..40.
-      // Значения вне диапазона означают битый архив (InvalidData), а не "мы не поддерживаем".
-      if (!SevenZipLzma2Coder.TryDecodeDictionarySize(lzma2PropertiesByte, out uint dictionarySize))
-      {
-        output = [];
-        return SevenZipFolderDecodeResult.InvalidData;
       }
 
-      // На этапе 1 не поддерживаем словари, которые не помещаются в int (prop=38..40).
-      // Это "валидно по формату", но неприемлемо по ресурсам.
-      if (dictionarySize > int.MaxValue)
+      if (IsSingleByteMethodId(coder.MethodId, _methodIdLzma2))
       {
-        output = [];
-        return SevenZipFolderDecodeResult.NotSupported;
-      }
+        if (coder.Properties is null || coder.Properties.Length != 1)
+          return SevenZipFolderDecodeResult.InvalidData;
 
-      Lzma2DecodeResult decodeResult = Lzma2Decoder.DecodeToArray(
-    input: packStream,
-    dictionaryProp: lzma2PropertiesByte,
-    output: out output,
-    bytesConsumed: out int bytesConsumed);
+        byte lzma2PropertiesByte = coder.Properties[0];
 
-      // Явные ошибки пробрасываем как есть.
-      if (decodeResult == Lzma2DecodeResult.NotSupported)
-      {
-        output = [];
-        return SevenZipFolderDecodeResult.NotSupported;
-      }
+        // В 7z LZMA2 properties — это 1 байт, допустимый диапазон: 0..40.
+        if (!SevenZipLzma2Coder.TryDecodeDictionarySize(lzma2PropertiesByte, out uint dictionarySize))
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.InvalidData;
+        }
 
-      if (decodeResult == Lzma2DecodeResult.InvalidData)
-      {
-        output = [];
-        return SevenZipFolderDecodeResult.InvalidData;
-      }
+        if (dictionarySize > int.MaxValue)
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.NotSupported;
+        }
 
-      // Для 7z ожидаемый размер известен из хедера, поэтому валидируем по нему.
-      if (output.Length != expectedUnpackSize)
-      {
-        output = [];
-        return SevenZipFolderDecodeResult.InvalidData;
-      }
+        Lzma2DecodeResult lzma2Result = Lzma2Decoder.DecodeToArray(
+          input: input,
+          dictionaryProp: lzma2PropertiesByte,
+          output: out decoded,
+          bytesConsumed: out int lzma2BytesConsumed);
 
-      if ((uint)bytesConsumed > (uint)packStream.Length)
-      {
-        output = [];
-        return SevenZipFolderDecodeResult.InvalidData;
-      }
+        if (lzma2Result == Lzma2DecodeResult.NotSupported)
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.NotSupported;
+        }
 
-      // Иногда декодер может остановиться сразу после записи последнего байта,
-      // не «съев» финальный 0x00 (End marker) в LZMA2.
-      // Это приемлемо, если хвост содержит только нули.
-      if (bytesConsumed != packStream.Length)
-      {
-        ReadOnlySpan<byte> tail = packStream[bytesConsumed..];
-        for (int i = 0; i < tail.Length; i++)
-          if (tail[i] != 0)
+        if (lzma2Result == Lzma2DecodeResult.InvalidData)
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.InvalidData;
+        }
+
+        if (decoded.Length != expectedUnpackSize)
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.InvalidData;
+        }
+
+        if ((uint)lzma2BytesConsumed > (uint)input.Length)
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.InvalidData;
+        }
+
+        // Допускаем хвост из нулей.
+        if (lzma2BytesConsumed != input.Length)
+        {
+          ReadOnlySpan<byte> tail = input[lzma2BytesConsumed..];
+          for (int i = 0; i < tail.Length; i++)
           {
-            output = [];
-            return SevenZipFolderDecodeResult.InvalidData;
+            if (tail[i] != 0)
+            {
+              decoded = [];
+              return SevenZipFolderDecodeResult.InvalidData;
+            }
           }
+        }
+
+        return SevenZipFolderDecodeResult.Ok;
       }
 
-      return SevenZipFolderDecodeResult.Ok;
+      // LZMA (7z) method id = { 03 01 01 }, properties = 5 bytes:
+      // [0] = LZMA property byte (lc/lp/pb)
+      // [1..4] = dictionary size (UInt32 LE).
+      if (coder.MethodId.Length == 3 &&
+          coder.MethodId[0] == 0x03 &&
+          coder.MethodId[1] == 0x01 &&
+          coder.MethodId[2] == 0x01)
+      {
+        if (coder.Properties is null || coder.Properties.Length != 5)
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.InvalidData;
+        }
+
+        byte lzmaPropsByte = coder.Properties[0];
+        if (!LzmaProperties.TryParse(lzmaPropsByte, out LzmaProperties lzmaProps))
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.InvalidData;
+        }
+
+        uint dictU32 = BinaryPrimitives.ReadUInt32LittleEndian(coder.Properties.AsSpan(1, 4));
+        if (dictU32 == 0)
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.InvalidData;
+        }
+
+        if (dictU32 > int.MaxValue)
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.NotSupported;
+        }
+
+        int dictSize = (int)dictU32;
+
+        decoded = new byte[expectedUnpackSize];
+        var decoder = new LzmaDecoder(lzmaProps, dictSize);
+
+        LzmaDecodeResult lzmaResult = decoder.Decode(
+          src: input,
+          bytesConsumed: out int lzmaBytesConsumed,
+          dst: decoded,
+          bytesWritten: out int lzmaBytesWritten,
+          progress: out _);
+
+        if (lzmaResult == LzmaDecodeResult.NotImplemented)
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.NotSupported;
+        }
+
+        if (lzmaResult == LzmaDecodeResult.InvalidData)
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.InvalidData;
+        }
+
+        if (lzmaResult == LzmaDecodeResult.NeedsMoreInput)
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.InvalidData;
+        }
+
+        if (lzmaBytesWritten != expectedUnpackSize)
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.InvalidData;
+        }
+
+        if ((uint)lzmaBytesConsumed > (uint)input.Length)
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.InvalidData;
+        }
+
+        // Для raw LZMA хвост не валидируем.
+        return SevenZipFolderDecodeResult.Ok;
+      }
+
+      return SevenZipFolderDecodeResult.NotSupported;
     }
 
-    // LZMA (7z) method id = { 03 01 01 }, properties = 5 bytes:
-    // [0] = LZMA property byte (lc/lp/pb)
-    // [1..4] = dictionary size (UInt32 LE).
-    if (coder.MethodId.Length == 3 &&
-        coder.MethodId[0] == 0x03 &&
-        coder.MethodId[1] == 0x01 &&
-        coder.MethodId[2] == 0x01)
+    if (folder.Coders.Length == 1)
     {
-      if (coder.Properties is null || coder.Properties.Length != 5)
-      {
-        output = [];
-        return SevenZipFolderDecodeResult.InvalidData;
-      }
-
-      byte lzmaPropsByte = coder.Properties[0];
-      if (!LzmaProperties.TryParse(lzmaPropsByte, out LzmaProperties lzmaProps))
-      {
-        output = [];
-        return SevenZipFolderDecodeResult.InvalidData;
-      }
-
-      uint dictionarySizeU32 = BinaryPrimitives.ReadUInt32LittleEndian(coder.Properties.AsSpan(1, 4));
-      if (dictionarySizeU32 == 0)
-      {
-        output = [];
-        return SevenZipFolderDecodeResult.InvalidData;
-      }
-
-      if (dictionarySizeU32 > int.MaxValue)
-      {
-        output = [];
+      if (folderUnpackSizes.Length != 1)
         return SevenZipFolderDecodeResult.NotSupported;
-      }
 
-      int dictionarySize = (int)dictionarySizeU32;
-
-      // В 7z ожидаемый размер известен из header'а, поэтому декодируем ровно в буфер нужного размера.
-      output = new byte[expectedUnpackSize];
-      var decoder = new LzmaDecoder(lzmaProps, dictionarySize);
-
-      LzmaDecodeResult decodeResult = decoder.Decode(
-        src: packStream,
-        bytesConsumed: out int bytesConsumed,
-        dst: output,
-        bytesWritten: out int bytesWritten,
-        progress: out _);
-
-      if (decodeResult == LzmaDecodeResult.NotImplemented)
-      {
-        output = [];
+      ulong unpackSizeU64 = folderUnpackSizes[0];
+      if (unpackSizeU64 > int.MaxValue)
         return SevenZipFolderDecodeResult.NotSupported;
-      }
 
-      if (decodeResult == LzmaDecodeResult.InvalidData)
+      int expectedUnpackSize = (int)unpackSizeU64;
+      return DecodeOneCoder(folder.Coders[0], packStream, expectedUnpackSize, out output);
+    }
+
+    if (folder.Coders.Length == 2)
+    {
+      if (folderUnpackSizes.Length != 2)
+        return SevenZipFolderDecodeResult.NotSupported;
+
+      SevenZipCoderInfo c0 = folder.Coders[0];
+      SevenZipCoderInfo c1 = folder.Coders[1];
+
+      if (c0.NumInStreams != 1 || c0.NumOutStreams != 1 ||
+          c1.NumInStreams != 1 || c1.NumOutStreams != 1)
+        return SevenZipFolderDecodeResult.NotSupported;
+
+      if (folder.NumInStreams != 2 || folder.NumOutStreams != 2)
+        return SevenZipFolderDecodeResult.InvalidData;
+
+      SevenZipBindPair bp = folder.BindPairs[0];
+
+      if (bp.InIndex > 1 || bp.OutIndex > 1)
+        return SevenZipFolderDecodeResult.InvalidData;
+
+      if (bp.InIndex == bp.OutIndex)
+        return SevenZipFolderDecodeResult.InvalidData;
+
+      int consumerIndex = (int)bp.InIndex;
+      int producerIndex = (int)bp.OutIndex;
+
+      ulong producerSizeU64 = folderUnpackSizes[producerIndex];
+      ulong consumerSizeU64 = folderUnpackSizes[consumerIndex];
+
+      if (producerSizeU64 > int.MaxValue || consumerSizeU64 > int.MaxValue)
+        return SevenZipFolderDecodeResult.NotSupported;
+
+      int producerExpectedSize = (int)producerSizeU64;
+      int consumerExpectedSize = (int)consumerSizeU64;
+
+      SevenZipFolderDecodeResult r0 = DecodeOneCoder(
+        coder: folder.Coders[producerIndex],
+        input: packStream,
+        expectedUnpackSize: producerExpectedSize,
+        decoded: out byte[] intermediate);
+
+      if (r0 != SevenZipFolderDecodeResult.Ok)
       {
         output = [];
-        return SevenZipFolderDecodeResult.InvalidData;
+        return r0;
       }
 
-      // Для 7z вход уже целиком в памяти: NeedMoreInput означает "поток обрезан/битый".
-      if (decodeResult == LzmaDecodeResult.NeedsMoreInput)
+      SevenZipFolderDecodeResult r1 = DecodeOneCoder(
+        coder: folder.Coders[consumerIndex],
+        input: intermediate,
+        expectedUnpackSize: consumerExpectedSize,
+        decoded: out output);
+
+      if (r1 != SevenZipFolderDecodeResult.Ok)
       {
         output = [];
-        return SevenZipFolderDecodeResult.InvalidData;
+        return r1;
       }
 
-      if (bytesWritten != expectedUnpackSize)
-      {
-        output = [];
-        return SevenZipFolderDecodeResult.InvalidData;
-      }
-
-      if ((uint)bytesConsumed > (uint)packStream.Length)
-      {
-        output = [];
-        return SevenZipFolderDecodeResult.InvalidData;
-      }
-
-      // В отличие от LZMA2, для raw LZMA мы НЕ валидируем хвост: при известном unpackSize
-      // нормальны случаи, когда часть байт остаётся неиспользованной (flush/range tail).
       return SevenZipFolderDecodeResult.Ok;
     }
 
