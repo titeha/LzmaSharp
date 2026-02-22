@@ -157,4 +157,63 @@ public sealed class SevenZipUnpackInfoReaderTests
     Assert.Single(unpackInfo.FolderUnpackSizes[0]);
     Assert.Equal((ulong)5, unpackInfo.FolderUnpackSizes[0][0]);
   }
+
+  [Fact]
+  public void TryRead_TwoCoders_OneBindPair_NumPackedStreams1_DerivesPackedStreamIndex1()
+  {
+    // Folder:
+    // Coders: [Copy, LZMA2]
+    // BindPair: InIndex=0 <- OutIndex=1  (вход coder0 связан с выходом coder1)
+    // Тогда единственный "не связанный" InIndex = 1 => PackedStreamIndices = [1]
+    byte[] data =
+    [
+      SevenZipNid.UnpackInfo,
+    SevenZipNid.Folder,
+    0x01, // NumFolders=1
+    0x00, // External=0
+
+    0x02, // NumCoders=2
+
+    0x01, // coder0 mainByte: idSize=1, без props
+    0x00, // methodId: Copy
+
+    0x21, // coder1 mainByte: idSize=1 + hasProps
+    0x21, // methodId: LZMA2
+    0x01, // propsSize=1
+    0x00, // props byte (неважно для этого теста)
+
+    // BindPairs (TotalOutStreams-1 = 1)
+    0x00, // InIndex = 0
+    0x01, // OutIndex = 1
+
+    SevenZipNid.CodersUnpackSize,
+    0x05, // outSize[0]
+    0x05, // outSize[1]
+
+    SevenZipNid.End,
+  ];
+
+    var res = SevenZipUnpackInfoReader.TryRead(data, out SevenZipUnpackInfo unpackInfo, out int consumed);
+
+    Assert.Equal(SevenZipUnpackInfoReadResult.Ok, res);
+    Assert.Equal(data.Length, consumed);
+
+    Assert.Single(unpackInfo.Folders);
+
+    SevenZipFolder folder = unpackInfo.Folders[0];
+
+    Assert.Equal(2, folder.Coders.Length);
+    Assert.Single(folder.BindPairs);
+    Assert.Equal(0UL, folder.BindPairs[0].InIndex);
+    Assert.Equal(1UL, folder.BindPairs[0].OutIndex);
+
+    Assert.Single(folder.PackedStreamIndices);
+    Assert.Equal(1UL, folder.PackedStreamIndices[0]);
+
+    Assert.Equal(2UL, folder.NumInStreams);
+    Assert.Equal(2UL, folder.NumOutStreams);
+
+    Assert.Single(unpackInfo.FolderUnpackSizes);
+    Assert.Equal(2, unpackInfo.FolderUnpackSizes[0].Length);
+  }
 }

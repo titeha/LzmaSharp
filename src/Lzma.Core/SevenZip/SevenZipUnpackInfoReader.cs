@@ -203,13 +203,56 @@ public static class SevenZipUnpackInfoReader
         return SevenZipUnpackInfoReadResult.NotSupported;
       int numPackedStreams = (int)numPackedStreamsU64;
 
-      // Если PackedStreams == 1, индекс считается равным 0 и НЕ хранится в потоке.
+      // PackedStreamIndices — это индексы ВХОДНЫХ потоков folder'а, которые берутся напрямую из PackInfo.
+      // Если numPackedStreams == 1, индекс не хранится в потоке и должен вычисляться как единственный
+      // "не связанный" InIndex (тот, который НЕ встречается в BindPairs.InIndex).
       ulong[] packedStreamIndices;
+
       if (numPackedStreams == 1)
-        packedStreamIndices = [0];
+      {
+        if (totalInStreams > int.MaxValue)
+          return SevenZipUnpackInfoReadResult.NotSupported;
+
+        int totalIn = (int)totalInStreams;
+
+        bool[] isBoundIn = new bool[totalIn];
+
+        for (int i = 0; i < bindPairs.Length; i++)
+        {
+          ulong inIndex = bindPairs[i].InIndex;
+          ulong outIndex = bindPairs[i].OutIndex;
+
+          if (inIndex >= totalInStreams)
+            return SevenZipUnpackInfoReadResult.InvalidData;
+
+          if (outIndex >= totalOutStreams)
+            return SevenZipUnpackInfoReadResult.InvalidData;
+
+          isBoundIn[(int)inIndex] = true;
+        }
+
+        int packedInIndex = -1;
+
+        for (int i = 0; i < totalIn; i++)
+        {
+          if (isBoundIn[i])
+            continue;
+
+          if (packedInIndex >= 0)
+            return SevenZipUnpackInfoReadResult.InvalidData;
+
+          packedInIndex = i;
+        }
+
+        if (packedInIndex < 0)
+          return SevenZipUnpackInfoReadResult.InvalidData;
+
+        packedStreamIndices = [(ulong)packedInIndex];
+      }
       else
       {
         packedStreamIndices = new ulong[numPackedStreams];
+
         for (int i = 0; i < numPackedStreams; i++)
         {
           rr = SevenZipEncodedUInt64.TryRead(input[cursor..], out ulong packedIndex, out br);
@@ -217,7 +260,12 @@ public static class SevenZipUnpackInfoReader
             return SevenZipUnpackInfoReadResult.NeedMoreInput;
           if (rr != SevenZipEncodedUInt64.ReadResult.Ok)
             return SevenZipUnpackInfoReadResult.InvalidData;
+
           cursor += br;
+
+          if (packedIndex >= totalInStreams)
+            return SevenZipUnpackInfoReadResult.InvalidData;
+
           packedStreamIndices[i] = packedIndex;
         }
       }
