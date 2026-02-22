@@ -94,7 +94,7 @@ public static class SevenZipFolderDecoder
     if (!TryGetPackStream(packInfo, packedStreams, packStreamIndex, out ReadOnlySpan<byte> packStream))
       return SevenZipFolderDecodeResult.InvalidData;
 
-    SevenZipFolderDecodeResult DecodeOneCoder(
+    static SevenZipFolderDecodeResult DecodeOneCoder(
       SevenZipCoderInfo coder,
       ReadOnlySpan<byte> input,
       int expectedUnpackSize,
@@ -214,6 +214,34 @@ public static class SevenZipFolderDecoder
           }
         }
 
+        return SevenZipFolderDecodeResult.Ok;
+      }
+
+      if (IsBcjX86MethodId(coder.MethodId))
+      {
+        // BCJ x86: props обычно нет. Иногда можно встретить startOffset (4 байта LE).
+        uint startOffset = 0;
+
+        if (coder.Properties is not null && coder.Properties.Length != 0)
+        {
+          if (coder.Properties.Length != 4)
+          {
+            decoded = [];
+            return SevenZipFolderDecodeResult.InvalidData;
+          }
+
+          startOffset = BinaryPrimitives.ReadUInt32LittleEndian(coder.Properties);
+        }
+
+        // Фильтр не меняет размер.
+        if (input.Length != expectedUnpackSize)
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.InvalidData;
+        }
+
+        decoded = input.ToArray();
+        BcjX86DecodeInPlace(decoded.AsSpan(), startOffset);
         return SevenZipFolderDecodeResult.Ok;
       }
 
@@ -380,6 +408,120 @@ public static class SevenZipFolderDecoder
 
   private static bool IsSingleByteMethodId(byte[] methodId, byte expected)
       => methodId.Length == 1 && methodId[0] == expected;
+
+  private static bool IsBcjX86MethodId(byte[] methodId)
+  {
+    // В 7z часто используется "длинный" ID для BCJ: { 03 03 01 03 }.
+    // Иногда может встретиться и короткий ID: { 04 }.
+    return
+      methodId.Length == 1 && methodId[0] == 0x04 ||
+      methodId.Length == 4 &&
+      methodId[0] == 0x03 &&
+      methodId[1] == 0x03 &&
+      methodId[2] == 0x01 &&
+      methodId[3] == 0x03;
+  }
+
+  private static void BcjX86DecodeInPlace(Span<byte> data, uint startOffset)
+  {
+    // Port из LZMA SDK (Bra86.c): x86 BCJ decoder.
+    // Декодирование: абсолютные адреса -> относительные смещения (для E8/E9).
+    //
+    // startOffset — виртуальный стартовый оффсет (обычно 0). В 7z чаще всего props нет.
+    // В формуле используется ip = startOffset + 5, чтобы соответствовать (pos + 5).
+
+    static bool Test86MSByte(byte b) => b == 0 || b == 0xFF;
+
+    ReadOnlySpan<byte> kMaskToAllowedStatus = [1, 1, 1, 0, 1, 0, 0, 0];
+    ReadOnlySpan<byte> kMaskToBitNumber = [0, 1, 2, 2, 3, 3, 3, 3];
+
+    if (data.Length < 5)
+      return;
+
+    uint ip = unchecked(startOffset + 5u);
+
+    int bufferPos = 0;
+    int prevPos = -1;
+    uint prevMask = 0;
+
+    while (true)
+    {
+      int limit = data.Length - 4;
+      int p = bufferPos;
+
+      // Ищем следующий E8/E9 (CALL/JMP near).
+      for (; p < limit; p++)
+        if ((data[p] & 0xFE) == 0xE8)
+          break;
+
+      bufferPos = p;
+      if (p >= limit)
+        break;
+
+      int distance = bufferPos - prevPos;
+      if (distance > 3)
+        prevMask = 0;
+      else
+      {
+        prevMask = (prevMask << (distance - 1)) & 0x7;
+
+        if (prevMask != 0)
+        {
+          byte b = data[bufferPos + 4 - kMaskToBitNumber[(int)prevMask]];
+
+          if (kMaskToAllowedStatus[(int)prevMask] == 0 || Test86MSByte(b))
+          {
+            prevPos = bufferPos;
+            prevMask = ((prevMask << 1) & 0x7) | 1u;
+            bufferPos++;
+            continue;
+          }
+        }
+      }
+
+      prevPos = bufferPos;
+
+      if (Test86MSByte(data[bufferPos + 4]))
+      {
+        uint src =
+          ((uint)data[bufferPos + 4] << 24) |
+          ((uint)data[bufferPos + 3] << 16) |
+          ((uint)data[bufferPos + 2] << 8) |
+          data[bufferPos + 1];
+
+        uint dest;
+
+        while (true)
+        {
+          // decode: rel = abs - (ip + pos)
+          dest = unchecked(src - (ip + (uint)bufferPos));
+
+          if (prevMask == 0)
+            break;
+
+          int bIndex = kMaskToBitNumber[(int)prevMask] * 8;
+          byte b = (byte)(dest >> (24 - bIndex));
+
+          if (!Test86MSByte(b))
+            break;
+
+          src = dest ^ ((1u << (32 - bIndex)) - 1u);
+        }
+
+        data[bufferPos + 4] = (byte)(~(((dest >> 24) & 1) - 1));
+        data[bufferPos + 3] = (byte)(dest >> 16);
+        data[bufferPos + 2] = (byte)(dest >> 8);
+        data[bufferPos + 1] = (byte)dest;
+
+        bufferPos += 5;
+      }
+      else
+      {
+        prevMask = ((prevMask << 1) & 0x7) | 1u;
+        bufferPos++;
+      }
+    }
+  }
 
   private static bool TryGetPackStream(
       SevenZipPackInfo packInfo,
