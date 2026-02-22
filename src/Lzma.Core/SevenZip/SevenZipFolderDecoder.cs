@@ -150,6 +150,57 @@ public static class SevenZipFolderDecoder
         return SevenZipFolderDecodeResult.Ok;
       }
 
+      if (IsSwap2MethodId(coder.MethodId))
+      {
+        // Swap2: меняем местами байты в каждом 2-байтном слове.
+        // В 7-Zip фильтр обрабатывает только полные блоки; хвост < 2 байт остаётся как есть.
+        if (coder.Properties is not null && coder.Properties.Length != 0)
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.InvalidData;
+        }
+
+        if (input.Length != expectedUnpackSize)
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.InvalidData;
+        }
+
+        decoded = input.ToArray();
+
+        for (int i = 0; i + 2 <= decoded.Length; i += 2)
+          (decoded[i + 1], decoded[i]) = (decoded[i], decoded[i + 1]);
+
+        return SevenZipFolderDecodeResult.Ok;
+      }
+
+      if (IsSwap4MethodId(coder.MethodId))
+      {
+        // Swap4: реверс байтов в каждом 4-байтном слове.
+        // Хвост < 4 байт остаётся как есть.
+        if (coder.Properties is not null && coder.Properties.Length != 0)
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.InvalidData;
+        }
+
+        if (input.Length != expectedUnpackSize)
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.InvalidData;
+        }
+
+        decoded = input.ToArray();
+
+        for (int i = 0; i + 4 <= decoded.Length; i += 4)
+        {
+          (decoded[i], decoded[i + 3]) = (decoded[i + 3], decoded[i]);
+          (decoded[i + 1], decoded[i + 2]) = (decoded[i + 2], decoded[i + 1]);
+        }
+
+        return SevenZipFolderDecodeResult.Ok;
+      }
+
       if (IsSingleByteMethodId(coder.MethodId, _methodIdLzma2))
       {
         if (coder.Properties is null || coder.Properties.Length != 1)
@@ -408,6 +459,22 @@ public static class SevenZipFolderDecoder
 
   private static bool IsSingleByteMethodId(byte[] methodId, byte expected)
       => methodId.Length == 1 && methodId[0] == expected;
+
+  private static bool IsSwap2MethodId(byte[] methodId)
+  {
+    return methodId.Length == 3
+      && methodId[0] == 0x02
+      && methodId[1] == 0x03
+      && methodId[2] == 0x02;
+  }
+
+  private static bool IsSwap4MethodId(byte[] methodId)
+  {
+    return methodId.Length == 3
+      && methodId[0] == 0x02
+      && methodId[1] == 0x03
+      && methodId[2] == 0x04;
+  }
 
   private static bool IsBcjX86MethodId(byte[] methodId)
   {
