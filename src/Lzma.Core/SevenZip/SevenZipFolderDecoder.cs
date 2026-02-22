@@ -27,6 +27,7 @@ public static class SevenZipFolderDecoder
 {
   private const byte _methodIdCopy = 0x00;
   private const byte _methodIdLzma2 = 0x21;
+  private const byte _methodIdDelta = 0x03;
 
   public static SevenZipFolderDecodeResult DecodeFolderToArray(
       SevenZipStreamsInfo streamsInfo,
@@ -107,6 +108,46 @@ public static class SevenZipFolderDecoder
         return decoded.Length == expectedUnpackSize
           ? SevenZipFolderDecodeResult.Ok
           : SevenZipFolderDecodeResult.InvalidData;
+      }
+
+      if (IsSingleByteMethodId(coder.MethodId, _methodIdDelta))
+      {
+        // Delta filter (0x03):
+        // Properties: 1 byte, prop = delta - 1 => delta = prop + 1, диапазон 1..256.
+        int delta;
+
+        if (coder.Properties is null || coder.Properties.Length == 0) // На всякий случай: если props отсутствуют, считаем delta=1.
+          delta = 1;
+        else if (coder.Properties.Length == 1)
+          delta = coder.Properties[0] + 1;
+        else
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.InvalidData;
+        }
+
+        if ((uint)(delta - 1) > 255u) // delta must be 1..256
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.InvalidData;
+        }
+
+        // Delta не меняет размер.
+        if (input.Length != expectedUnpackSize)
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.InvalidData;
+        }
+
+        decoded = input.ToArray();
+
+        // Decode: out[i] = in[i] + out[i-delta] (mod 256), i>=delta.
+        // Первые delta байт остаются как есть (state=0).
+        Span<byte> dst = decoded;
+        for (int i = delta; i < dst.Length; i++)
+          dst[i] = unchecked((byte)(dst[i] + dst[i - delta]));
+
+        return SevenZipFolderDecodeResult.Ok;
       }
 
       if (IsSingleByteMethodId(coder.MethodId, _methodIdLzma2))
