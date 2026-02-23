@@ -257,6 +257,32 @@ public static class SevenZipFolderDecoder
         return SevenZipFolderDecodeResult.Ok;
       }
 
+      if (IsBcjArmtMethodId(coder.MethodId))
+      {
+        uint startOffset = 0;
+
+        if (coder.Properties is not null && coder.Properties.Length != 0)
+        {
+          if (coder.Properties.Length != 4)
+          {
+            decoded = [];
+            return SevenZipFolderDecodeResult.InvalidData;
+          }
+
+          startOffset = BinaryPrimitives.ReadUInt32LittleEndian(coder.Properties);
+        }
+
+        if (input.Length != expectedUnpackSize)
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.InvalidData;
+        }
+
+        decoded = input.ToArray();
+        BcjArmtDecodeInPlace(decoded.AsSpan(), startOffset);
+        return SevenZipFolderDecodeResult.Ok;
+      }
+
       if (IsSingleByteMethodId(coder.MethodId, _methodIdLzma2))
       {
         if (coder.Properties is null || coder.Properties.Length != 1)
@@ -531,6 +557,19 @@ public static class SevenZipFolderDecoder
       methodId[3] == 0x03;
   }
 
+  private static bool IsBcjArmtMethodId(byte[] methodId)
+  {
+    // Methods.txt:
+    // 08 - ARMT (little-endian)
+    // 03 03 07 01 - 7z Branch Codecs / ARMT (little-endian)
+    return
+      (methodId.Length == 1 && methodId[0] == 0x08) ||
+      (methodId.Length == 4 &&
+       methodId[0] == 0x03 &&
+       methodId[1] == 0x03 &&
+       methodId[2] == 0x07 &&
+       methodId[3] == 0x01);
+  }
   private static void BcjArmDecodeInPlace(Span<byte> data, uint startOffset)
   {
     // Port из LZMA SDK (Bra.c): ARM_Convert(data, size, ip, encoding=0).
@@ -563,6 +602,41 @@ public static class SevenZipFolderDecoder
     }
   }
 
+  private static void BcjArmtDecodeInPlace(Span<byte> data, uint startOffset)
+  {
+    // Порт из LZMA SDK (Bra.c): ARMT_Convert(data, size, ip, encoding=0).
+    // Обрабатывает Thumb-2 BL-последовательности.
+    if (data.Length < 4)
+      return;
+
+    int limit = data.Length - 4;      // size -= 4
+    uint ip = unchecked(startOffset + 4u); // ip += 4
+
+    for (int i = 0; i <= limit; i += 2)
+    {
+      if ((data[i + 1] & 0xF8) == 0xF0 &&
+           (data[i + 3] & 0xF8) == 0xF8)
+      {
+        uint src =
+          (((uint)data[i + 1] & 0x7u) << 19) |
+          ((uint)data[i + 0] << 11) |
+          (((uint)data[i + 3] & 0x7u) << 8) |
+          data[i + 2];
+
+        src <<= 1;
+
+        uint dest = unchecked(src - (ip + (uint)i));
+        dest >>= 1;
+
+        data[i + 1] = (byte)(0xF0 | ((dest >> 19) & 0x7));
+        data[i + 0] = (byte)(dest >> 11);
+        data[i + 3] = (byte)(0xF8 | ((dest >> 8) & 0x7));
+        data[i + 2] = (byte)dest;
+
+        i += 2; // как в оригинале: внутри for делается i += 2
+      }
+    }
+  }
   private static void BcjX86DecodeInPlace(Span<byte> data, uint startOffset)
   {
     // Port из LZMA SDK (Bra86.c): x86 BCJ decoder.
