@@ -339,6 +339,34 @@ public static class SevenZipFolderDecoder
         return SevenZipFolderDecodeResult.Ok;
       }
 
+      if (IsBcjIa64MethodId(coder.MethodId))
+      {
+        // BCJ IA64: props обычно нет. Иногда может встретиться startOffset (4 байта LE).
+        uint startOffset = 0;
+
+        if (coder.Properties is not null && coder.Properties.Length != 0)
+        {
+          if (coder.Properties.Length != 4)
+          {
+            decoded = [];
+            return SevenZipFolderDecodeResult.InvalidData;
+          }
+
+          startOffset = BinaryPrimitives.ReadUInt32LittleEndian(coder.Properties);
+        }
+
+        // Фильтр не меняет размер.
+        if (input.Length != expectedUnpackSize)
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.InvalidData;
+        }
+
+        decoded = input.ToArray();
+        BcjIa64DecodeInPlace(decoded.AsSpan(), startOffset);
+        return SevenZipFolderDecodeResult.Ok;
+      }
+
       if (IsSingleByteMethodId(coder.MethodId, _methodIdLzma2))
       {
         if (coder.Properties is null || coder.Properties.Length != 1)
@@ -655,6 +683,20 @@ public static class SevenZipFolderDecoder
       methodId[3] == 0x05;
   }
 
+  private static bool IsBcjIa64MethodId(byte[] methodId)
+  {
+    // Methods.txt:
+    // 06 - IA64
+    // 03 03 04 01 - 7z Branch Codecs / IA64
+    return
+      (methodId.Length == 1 && methodId[0] == 0x06) ||
+      (methodId.Length == 4 &&
+       methodId[0] == 0x03 &&
+       methodId[1] == 0x03 &&
+       methodId[2] == 0x04 &&
+       methodId[3] == 0x01);
+  }
+
   private static void BcjArmDecodeInPlace(Span<byte> data, uint startOffset)
   {
     // Port из LZMA SDK (Bra.c): ARM_Convert(data, size, ip, encoding=0).
@@ -888,6 +930,58 @@ public static class SevenZipFolderDecoder
       v |= 0x40000000u;
 
       BinaryPrimitives.WriteUInt32BigEndian(data.Slice(i, 4), v);
+    }
+  }
+
+  private static void BcjIa64DecodeInPlace(Span<byte> data, uint startOffset)
+  {
+    // Порт из LZMA SDK (BraIA64.c): IA64_Convert(data, size, ip, encoding=0).
+    // Обрабатываются только полные 16-байтные bundle’ы; хвост < 16 остаётся как есть.
+
+    if (data.Length < 16)
+      return;
+
+    int lastBundleStart = data.Length - 16;
+
+    for (int i = 0; i <= lastBundleStart; i += 16)
+    {
+      int m = (int)((0x334B0000u >> (data[i] & 0x1E)) & 3u);
+      if (m == 0)
+        continue;
+
+      // В оригинале: m++; do { ... } while (++m <= 4);
+      for (m = m + 1; m <= 4; m++)
+      {
+        int p = i + m * 5 - 8;
+
+        // if (((p[3] >> m) & 15) == 5 ...
+        if (((data[p + 3] >> m) & 0xF) != 5)
+          continue;
+
+        // && (((p[-1] | ((UInt32)p[0] << 8)) >> m) & 0x70) == 0)
+        uint t = (uint)(data[p - 1] | (data[p] << 8));
+        if (((t >> m) & 0x70u) != 0)
+          continue;
+
+        uint raw = BinaryPrimitives.ReadUInt32LittleEndian(data.Slice(p, 4));
+
+        uint v = raw >> m;
+        v = (v & 0xFFFFFu) | ((v & (1u << 23)) >> 3);
+        v <<= 4;
+
+        uint add = unchecked(startOffset + (uint)i);
+        v = unchecked(v - add);
+
+        v >>= 4;
+        v &= 0x1FFFFFu;
+        v = unchecked(v + 0x700000u);
+        v &= 0x8FFFFFu;
+
+        raw &= ~((0x8FFFFFu) << m);
+        raw |= (v << m);
+
+        BinaryPrimitives.WriteUInt32LittleEndian(data.Slice(p, 4), raw);
+      }
     }
   }
 
