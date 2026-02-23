@@ -50,26 +50,29 @@ public static class SevenZipFolderDecoder
 
     SevenZipFolder folder = unpackInfo.Folders[folderIndex];
 
-    // На этапе 1 поддерживаем:
+    // На этапе 1 поддерживаем только "линейный конвейер":
     // - ровно один packed stream;
-    // - либо 1 coder (без BindPairs),
-    // - либо 2 coders (цепочка 1->1, один BindPair).
+    // - N coders (N >= 1);
+    // - каждый coder: 1 in / 1 out;
+    // - BindPairs образуют цепочку (N - 1 связей).
     if (folder.PackedStreamIndices.Length != 1)
       return SevenZipFolderDecodeResult.NotSupported;
 
-    if (folder.Coders.Length == 1)
-    {
-      if (folder.BindPairs.Length != 0)
-        return SevenZipFolderDecodeResult.NotSupported;
-    }
-    else if (folder.Coders.Length == 2)
-    {
-      if (folder.BindPairs.Length != 1)
-        return SevenZipFolderDecodeResult.NotSupported;
-    }
-    else
-    {
+    int coderCount = folder.Coders.Length;
+    if (coderCount <= 0)
+      return SevenZipFolderDecodeResult.InvalidData;
+
+    if (folder.BindPairs.Length != coderCount - 1)
       return SevenZipFolderDecodeResult.NotSupported;
+
+    if (folder.NumInStreams != (ulong)coderCount || folder.NumOutStreams != (ulong)coderCount)
+      return SevenZipFolderDecodeResult.InvalidData;
+
+    for (int i = 0; i < coderCount; i++)
+    {
+      SevenZipCoderInfo coder = folder.Coders[i];
+      if (coder.NumInStreams != 1 || coder.NumOutStreams != 1)
+        return SevenZipFolderDecodeResult.NotSupported;
     }
 
     // Размеры распаковки в 7z лежат не в самом Folder, а отдельным массивом в UnpackInfo.
@@ -545,82 +548,98 @@ public static class SevenZipFolderDecoder
       return SevenZipFolderDecodeResult.NotSupported;
     }
 
-    if (folder.Coders.Length == 1)
+    if (folderUnpackSizes.Length != coderCount)
+      return SevenZipFolderDecodeResult.NotSupported;
+
+    // Строим линейный граф связей: producer(out) -> consumer(in).
+    // В нашем ограниченном режиме (1in/1out на coder) индексы потоков совпадают с индексами coder'ов.
+    int[] next = new int[coderCount];
+    int[] prev = new int[coderCount];
+    Array.Fill(next, -1);
+    Array.Fill(prev, -1);
+
+    for (int i = 0; i < folder.BindPairs.Length; i++)
     {
-      if (folderUnpackSizes.Length != 1)
-        return SevenZipFolderDecodeResult.NotSupported;
+      SevenZipBindPair bp = folder.BindPairs[i];
 
-      ulong unpackSizeU64 = folderUnpackSizes[0];
-      if (unpackSizeU64 > int.MaxValue)
-        return SevenZipFolderDecodeResult.NotSupported;
+      if (bp.InIndex >= (ulong)coderCount || bp.OutIndex >= (ulong)coderCount)
+        return SevenZipFolderDecodeResult.InvalidData;
 
-      int expectedUnpackSize = (int)unpackSizeU64;
-      return DecodeOneCoder(folder.Coders[0], packStream, expectedUnpackSize, out output);
+      int consumer = (int)bp.InIndex;
+      int producer = (int)bp.OutIndex;
+
+      if (consumer == producer)
+        return SevenZipFolderDecodeResult.InvalidData;
+
+      // Одна входная струя не может иметь двух источников.
+      if (prev[consumer] != -1)
+        return SevenZipFolderDecodeResult.InvalidData;
+
+      // Один выход не может быть разветвлён на двух потребителей (в нашем режиме).
+      if (next[producer] != -1)
+        return SevenZipFolderDecodeResult.InvalidData;
+
+      prev[consumer] = producer;
+      next[producer] = consumer;
     }
 
-    if (folder.Coders.Length == 2)
+    int startCoder = -1;
+    for (int i = 0; i < coderCount; i++)
     {
-      if (folderUnpackSizes.Length != 2)
-        return SevenZipFolderDecodeResult.NotSupported;
-
-      SevenZipCoderInfo c0 = folder.Coders[0];
-      SevenZipCoderInfo c1 = folder.Coders[1];
-
-      if (c0.NumInStreams != 1 || c0.NumOutStreams != 1 ||
-          c1.NumInStreams != 1 || c1.NumOutStreams != 1)
-        return SevenZipFolderDecodeResult.NotSupported;
-
-      if (folder.NumInStreams != 2 || folder.NumOutStreams != 2)
-        return SevenZipFolderDecodeResult.InvalidData;
-
-      SevenZipBindPair bp = folder.BindPairs[0];
-
-      if (bp.InIndex > 1 || bp.OutIndex > 1)
-        return SevenZipFolderDecodeResult.InvalidData;
-
-      if (bp.InIndex == bp.OutIndex)
-        return SevenZipFolderDecodeResult.InvalidData;
-
-      int consumerIndex = (int)bp.InIndex;
-      int producerIndex = (int)bp.OutIndex;
-
-      ulong producerSizeU64 = folderUnpackSizes[producerIndex];
-      ulong consumerSizeU64 = folderUnpackSizes[consumerIndex];
-
-      if (producerSizeU64 > int.MaxValue || consumerSizeU64 > int.MaxValue)
-        return SevenZipFolderDecodeResult.NotSupported;
-
-      int producerExpectedSize = (int)producerSizeU64;
-      int consumerExpectedSize = (int)consumerSizeU64;
-
-      SevenZipFolderDecodeResult r0 = DecodeOneCoder(
-        coder: folder.Coders[producerIndex],
-        input: packStream,
-        expectedUnpackSize: producerExpectedSize,
-        decoded: out byte[] intermediate);
-
-      if (r0 != SevenZipFolderDecodeResult.Ok)
+      if (prev[i] == -1)
       {
-        output = [];
-        return r0;
+        if (startCoder != -1)
+          return SevenZipFolderDecodeResult.NotSupported; // не цепочка (несколько стартов)
+        startCoder = i;
       }
-
-      SevenZipFolderDecodeResult r1 = DecodeOneCoder(
-        coder: folder.Coders[consumerIndex],
-        input: intermediate,
-        expectedUnpackSize: consumerExpectedSize,
-        decoded: out output);
-
-      if (r1 != SevenZipFolderDecodeResult.Ok)
-      {
-        output = [];
-        return r1;
-      }
-
-      return SevenZipFolderDecodeResult.Ok;
     }
 
-    return SevenZipFolderDecodeResult.NotSupported;
+    if (startCoder == -1)
+      return SevenZipFolderDecodeResult.NotSupported; // цикл без старта
+
+    bool[] visited = new bool[coderCount];
+    ReadOnlySpan<byte> currentInput = packStream;
+    byte[] lastDecoded = [];
+
+    int current = startCoder;
+    for (int step = 0; step < coderCount; step++)
+    {
+      if ((uint)current >= (uint)coderCount)
+        return SevenZipFolderDecodeResult.NotSupported;
+
+      if (visited[current])
+        return SevenZipFolderDecodeResult.NotSupported; // цикл
+
+      visited[current] = true;
+
+      ulong expectedU64 = folderUnpackSizes[current];
+      if (expectedU64 > int.MaxValue)
+        return SevenZipFolderDecodeResult.NotSupported;
+
+      int expectedSize = (int)expectedU64;
+
+      SevenZipFolderDecodeResult r = DecodeOneCoder(
+        coder: folder.Coders[current],
+        input: currentInput,
+        expectedUnpackSize: expectedSize,
+        decoded: out byte[] decoded);
+
+      if (r != SevenZipFolderDecodeResult.Ok)
+      {
+        output = [];
+        return r;
+      }
+
+      lastDecoded = decoded;
+      currentInput = decoded;
+      current = next[current]; // -1 после конца
+    }
+
+    if (current != -1)
+      return SevenZipFolderDecodeResult.NotSupported;
+
+    output = lastDecoded;
+    return SevenZipFolderDecodeResult.Ok;
   }
 
   private static bool IsSingleByteMethodId(byte[] methodId, byte expected)
