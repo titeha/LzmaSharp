@@ -1004,7 +1004,7 @@ public static class SevenZipFolderDecoder
         continue;
 
       // В оригинале: m++; do { ... } while (++m <= 4);
-      for (m = m + 1; m <= 4; m++)
+      for (++m; m <= 4; m++)
       {
         int p = i + m * 5 - 8;
 
@@ -1031,7 +1031,7 @@ public static class SevenZipFolderDecoder
         v = unchecked(v + 0x700000u);
         v &= 0x8FFFFFu;
 
-        raw &= ~((0x8FFFFFu) << m);
+        raw &= ~(0x8FFFFFu << m);
         raw |= (v << m);
 
         BinaryPrimitives.WriteUInt32LittleEndian(data.Slice(p, 4), raw);

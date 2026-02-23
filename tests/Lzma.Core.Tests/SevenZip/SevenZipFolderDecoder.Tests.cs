@@ -175,7 +175,7 @@ public class SevenZipFolderDecoderTests
       plain[i] = (byte)(i * 17 + 3);
 
     var lzmaProps = new LzmaProperties(Lc: 3, Lp: 0, Pb: 2);
-    int dictionarySize = 1 << 20;
+    const int dictionarySize = 1 << 20;
 
     // Raw LZMA stream (без LZMA-Alone header).
     byte[] packed = new LzmaEncoder(lzmaProps, dictionarySize).EncodeLiteralOnly(plain);

@@ -106,7 +106,7 @@ public sealed class SevenZipBcjIa64FilterChainedCodersIntegrationTests
         v = unchecked(v + 0x700000u);
         v &= 0x8FFFFFu;
 
-        raw &= ~((0x8FFFFFu) << m);
+        raw &= ~(0x8FFFFFu << m);
         raw |= (v << m);
 
         BinaryPrimitives.WriteUInt32LittleEndian(data.Slice(p, 4), raw);
