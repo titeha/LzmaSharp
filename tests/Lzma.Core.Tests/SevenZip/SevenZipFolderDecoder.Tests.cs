@@ -218,6 +218,66 @@ public class SevenZipFolderDecoderTests
     Assert.Equal(plain, output);
   }
 
+  [Fact]
+  public void DecodeFolderToArray_BcjArm64_BlInstruction_IsDecoded()
+  {
+    // Делаем буфер: 64 байта мусора + 1 инструкция BL (4 байта).
+    // На вход подаём "фильтрованные" данные: imm26 хранит (target >> 2) = 64 => 0x94000040.
+    // На выходе ожидаем "оригинал": imm26 должен стать (target>>2 - pc>>2).
+    // pc = 64 => pc>>2 = 16. 64 - 16 = 48 => 0x94000030.
+
+    byte[] packed = new byte[64 + 4];
+    packed[64] = 0x40;
+    packed[65] = 0x00;
+    packed[66] = 0x00;
+    packed[67] = 0x94;
+
+    byte[] expected = new byte[64 + 4];
+    expected[64] = 0x30;
+    expected[65] = 0x00;
+    expected[66] = 0x00;
+    expected[67] = 0x94;
+
+    var packInfo = new SevenZipPackInfo(packPos: 0, packSizes: [(ulong)packed.Length]);
+
+    var copyCoder = new SevenZipCoderInfo(
+      methodId: [0x00],      // Copy
+      properties: [],
+      numInStreams: 1,
+      numOutStreams: 1);
+
+    var arm64Coder = new SevenZipCoderInfo(
+      methodId: [0x0A],      // ARM64 BCJ
+      properties: [],
+      numInStreams: 1,
+      numOutStreams: 1);
+
+    var folder = new SevenZipFolder(
+      Coders: [copyCoder, arm64Coder],
+      BindPairs: [new SevenZipBindPair(InIndex: 1, OutIndex: 0)], // out0 -> in1
+      PackedStreamIndices: [0],                                   // packed = in0
+      NumInStreams: 2,
+      NumOutStreams: 2);
+
+    var unpackInfo = new SevenZipUnpackInfo(
+      folders: [folder],
+      folderUnpackSizes: [[(ulong)packed.Length, (ulong)packed.Length]]);
+
+    var streamsInfo = new SevenZipStreamsInfo(
+      packInfo: packInfo,
+      unpackInfo: unpackInfo,
+      subStreamsInfo: null);
+
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.DecodeFolderToArray(
+      streamsInfo: streamsInfo,
+      packedStreams: packed,
+      folderIndex: 0,
+      output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.Ok, result);
+    Assert.Equal(expected, output);
+  }
+
   private static byte[] Build7zArchive_SingleFile_SingleFolder_Lzma2LzmaChunkedLiteralOnly(
       ReadOnlySpan<byte> plainFileBytes,
       string fileName,

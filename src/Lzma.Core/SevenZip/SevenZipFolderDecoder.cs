@@ -367,6 +367,34 @@ public static class SevenZipFolderDecoder
         return SevenZipFolderDecodeResult.Ok;
       }
 
+      if (IsBcjArm64MethodId(coder.MethodId))
+      {
+        // BCJ ARM64: props обычно нет, но допускаем startOffset (4 байта LE), как и для других BCJ.
+        uint startOffset = 0;
+
+        if (coder.Properties is not null && coder.Properties.Length != 0)
+        {
+          if (coder.Properties.Length != 4)
+          {
+            decoded = [];
+            return SevenZipFolderDecodeResult.InvalidData;
+          }
+
+          startOffset = BinaryPrimitives.ReadUInt32LittleEndian(coder.Properties);
+        }
+
+        // Фильтр не меняет размер.
+        if (input.Length != expectedUnpackSize)
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.InvalidData;
+        }
+
+        decoded = input.ToArray();
+        BcjArm64DecodeInPlace(decoded.AsSpan(), startOffset);
+        return SevenZipFolderDecodeResult.Ok;
+      }
+
       if (IsSingleByteMethodId(coder.MethodId, _methodIdLzma2))
       {
         if (coder.Properties is null || coder.Properties.Length != 1)
@@ -697,6 +725,13 @@ public static class SevenZipFolderDecoder
        methodId[3] == 0x01);
   }
 
+  private static bool IsBcjArm64MethodId(byte[] methodId)
+  {
+    // Methods.txt:
+    // 0A - ARM64
+    return methodId.Length == 1 && methodId[0] == 0x0A;
+  }
+
   private static void BcjArmDecodeInPlace(Span<byte> data, uint startOffset)
   {
     // Port из LZMA SDK (Bra.c): ARM_Convert(data, size, ip, encoding=0).
@@ -982,6 +1017,57 @@ public static class SevenZipFolderDecoder
 
         BinaryPrimitives.WriteUInt32LittleEndian(data.Slice(p, 4), raw);
       }
+    }
+  }
+
+  private static void BcjArm64DecodeInPlace(Span<byte> data, uint startOffset)
+  {
+    // Port из LZMA SDK (Bra.c): z7_BranchConv_ARM64_Dec.
+    // Обрабатывает только выровненные по 4 байтам инструкции.
+    // startOffset — виртуальный offset (обычно 0). Если фильтр вызван кусками, его нужно накапливать.
+
+    int size = data.Length & ~3;
+
+    const uint flag = 1u << (24 - 4);            // 1 << 20
+    const uint mask = (1u << 24) - (flag << 1);  // 0x00E00000
+
+    for (int i = 0; i + 4 <= size; i += 4)
+    {
+      uint v = BinaryPrimitives.ReadUInt32LittleEndian(data.Slice(i, 4));
+      uint pc = unchecked(startOffset + (uint)i);
+
+      // BL imm26 (0x94xxxxxx)
+      if (((v - 0x94000000u) & 0xFC000000u) == 0u)
+      {
+        uint c = pc >> 2;
+        v = unchecked(v - c);
+        v &= 0x03FFFFFFu;
+        v |= 0x94000000u;
+
+        BinaryPrimitives.WriteUInt32LittleEndian(data.Slice(i, 4), v);
+        continue;
+      }
+
+      // ADRP-подобный паттерн (см. Bra.c)
+      v = unchecked(v - 0x90000000u);
+      if ((v & 0x9F000000u) != 0u)
+        continue;
+
+      v = unchecked(v + flag);
+      if ((v & mask) != 0u)
+        continue;
+
+      uint z = (v & 0xFFFFFFE0u) | (v >> 26);
+
+      uint c2 = (pc >> (12 - 3)) & ~7u; // (pc >> 9) & ~7
+      z = unchecked(z - c2);
+
+      uint outV = v & 0x1Fu;
+      outV |= 0x90000000u;
+      outV |= z << 26;
+      outV |= 0x00FFFFE0u & unchecked((z & ((flag << 1) - 1)) - flag);
+
+      BinaryPrimitives.WriteUInt32LittleEndian(data.Slice(i, 4), outV);
     }
   }
 
