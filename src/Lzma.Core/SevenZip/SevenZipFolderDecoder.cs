@@ -311,6 +311,34 @@ public static class SevenZipFolderDecoder
         return SevenZipFolderDecodeResult.Ok;
       }
 
+      if (IsBcjSparcMethodId(coder.MethodId))
+      {
+        // BCJ SPARC: props обычно нет. Иногда может встретиться startOffset (4 байта LE).
+        uint startOffset = 0;
+
+        if (coder.Properties is not null && coder.Properties.Length != 0)
+        {
+          if (coder.Properties.Length != 4)
+          {
+            decoded = [];
+            return SevenZipFolderDecodeResult.InvalidData;
+          }
+
+          startOffset = BinaryPrimitives.ReadUInt32LittleEndian(coder.Properties);
+        }
+
+        // Фильтр не меняет размер.
+        if (input.Length != expectedUnpackSize)
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.InvalidData;
+        }
+
+        decoded = input.ToArray();
+        BcjSparcDecodeInPlace(decoded.AsSpan(), startOffset);
+        return SevenZipFolderDecodeResult.Ok;
+      }
+
       if (IsSingleByteMethodId(coder.MethodId, _methodIdLzma2))
       {
         if (coder.Properties is null || coder.Properties.Length != 1)
@@ -613,6 +641,20 @@ public static class SevenZipFolderDecoder
       methodId[3] == 0x05;
   }
 
+  private static bool IsBcjSparcMethodId(byte[] methodId)
+  {
+    // Methods.txt:
+    // 09 - SPARC
+    // 03 03 08 05 - 7z Branch Codecs / SPARC
+    return
+      methodId.Length == 1 && methodId[0] == 0x09 ||
+      methodId.Length == 4 &&
+      methodId[0] == 0x03 &&
+      methodId[1] == 0x03 &&
+      methodId[2] == 0x08 &&
+      methodId[3] == 0x05;
+  }
+
   private static void BcjArmDecodeInPlace(Span<byte> data, uint startOffset)
   {
     // Port из LZMA SDK (Bra.c): ARM_Convert(data, size, ip, encoding=0).
@@ -813,6 +855,39 @@ public static class SevenZipFolderDecoder
         prevMask = ((prevMask << 1) & 0x7) | 1u;
         bufferPos++;
       }
+    }
+  }
+
+  private static void BcjSparcDecodeInPlace(Span<byte> data, uint startOffset)
+  {
+    // Порт из LZMA SDK (Bra.c): SPARC_Convert(data, size, ip, encoding=0).
+    // Big-endian, обрабатывает только выровненные по 4 байта инструкции.
+    int size = data.Length & ~3;
+
+    for (int i = 0; i + 4 <= size; i += 4)
+    {
+      byte b0 = data[i];
+      byte b1 = data[i + 1];
+
+      // Условие из Bra.c (упрощённая проверка ветвления).
+      if (!((b0 == 0x40 && (b1 & 0xC0) == 0) || (b0 == 0x7F && b1 >= 0xC0)))
+        continue;
+
+      uint v = BinaryPrimitives.ReadUInt32BigEndian(data.Slice(i, 4));
+
+      v <<= 2;
+
+      // В Bra.c: ip -= 4; используется ip + (p - data), где p уже сдвинут на +4.
+      // Это эквивалентно (startOffset + i).
+      v = unchecked(v - (startOffset + (uint)i));
+
+      v &= 0x01FFFFFFu;
+      v = unchecked(v - (1u << 24));
+      v ^= 0xFF000000u;
+      v >>= 2;
+      v |= 0x40000000u;
+
+      BinaryPrimitives.WriteUInt32BigEndian(data.Slice(i, 4), v);
     }
   }
 
