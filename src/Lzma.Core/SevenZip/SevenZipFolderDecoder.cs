@@ -283,6 +283,34 @@ public static class SevenZipFolderDecoder
         return SevenZipFolderDecodeResult.Ok;
       }
 
+      if (IsBcjPpcMethodId(coder.MethodId))
+      {
+        // PPC BCJ: props обычно нет, но допускаем startOffset (4 байта LE) как и в других BCJ.
+        uint startOffset = 0;
+
+        if (coder.Properties is not null && coder.Properties.Length != 0)
+        {
+          if (coder.Properties.Length != 4)
+          {
+            decoded = [];
+            return SevenZipFolderDecodeResult.InvalidData;
+          }
+
+          startOffset = BinaryPrimitives.ReadUInt32LittleEndian(coder.Properties);
+        }
+
+        // Фильтр не меняет размер.
+        if (input.Length != expectedUnpackSize)
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.InvalidData;
+        }
+
+        decoded = input.ToArray();
+        BcjPpcDecodeInPlace(decoded.AsSpan(), startOffset);
+        return SevenZipFolderDecodeResult.Ok;
+      }
+
       if (IsSingleByteMethodId(coder.MethodId, _methodIdLzma2))
       {
         if (coder.Properties is null || coder.Properties.Length != 1)
@@ -570,6 +598,21 @@ public static class SevenZipFolderDecoder
        methodId[2] == 0x07 &&
        methodId[3] == 0x01);
   }
+
+  private static bool IsBcjPpcMethodId(byte[] methodId)
+  {
+    // Methods.txt:
+    // 05 - PPC (big-endian)
+    // 03 03 02 05 - 7z Branch Codecs / PPC (big-endian)
+    return
+      methodId.Length == 1 && methodId[0] == 0x05 ||
+      methodId.Length == 4 &&
+      methodId[0] == 0x03 &&
+      methodId[1] == 0x03 &&
+      methodId[2] == 0x02 &&
+      methodId[3] == 0x05;
+  }
+
   private static void BcjArmDecodeInPlace(Span<byte> data, uint startOffset)
   {
     // Port из LZMA SDK (Bra.c): ARM_Convert(data, size, ip, encoding=0).
@@ -609,18 +652,17 @@ public static class SevenZipFolderDecoder
     if (data.Length < 4)
       return;
 
-    int limit = data.Length - 4;      // size -= 4
-    uint ip = unchecked(startOffset + 4u); // ip += 4
+    int limit = data.Length - 4;            // size -= 4
+    uint ip = unchecked(startOffset + 4u);  // ip += 4
 
     for (int i = 0; i <= limit; i += 2)
-    {
       if ((data[i + 1] & 0xF8) == 0xF0 &&
-           (data[i + 3] & 0xF8) == 0xF8)
+                 (data[i + 3] & 0xF8) == 0xF8)
       {
         uint src =
-          (((uint)data[i + 1] & 0x7u) << 19) |
+          ((data[i + 1] & 0x7u) << 19) |
           ((uint)data[i + 0] << 11) |
-          (((uint)data[i + 3] & 0x7u) << 8) |
+          ((data[i + 3] & 0x7u) << 8) |
           data[i + 2];
 
         src <<= 1;
@@ -635,8 +677,44 @@ public static class SevenZipFolderDecoder
 
         i += 2; // как в оригинале: внутри for делается i += 2
       }
+  }
+
+  private static void BcjPpcDecodeInPlace(Span<byte> data, uint startOffset)
+  {
+    // Port из LZMA SDK (Bra.c): PPC_Convert(data, size, ip, encoding=0).
+    // Работает по 4-байтным инструкциям, big-endian.
+    if (data.Length < 4)
+      return;
+
+    int limit = data.Length - 4;
+
+    for (int i = 0; i <= limit; i += 4)
+    {
+      // Условие из Bra.c:
+      // (data[i] >> 2) == 0x12  => 0x48..0x4B
+      // (data[i + 3] & 3) == 1
+      if ((data[i] >> 2) != 0x12 || (data[i + 3] & 3) != 1)
+        continue;
+
+      uint src =
+        ((uint)(data[i + 0] & 3) << 24) |
+        ((uint)data[i + 1] << 16) |
+        ((uint)data[i + 2] << 8) |
+        ((uint)data[i + 3] & 0xFFFFFFFCu);
+
+      uint dest = unchecked(src - (startOffset + (uint)i));
+
+      data[i + 0] = (byte)(0x48 | ((dest >> 24) & 0x3));
+      data[i + 1] = (byte)(dest >> 16);
+      data[i + 2] = (byte)(dest >> 8);
+
+      byte b3 = data[i + 3];
+      b3 &= 0x3;
+      b3 |= (byte)dest;
+      data[i + 3] = b3;
     }
   }
+
   private static void BcjX86DecodeInPlace(Span<byte> data, uint startOffset)
   {
     // Port из LZMA SDK (Bra86.c): x86 BCJ decoder.
