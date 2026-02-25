@@ -642,6 +642,88 @@ public static class SevenZipFolderDecoder
     return SevenZipFolderDecodeResult.Ok;
   }
 
+  public static SevenZipFolderDecodeResult TryGetFolderPackedStreamRanges(
+  SevenZipStreamsInfo streamsInfo,
+  ReadOnlySpan<byte> packedStreams,
+  int folderIndex,
+  out SevenZipFolderPackedStreamRange[] ranges)
+  {
+    ranges = [];
+
+    ArgumentNullException.ThrowIfNull(streamsInfo);
+
+    if (streamsInfo.PackInfo is not { } packInfo)
+      return SevenZipFolderDecodeResult.InvalidData;
+
+    if (streamsInfo.UnpackInfo is not { } unpackInfo)
+      return SevenZipFolderDecodeResult.InvalidData;
+
+    if ((uint)folderIndex >= (uint)unpackInfo.Folders.Length)
+      return SevenZipFolderDecodeResult.InvalidData;
+
+    SevenZipFolder folder = unpackInfo.Folders[folderIndex];
+
+    if (folder.PackedStreamIndices.Length == 0)
+      return SevenZipFolderDecodeResult.InvalidData;
+
+    int folderPackedStreamCount = folder.PackedStreamIndices.Length;
+
+    // Глобальный индекс первого pack stream'а folder'а в PackInfo.
+    // На этапе 1 предполагаем стандартный порядок: pack streams идут подряд по folder'ам.
+    ulong basePackStreamIndexU64 = 0;
+    for (int i = 0; i < folderIndex; i++)
+      basePackStreamIndexU64 += (ulong)unpackInfo.Folders[i].PackedStreamIndices.Length;
+
+    if (basePackStreamIndexU64 > int.MaxValue)
+      return SevenZipFolderDecodeResult.NotSupported;
+
+    if (basePackStreamIndexU64 + (ulong)folderPackedStreamCount > (ulong)packInfo.PackSizes.Length)
+      return SevenZipFolderDecodeResult.InvalidData;
+
+    int basePackStreamIndex = (int)basePackStreamIndexU64;
+
+    // Вычисляем стартовый offset внутри packedStreams: PackPos + sum(PackSizes[0..base-1]).
+    ulong startU64 = packInfo.PackPos;
+    for (int i = 0; i < basePackStreamIndex; i++)
+      startU64 += packInfo.PackSizes[i];
+
+    if (startU64 > (ulong)packedStreams.Length)
+      return SevenZipFolderDecodeResult.InvalidData;
+
+    if (startU64 > int.MaxValue)
+      return SevenZipFolderDecodeResult.NotSupported;
+
+    var tmp = new SevenZipFolderPackedStreamRange[folderPackedStreamCount];
+
+    ulong curStart = startU64;
+
+    for (int i = 0; i < folderPackedStreamCount; i++)
+    {
+      int globalIndex = basePackStreamIndex + i;
+      ulong sizeU64 = packInfo.PackSizes[globalIndex];
+
+      if (curStart > (ulong)packedStreams.Length)
+        return SevenZipFolderDecodeResult.InvalidData;
+
+      if (sizeU64 > (ulong)packedStreams.Length - curStart)
+        return SevenZipFolderDecodeResult.InvalidData;
+
+      if (curStart > int.MaxValue || sizeU64 > int.MaxValue)
+        return SevenZipFolderDecodeResult.NotSupported;
+
+      tmp[i] = new SevenZipFolderPackedStreamRange(
+        folderInIndex: folder.PackedStreamIndices[i],
+        packStreamIndex: (uint)globalIndex,
+        offset: (int)curStart,
+        length: (int)sizeU64);
+
+      curStart += sizeU64;
+    }
+
+    ranges = tmp;
+    return SevenZipFolderDecodeResult.Ok;
+  }
+
   private static bool IsSingleByteMethodId(byte[] methodId, byte expected)
       => methodId.Length == 1 && methodId[0] == expected;
 
