@@ -1,11 +1,7 @@
-using System;
 using System.Buffers.Binary;
-using System.IO;
 using System.Runtime.CompilerServices;
 
 using Lzma.Core.SevenZip;
-
-using Xunit;
 
 namespace Lzma.Core.Tests.SevenZip;
 

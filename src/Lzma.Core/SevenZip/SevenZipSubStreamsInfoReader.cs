@@ -266,7 +266,7 @@ public static class SevenZipSubStreamsInfoReader
             return SevenZipSubStreamsInfoReadResult.InvalidData;
           }
 
-          bool hasFolderCrc = folderCrcDefined is not null && folderCrcDefined[f];
+          bool hasFolderCrc = folderCrcDefined?[f] == true;
 
           // 1 stream + CRC на уровне folder => unknown CRC streams = 0
           if (n == 1 && hasFolderCrc)

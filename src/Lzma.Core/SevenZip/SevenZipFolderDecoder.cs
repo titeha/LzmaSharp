@@ -822,15 +822,6 @@ public static class SevenZipFolderDecoder
       return SevenZipFolderDecodeResult.Ok;
     }
 
-    // Порт из LZMA SDK (Bcj2.c). Комментарии по-русски оставляем, код максимально “в лоб”.
-    // buf0 - основной поток кода (с удалёнными disp32 для части переходов)
-    // buf1 - поток адресов для E8
-    // buf2 - поток адресов для E9 и Jcc
-    // buf3 - range-coded поток флагов (какие переходы “вынесены” в buf1/buf2)
-
-    const int kNumTopBits = 24;
-    const uint kTopValue = 1u << kNumTopBits;
-
     const int kNumBitModelTotalBits = 11;
     const uint kBitModelTotal = 1u << kNumBitModelTotalBits; // 2048
 
