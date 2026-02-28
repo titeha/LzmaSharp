@@ -50,6 +50,93 @@ public static class SevenZipFolderDecoder
 
     SevenZipFolder folder = unpackInfo.Folders[folderIndex];
 
+    // Размеры распаковки в 7z лежат не в самом Folder, а отдельным массивом в UnpackInfo.
+    if ((uint)folderIndex >= (uint)unpackInfo.FolderUnpackSizes.Length)
+      return SevenZipFolderDecodeResult.InvalidData;
+
+    ulong[]? folderUnpackSizes = unpackInfo.FolderUnpackSizes[folderIndex];
+    if (folderUnpackSizes is null || folderUnpackSizes.Length == 0)
+      return SevenZipFolderDecodeResult.InvalidData;
+
+    // BCJ2 — multi-stream coder, обрабатываем отдельной веткой (не линейный конвейер 1in/1out).
+    bool hasBcj2 = false;
+    for (int i = 0; i < folder.Coders.Length; i++)
+    {
+      if (IsBcj2MethodId(folder.Coders[i].MethodId))
+      {
+        hasBcj2 = true;
+        break;
+      }
+    }
+
+    if (hasBcj2)
+    {
+      SevenZipFolderDecodeResult rInputs = TryDecodeBcj2InputStreamsToArrays(
+        streamsInfo,
+        packedStreams,
+        folderIndex,
+        out byte[][] inputs);
+
+      if (rInputs != SevenZipFolderDecodeResult.Ok)
+        return rInputs;
+
+      if (inputs.Length != 4)
+        return SevenZipFolderDecodeResult.InvalidData;
+
+      if (folder.NumOutStreams > int.MaxValue)
+        return SevenZipFolderDecodeResult.NotSupported;
+
+      int totalOut = (int)folder.NumOutStreams;
+
+      if (folderUnpackSizes.Length != totalOut)
+        return SevenZipFolderDecodeResult.InvalidData;
+
+      // Находим финальный out stream folder'а: тот, который НЕ используется как producer (BindPairs.OutIndex).
+      bool[] outUsed = new bool[totalOut];
+
+      for (int i = 0; i < folder.BindPairs.Length; i++)
+      {
+        ulong outIndexU64 = folder.BindPairs[i].OutIndex;
+        if (outIndexU64 > int.MaxValue)
+          return SevenZipFolderDecodeResult.NotSupported;
+
+        int outIndex = (int)outIndexU64;
+        if ((uint)outIndex >= (uint)totalOut)
+          return SevenZipFolderDecodeResult.InvalidData;
+
+        outUsed[outIndex] = true;
+      }
+
+      int finalOutIndex = -1;
+      for (int i = 0; i < totalOut; i++)
+      {
+        if (!outUsed[i])
+        {
+          if (finalOutIndex != -1)
+            return SevenZipFolderDecodeResult.NotSupported; // не один финальный выход
+
+          finalOutIndex = i;
+        }
+      }
+
+      if (finalOutIndex < 0)
+        return SevenZipFolderDecodeResult.NotSupported;
+
+      ulong outSizeU64 = folderUnpackSizes[finalOutIndex];
+      if (outSizeU64 > int.MaxValue)
+        return SevenZipFolderDecodeResult.NotSupported;
+
+      int outSize = (int)outSizeU64;
+
+      return TryDecodeBcj2ToArray(
+        buf0: inputs[0],
+        buf1: inputs[1],
+        buf2: inputs[2],
+        buf3: inputs[3],
+        outSize: outSize,
+        output: out output);
+    }
+
     // На этапе 1 поддерживаем только "линейный конвейер":
     // - ровно один packed stream;
     // - N coders (N >= 1);
@@ -74,14 +161,6 @@ public static class SevenZipFolderDecoder
       if (coder.NumInStreams != 1 || coder.NumOutStreams != 1)
         return SevenZipFolderDecodeResult.NotSupported;
     }
-
-    // Размеры распаковки в 7z лежат не в самом Folder, а отдельным массивом в UnpackInfo.
-    if ((uint)folderIndex >= (uint)unpackInfo.FolderUnpackSizes.Length)
-      return SevenZipFolderDecodeResult.InvalidData;
-
-    ulong[]? folderUnpackSizes = unpackInfo.FolderUnpackSizes[folderIndex];
-    if (folderUnpackSizes is null || folderUnpackSizes.Length == 0)
-      return SevenZipFolderDecodeResult.InvalidData;
 
     ulong packStreamIndexU64 = 0;
     for (int i = 0; i < folderIndex; i++)

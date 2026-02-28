@@ -78,7 +78,17 @@ public static class SevenZipSubStreamsInfoReader
 
           unpackSizesPerFolder = new ulong[folderCount][];
           for (int f = 0; f < folderCount; f++)
-            unpackSizesPerFolder[f] = [GetFolderTotalUnpackSize(unpackInfo, f)];
+          {
+            var tr = TryGetFolderTotalUnpackSize(unpackInfo, f, out ulong folderTotal);
+            if (tr != SevenZipSubStreamsInfoReadResult.Ok)
+            {
+              subStreamsInfo = null;
+              bytesConsumed = 0;
+              return tr;
+            }
+
+            unpackSizesPerFolder[f] = [folderTotal];
+          }
         }
         else if (unpackSizesPerFolder is null)
         {
@@ -170,7 +180,13 @@ public static class SevenZipSubStreamsInfoReader
             return SevenZipSubStreamsInfoReadResult.NotSupported;
           }
 
-          ulong folderTotal = GetFolderTotalUnpackSize(unpackInfo, f);
+          var tr = TryGetFolderTotalUnpackSize(unpackInfo, f, out ulong folderTotal);
+          if (tr != SevenZipSubStreamsInfoReadResult.Ok)
+          {
+            subStreamsInfo = null;
+            bytesConsumed = 0;
+            return tr;
+          }
 
           int streams = (int)n;
           var sizes = new ulong[streams];
@@ -330,14 +346,57 @@ public static class SevenZipSubStreamsInfoReader
     }
   }
 
-  private static ulong GetFolderTotalUnpackSize(SevenZipUnpackInfo unpackInfo, int folderIndex)
+  private static SevenZipSubStreamsInfoReadResult TryGetFolderTotalUnpackSize(
+  SevenZipUnpackInfo unpackInfo,
+  int folderIndex,
+  out ulong folderTotal)
   {
-    // В большинстве практических случаев (и в наших тестах) у папки один выходной поток.
-    // Если потоков несколько, то на этом этапе мы считаем, что интересен первый.
-    var sizes = unpackInfo.FolderUnpackSizes[folderIndex];
-    if (sizes.Length == 0)
-      throw new InvalidOperationException("FolderUnpackSizes не содержит ни одного элемента.");
+    folderTotal = 0;
 
-    return sizes[0];
+    SevenZipFolder folder = unpackInfo.Folders[folderIndex];
+
+    ulong[] sizes = unpackInfo.FolderUnpackSizes[folderIndex];
+    if (sizes is null || sizes.Length == 0)
+      return SevenZipSubStreamsInfoReadResult.InvalidData;
+
+    if (folder.NumOutStreams > int.MaxValue)
+      return SevenZipSubStreamsInfoReadResult.NotSupported;
+
+    int totalOut = (int)folder.NumOutStreams;
+    if (sizes.Length != totalOut)
+      return SevenZipSubStreamsInfoReadResult.InvalidData;
+
+    bool[] outUsed = new bool[totalOut];
+
+    for (int i = 0; i < folder.BindPairs.Length; i++)
+    {
+      ulong outU64 = folder.BindPairs[i].OutIndex;
+      if (outU64 > int.MaxValue)
+        return SevenZipSubStreamsInfoReadResult.NotSupported;
+
+      int outIndex = (int)outU64;
+      if ((uint)outIndex >= (uint)totalOut)
+        return SevenZipSubStreamsInfoReadResult.InvalidData;
+
+      outUsed[outIndex] = true;
+    }
+
+    int finalOutIndex = -1;
+    for (int i = 0; i < totalOut; i++)
+    {
+      if (!outUsed[i])
+      {
+        if (finalOutIndex != -1)
+          return SevenZipSubStreamsInfoReadResult.NotSupported; // несколько “финальных” выходов — не наш этап
+
+        finalOutIndex = i;
+      }
+    }
+
+    if (finalOutIndex < 0)
+      return SevenZipSubStreamsInfoReadResult.InvalidData;
+
+    folderTotal = sizes[finalOutIndex];
+    return SevenZipSubStreamsInfoReadResult.Ok;
   }
 }

@@ -235,7 +235,13 @@ public static class SevenZipArchiveDecoder
         if (folderSizes is null || folderSizes.Length == 0)
           return SevenZipArchiveDecodeResult.InvalidData;
 
-        unpackSizesPerFolder[i] = [folderSizes[0]];
+        SevenZipFolder folder = unpackInfo.Folders[i];
+
+        SevenZipArchiveDecodeResult sizeRes = TryGetFolderFinalOutSize(folder, folderSizes, out ulong finalSize);
+        if (sizeRes != SevenZipArchiveDecodeResult.Ok)
+          return sizeRes;
+
+        unpackSizesPerFolder[i] = [finalSize];
       }
     }
 
@@ -333,6 +339,55 @@ public static class SevenZipArchiveDecoder
       return SevenZipArchiveDecodeResult.InvalidData;
 
     files = [.. decoded];
+    return SevenZipArchiveDecodeResult.Ok;
+  }
+
+  private static SevenZipArchiveDecodeResult TryGetFolderFinalOutSize(
+    SevenZipFolder folder,
+    ulong[] folderUnpackSizes,
+    out ulong finalSize)
+  {
+    finalSize = 0;
+
+    if (folder.NumOutStreams > int.MaxValue)
+      return SevenZipArchiveDecodeResult.NotSupported;
+
+    int totalOut = (int)folder.NumOutStreams;
+
+    if (folderUnpackSizes.Length != totalOut)
+      return SevenZipArchiveDecodeResult.InvalidData;
+
+    bool[] outUsed = new bool[totalOut];
+
+    for (int i = 0; i < folder.BindPairs.Length; i++)
+    {
+      ulong outU64 = folder.BindPairs[i].OutIndex;
+      if (outU64 > int.MaxValue)
+        return SevenZipArchiveDecodeResult.NotSupported;
+
+      int outIndex = (int)outU64;
+      if ((uint)outIndex >= (uint)totalOut)
+        return SevenZipArchiveDecodeResult.InvalidData;
+
+      outUsed[outIndex] = true;
+    }
+
+    int finalOutIndex = -1;
+    for (int i = 0; i < totalOut; i++)
+    {
+      if (!outUsed[i])
+      {
+        if (finalOutIndex != -1)
+          return SevenZipArchiveDecodeResult.NotSupported; // несколько финальных выходов — не наш этап
+
+        finalOutIndex = i;
+      }
+    }
+
+    if (finalOutIndex < 0)
+      return SevenZipArchiveDecodeResult.InvalidData;
+
+    finalSize = folderUnpackSizes[finalOutIndex];
     return SevenZipArchiveDecodeResult.Ok;
   }
 }
