@@ -724,6 +724,342 @@ public static class SevenZipFolderDecoder
     return SevenZipFolderDecodeResult.Ok;
   }
 
+  public static SevenZipFolderDecodeResult TryDecodeBcj2InputStreamsToArrays(
+  SevenZipStreamsInfo streamsInfo,
+  ReadOnlySpan<byte> packedStreams,
+  int folderIndex,
+  out byte[][] decodedInputStreams)
+  {
+    decodedInputStreams = [];
+
+    ArgumentNullException.ThrowIfNull(streamsInfo);
+
+    if (streamsInfo.PackInfo is not { })
+      return SevenZipFolderDecodeResult.InvalidData;
+
+    if (streamsInfo.UnpackInfo is not { } unpackInfo)
+      return SevenZipFolderDecodeResult.InvalidData;
+
+    if ((uint)folderIndex >= (uint)unpackInfo.Folders.Length)
+      return SevenZipFolderDecodeResult.InvalidData;
+
+    if ((uint)folderIndex >= (uint)unpackInfo.FolderUnpackSizes.Length)
+      return SevenZipFolderDecodeResult.InvalidData;
+
+    ulong[]? folderUnpackSizes = unpackInfo.FolderUnpackSizes[folderIndex];
+    if (folderUnpackSizes is null || folderUnpackSizes.Length == 0)
+      return SevenZipFolderDecodeResult.InvalidData;
+
+    SevenZipFolder folder = unpackInfo.Folders[folderIndex];
+
+    // Для BCJ2 ожидаем 4 входных packed stream'а.
+    if (folder.PackedStreamIndices.Length != 4)
+      return SevenZipFolderDecodeResult.NotSupported;
+
+    // Получаем диапазоны 4 packed stream'ов.
+    SevenZipFolderDecodeResult rr = TryGetFolderPackedStreamRanges(
+      streamsInfo,
+      packedStreams,
+      folderIndex,
+      out SevenZipFolderPackedStreamRange[] ranges);
+
+    if (rr != SevenZipFolderDecodeResult.Ok)
+      return rr;
+
+    if (ranges.Length != 4)
+      return SevenZipFolderDecodeResult.InvalidData;
+
+    int coderCount = folder.Coders.Length;
+    if (coderCount == 0)
+      return SevenZipFolderDecodeResult.InvalidData;
+
+    // Строим offsets входных/выходных потоков для каждого coder.
+    // И заполняем owner-таблицы: глобальный in/out индекс -> coderIndex.
+    if (folder.NumInStreams > int.MaxValue || folder.NumOutStreams > int.MaxValue)
+      return SevenZipFolderDecodeResult.NotSupported;
+
+    int totalIn = (int)folder.NumInStreams;
+    int totalOut = (int)folder.NumOutStreams;
+
+    var coderInStart = new int[coderCount];
+    var coderOutStart = new int[coderCount];
+
+    var inOwner = new int[totalIn];
+    var outOwner = new int[totalOut];
+
+    int inCursor = 0;
+    int outCursor = 0;
+
+    int bcj2CoderIndex = -1;
+
+    for (int ci = 0; ci < coderCount; ci++)
+    {
+      SevenZipCoderInfo c = folder.Coders[ci];
+
+      if (c.NumInStreams > int.MaxValue || c.NumOutStreams > int.MaxValue)
+        return SevenZipFolderDecodeResult.NotSupported;
+
+      int nin = (int)c.NumInStreams;
+      int nout = (int)c.NumOutStreams;
+
+      if (inCursor > totalIn - nin || outCursor > totalOut - nout)
+        return SevenZipFolderDecodeResult.InvalidData;
+
+      coderInStart[ci] = inCursor;
+      coderOutStart[ci] = outCursor;
+
+      for (int k = 0; k < nin; k++)
+        inOwner[inCursor + k] = ci;
+
+      for (int k = 0; k < nout; k++)
+        outOwner[outCursor + k] = ci;
+
+      if (IsBcj2MethodId(c.MethodId))
+      {
+        if (bcj2CoderIndex != -1)
+          return SevenZipFolderDecodeResult.NotSupported; // больше одного BCJ2 на этапе 1 не поддерживаем
+        bcj2CoderIndex = ci;
+      }
+
+      inCursor += nin;
+      outCursor += nout;
+    }
+
+    if (inCursor != totalIn || outCursor != totalOut)
+      return SevenZipFolderDecodeResult.InvalidData;
+
+    if (bcj2CoderIndex == -1)
+      return SevenZipFolderDecodeResult.NotSupported;
+
+    SevenZipCoderInfo bcj2Coder = folder.Coders[bcj2CoderIndex];
+
+    if (bcj2Coder.NumInStreams != 4 || bcj2Coder.NumOutStreams != 1)
+      return SevenZipFolderDecodeResult.NotSupported;
+
+    int bcj2InStart = coderInStart[bcj2CoderIndex];
+
+    if (folderUnpackSizes.Length != totalOut)
+      return SevenZipFolderDecodeResult.InvalidData;
+
+    // Результат: 4 входных потока BCJ2 в порядке slot'ов 0..3.
+    var result = new byte[4][];
+    var filled = new bool[4];
+
+    // Для каждого входа BCJ2:
+    // 1) по BindPairs находим producer OutIndex,
+    // 2) по outOwner узнаём producer coder (ожидаем LZMA2 1in/1out),
+    // 3) его единственный InIndex должен быть одним из PackedStreamIndices -> берём соответствующий range,
+    // 4) распаковываем LZMA2 и кладём в result[slot].
+    for (int slot = 0; slot < 4; slot++)
+    {
+      ulong consumerIn = (ulong)(bcj2InStart + slot);
+
+      bool found = false;
+      ulong producerOut = 0;
+
+      for (int i = 0; i < folder.BindPairs.Length; i++)
+      {
+        SevenZipBindPair bp = folder.BindPairs[i];
+        if (bp.InIndex == consumerIn)
+        {
+          producerOut = bp.OutIndex;
+          found = true;
+          break;
+        }
+      }
+
+      if (!found)
+      {
+        // Для BCJ2 один из входных потоков может быть unbound и лежать в packed stream напрямую
+        // (без producer coder'а). В этом случае просто берём байты packed stream как есть.
+        int localPackOrdinal = -1;
+        for (int i = 0; i < folder.PackedStreamIndices.Length; i++)
+        {
+          if (folder.PackedStreamIndices[i] == consumerIn)
+          {
+            localPackOrdinal = i;
+            break;
+          }
+        }
+
+        if (localPackOrdinal < 0)
+          return SevenZipFolderDecodeResult.InvalidData;
+
+        ReadOnlySpan<byte> raw = packedStreams.Slice(ranges[localPackOrdinal].Offset, ranges[localPackOrdinal].Length);
+
+        if (filled[slot])
+          return SevenZipFolderDecodeResult.InvalidData;
+
+        result[slot] = raw.ToArray();
+        filled[slot] = true;
+        continue;
+      }
+
+      if (producerOut > int.MaxValue)
+        return SevenZipFolderDecodeResult.NotSupported;
+
+      int producerOutIndex = (int)producerOut;
+      if ((uint)producerOutIndex >= (uint)totalOut)
+        return SevenZipFolderDecodeResult.InvalidData;
+
+      int producerCoderIndex = outOwner[producerOutIndex];
+      SevenZipCoderInfo producerCoder = folder.Coders[producerCoderIndex];
+
+      // Producer coder для входа BCJ2 ожидаем 1in/1out (Copy / LZMA2 / LZMA).
+      if (producerCoder.NumInStreams != 1 || producerCoder.NumOutStreams != 1)
+        return SevenZipFolderDecodeResult.NotSupported;
+
+      int producerInIndex = coderInStart[producerCoderIndex];
+
+      int packOrdinal = -1;
+      for (int i = 0; i < folder.PackedStreamIndices.Length; i++)
+      {
+        if (folder.PackedStreamIndices[i] == (ulong)producerInIndex)
+        {
+          packOrdinal = i;
+          break;
+        }
+      }
+
+      if (packOrdinal < 0)
+        return SevenZipFolderDecodeResult.InvalidData;
+
+      if (ranges[packOrdinal].FolderInIndex != folder.PackedStreamIndices[packOrdinal])
+        return SevenZipFolderDecodeResult.InvalidData;
+
+      ReadOnlySpan<byte> src = packedStreams.Slice(ranges[packOrdinal].Offset, ranges[packOrdinal].Length);
+
+      if ((uint)producerOutIndex >= (uint)folderUnpackSizes.Length)
+        return SevenZipFolderDecodeResult.InvalidData;
+
+      ulong expectedU64 = folderUnpackSizes[producerOutIndex];
+      if (expectedU64 > int.MaxValue)
+        return SevenZipFolderDecodeResult.NotSupported;
+
+      int expectedSize = (int)expectedU64;
+
+      byte[] decoded;
+
+      if (IsSingleByteMethodId(producerCoder.MethodId, _methodIdCopy))
+      {
+        decoded = src.ToArray();
+        if (decoded.Length != expectedSize)
+          return SevenZipFolderDecodeResult.InvalidData;
+      }
+      else if (IsSingleByteMethodId(producerCoder.MethodId, _methodIdLzma2))
+      {
+        if (producerCoder.Properties is null || producerCoder.Properties.Length != 1)
+          return SevenZipFolderDecodeResult.InvalidData;
+
+        byte lzma2PropertiesByte = producerCoder.Properties[0];
+
+        if (!SevenZipLzma2Coder.TryDecodeDictionarySize(lzma2PropertiesByte, out uint dictionarySize))
+          return SevenZipFolderDecodeResult.InvalidData;
+
+        if (dictionarySize > int.MaxValue)
+          return SevenZipFolderDecodeResult.NotSupported;
+
+        Lzma2DecodeResult lzma2Result = Lzma2Decoder.DecodeToArray(
+          input: src,
+          dictionaryProp: lzma2PropertiesByte,
+          output: out decoded,
+          bytesConsumed: out int bytesConsumed);
+
+        if (lzma2Result == Lzma2DecodeResult.NotSupported)
+          return SevenZipFolderDecodeResult.NotSupported;
+
+        if (lzma2Result == Lzma2DecodeResult.InvalidData)
+          return SevenZipFolderDecodeResult.InvalidData;
+
+        if (decoded.Length != expectedSize)
+          return SevenZipFolderDecodeResult.InvalidData;
+
+        if ((uint)bytesConsumed > (uint)src.Length)
+          return SevenZipFolderDecodeResult.InvalidData;
+
+        // Допускаем хвост из нулей.
+        if (bytesConsumed != src.Length)
+        {
+          ReadOnlySpan<byte> tail = src[bytesConsumed..];
+          for (int i = 0; i < tail.Length; i++)
+          {
+            if (tail[i] != 0)
+              return SevenZipFolderDecodeResult.InvalidData;
+          }
+        }
+      }
+      else if (producerCoder.MethodId.Length == 3 &&
+               producerCoder.MethodId[0] == 0x03 &&
+               producerCoder.MethodId[1] == 0x01 &&
+               producerCoder.MethodId[2] == 0x01)
+      {
+        // LZMA (7z): properties = 5 байт: [0]=propsByte, [1..4]=dictSize LE
+        if (producerCoder.Properties is null || producerCoder.Properties.Length != 5)
+          return SevenZipFolderDecodeResult.InvalidData;
+
+        byte lzmaPropsByte = producerCoder.Properties[0];
+        if (!LzmaProperties.TryParse(lzmaPropsByte, out LzmaProperties lzmaProps))
+          return SevenZipFolderDecodeResult.InvalidData;
+
+        uint dictU32 = BinaryPrimitives.ReadUInt32LittleEndian(producerCoder.Properties.AsSpan(1, 4));
+        if (dictU32 == 0)
+          return SevenZipFolderDecodeResult.InvalidData;
+
+        if (dictU32 > int.MaxValue)
+          return SevenZipFolderDecodeResult.NotSupported;
+
+        decoded = new byte[expectedSize];
+        var decoder = new LzmaDecoder(lzmaProps, (int)dictU32);
+
+        LzmaDecodeResult lzmaResult = decoder.Decode(
+          src: src,
+          bytesConsumed: out int lzmaBytesConsumed,
+          dst: decoded,
+          bytesWritten: out int lzmaBytesWritten,
+          progress: out _);
+
+        if (lzmaResult == LzmaDecodeResult.NotImplemented)
+          return SevenZipFolderDecodeResult.NotSupported;
+
+        if (lzmaResult == LzmaDecodeResult.InvalidData || lzmaResult == LzmaDecodeResult.NeedsMoreInput)
+          return SevenZipFolderDecodeResult.InvalidData;
+
+        if (lzmaBytesWritten != expectedSize)
+          return SevenZipFolderDecodeResult.InvalidData;
+
+        if ((uint)lzmaBytesConsumed > (uint)src.Length)
+          return SevenZipFolderDecodeResult.InvalidData;
+
+        // Для raw LZMA хвост не валидируем.
+      }
+      else
+      {
+        return SevenZipFolderDecodeResult.NotSupported;
+      }
+
+      if (filled[slot])
+        return SevenZipFolderDecodeResult.InvalidData;
+
+      result[slot] = decoded;
+      filled[slot] = true;
+    }
+
+    decodedInputStreams = result;
+    return SevenZipFolderDecodeResult.Ok;
+  }
+
+  private static bool IsBcj2MethodId(byte[] methodId)
+  {
+    // BCJ2 обычно 03 03 01 1B, иногда короткий 1B.
+    return
+      methodId.Length == 1 && methodId[0] == 0x1B ||
+      methodId.Length == 4 &&
+      methodId[0] == 0x03 &&
+      methodId[1] == 0x03 &&
+      methodId[2] == 0x01 &&
+      methodId[3] == 0x1B;
+  }
+
   private static bool IsSingleByteMethodId(byte[] methodId, byte expected)
       => methodId.Length == 1 && methodId[0] == expected;
 
