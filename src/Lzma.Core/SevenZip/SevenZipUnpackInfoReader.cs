@@ -1,3 +1,5 @@
+using System.Buffers.Binary;
+
 namespace Lzma.Core.SevenZip;
 
 public enum SevenZipUnpackInfoReadResult
@@ -366,7 +368,16 @@ public static class SevenZipUnpackInfoReader
       if (crcBytesU64 > (ulong)(input.Length - cursor))
         return SevenZipUnpackInfoReadResult.NeedMoreInput;
 
-      cursor += (int)crcBytesU64;
+      // Читаем CRC32 только для определённых folder’ов, в порядке индексов folder.
+      uint[] folderCrc = new uint[numFolders];
+      for (int i = 0; i < numFolders; i++)
+      {
+        if (!folderCrcDefined[i])
+          continue;
+
+        folderCrc[i] = BinaryPrimitives.ReadUInt32LittleEndian(input.Slice(cursor, 4));
+        cursor += 4;
+      }
 
       if (cursor >= input.Length)
         return SevenZipUnpackInfoReadResult.NeedMoreInput;
@@ -375,8 +386,8 @@ public static class SevenZipUnpackInfoReader
       if (endAfterCrc != SevenZipNid.End)
         return SevenZipUnpackInfoReadResult.InvalidData;
 
-      // ВАЖНО: теперь передаём folderCrcDefined.
-      unpackInfo = new SevenZipUnpackInfo(folders, folderUnpackSizes, folderCrcDefined);
+      // ВАЖНО: теперь передаём и folderCrcDefined, и folderCrc.
+      unpackInfo = new SevenZipUnpackInfo(folders, folderUnpackSizes, folderCrcDefined, folderCrc);
       bytesConsumed = cursor;
       return SevenZipUnpackInfoReadResult.Ok;
     }

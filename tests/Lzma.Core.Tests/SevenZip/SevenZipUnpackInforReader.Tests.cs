@@ -156,6 +156,12 @@ public sealed class SevenZipUnpackInfoReaderTests
     Assert.Single(unpackInfo.FolderUnpackSizes);
     Assert.Single(unpackInfo.FolderUnpackSizes[0]);
     Assert.Equal((ulong)5, unpackInfo.FolderUnpackSizes[0][0]);
+
+    Assert.NotNull(unpackInfo.FolderCrcDefined);
+    Assert.Equal([true], unpackInfo.FolderCrcDefined!);
+
+    Assert.NotNull(unpackInfo.FolderCrc);
+    Assert.Equal(0x11223344u, unpackInfo.FolderCrc![0]); // 44 33 22 11 (LE)
   }
 
   [Fact]
@@ -215,5 +221,46 @@ public sealed class SevenZipUnpackInfoReaderTests
 
     Assert.Single(unpackInfo.FolderUnpackSizes);
     Assert.Equal(2, unpackInfo.FolderUnpackSizes[0].Length);
+  }
+
+  [Fact]
+  public void TryRead_Crc_PartialDefined_StoresCrcOnlyForDefinedFolders()
+  {
+    byte[] data =
+    [
+      SevenZipNid.UnpackInfo,
+    SevenZipNid.Folder,
+    0x02, // NumFolders=2
+    0x00, // External=0
+
+    // Folder0: NumCoders=1, Coder: idSize=1, id=0x21 (LZMA2)
+    0x01, 0x01, 0x21,
+
+    // Folder1: NumCoders=1, Coder: idSize=1, id=0x21 (LZMA2)
+    0x01, 0x01, 0x21,
+
+    SevenZipNid.CodersUnpackSize,
+    0x05, // folder0 outSize
+    0x06, // folder1 outSize
+
+    SevenZipNid.Crc,
+    0x00, // AllAreDefined=0
+    0x80, // Defined bitfield: [true,false] (MSB first)
+    0x44, 0x33, 0x22, 0x11, // CRC только для folder0
+    SevenZipNid.End,
+  ];
+
+    var res = SevenZipUnpackInfoReader.TryRead(data, out var unpackInfo, out int consumed);
+
+    Assert.Equal(SevenZipUnpackInfoReadResult.Ok, res);
+    Assert.Equal(data.Length, consumed);
+
+    Assert.NotNull(unpackInfo);
+    Assert.NotNull(unpackInfo.FolderCrcDefined);
+    Assert.Equal([true, false], unpackInfo.FolderCrcDefined!);
+
+    Assert.NotNull(unpackInfo.FolderCrc);
+    Assert.Equal(0x11223344u, unpackInfo.FolderCrc![0]);
+    Assert.Equal(0u, unpackInfo.FolderCrc![1]);
   }
 }
