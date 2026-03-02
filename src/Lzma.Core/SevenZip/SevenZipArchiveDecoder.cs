@@ -166,6 +166,21 @@ public static class SevenZipArchiveDecoder
       }
     }
 
+    // FilesInfo.kCRC: CRC32 по файлам (нужно для EmptyStream)
+    bool[]? fileCrcDefined = filesInfo.CrcDefined;
+    uint[]? fileCrc = filesInfo.Crc;
+
+    if ((fileCrcDefined is null) != (fileCrc is null))
+      return SevenZipArchiveDecodeResult.InvalidData;
+
+    if (fileCrcDefined is not null && fileCrcDefined.Length != fileCount)
+      return SevenZipArchiveDecodeResult.InvalidData;
+
+    if (fileCrc is not null && fileCrc.Length != fileCount)
+      return SevenZipArchiveDecodeResult.InvalidData;
+
+    uint emptyStreamCrc = Crc32.Compute([]);
+
     // Считаем количество НЕ-пустых файлов.
     int nonEmptyFilesCount = fileCount;
     if (emptyStreams is not null)
@@ -178,13 +193,17 @@ public static class SevenZipArchiveDecoder
       nonEmptyFilesCount = cnt;
     }
 
-    // Если все файлы пустые (kEmptyStream), StreamsInfo может отсутствовать.
-    // Возвращаем файлы как пустые байты, ничего не распаковываем.
     if (nonEmptyFilesCount == 0)
     {
       var decodedEmpty = new SevenZipDecodedFile[fileCount];
+
       for (int i = 0; i < fileCount; i++)
+      {
+        if (fileCrcDefined?[i] == true && fileCrc![i] != emptyStreamCrc)
+          return SevenZipArchiveDecodeResult.InvalidData;
+
         decodedEmpty[i] = new SevenZipDecodedFile(names[i], []);
+      }
 
       files = decodedEmpty;
       return SevenZipArchiveDecodeResult.Ok;
@@ -321,19 +340,20 @@ public static class SevenZipArchiveDecoder
 
       for (int s = 0; s < expectedStreams; s++)
       {
-          // Пропускаем файлы без потока (kEmptyStream).
-          while (emptyStreams is not null &&
-                 fileIndex < fileCount &&
-                 emptyStreams[fileIndex])
-          {
-            decoded.Add(new SevenZipDecodedFile(names[fileIndex], []));
-            fileIndex++;
-          }
-
-          if (fileIndex >= fileCount)
+        // Пропускаем файлы без потока (kEmptyStream).
+        while (emptyStreams is not null && fileIndex < fileCount && emptyStreams[fileIndex])
+        {
+          if (fileCrcDefined?[fileIndex] == true && fileCrc![fileIndex] != emptyStreamCrc)
             return SevenZipArchiveDecodeResult.InvalidData;
 
-          ulong sizeU64 = sizes[s];
+          decoded.Add(new SevenZipDecodedFile(names[fileIndex], []));
+          fileIndex++;
+        }
+
+        if (fileIndex >= fileCount)
+          return SevenZipArchiveDecodeResult.InvalidData;
+
+        ulong sizeU64 = sizes[s];
         if (sizeU64 > int.MaxValue)
           return SevenZipArchiveDecodeResult.NotSupported;
         int size = (int)sizeU64;
@@ -393,10 +413,11 @@ public static class SevenZipArchiveDecoder
     }
 
     // Если в конце остались файлы без потока (kEmptyStream), возвращаем их как пустые.
-    while (emptyStreams is not null &&
-           fileIndex < fileCount &&
-           emptyStreams[fileIndex])
+    while (emptyStreams is not null && fileIndex < fileCount && emptyStreams[fileIndex])
     {
+      if (fileCrcDefined?[fileIndex] == true && fileCrc![fileIndex] != emptyStreamCrc)
+        return SevenZipArchiveDecodeResult.InvalidData;
+
       decoded.Add(new SevenZipDecodedFile(names[fileIndex], []));
       fileIndex++;
     }

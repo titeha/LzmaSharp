@@ -33,11 +33,57 @@ public sealed class SevenZipArchiveDecoderEmptyStreamsTests
     Assert.Equal(data, files[1].Bytes);
   }
 
+  [Fact]
+  public void DecodeAllFilesToArray_FirstFileEmptyStream_WithFilesInfoCrcZero_Ok()
+  {
+    byte[] data = new byte[128];
+    for (int i = 0; i < data.Length; i++)
+      data[i] = (byte)(i * 17 + 3);
+
+    uint emptyCrc = Crc32.Compute([]);
+
+    byte[] archive = Build7z_TwoFiles_FirstEmpty_SecondLzma2Copy(
+      emptyName: "empty",
+      fileName: "file.bin",
+      fileBytes: data,
+      dictionarySize: 1 << 20,
+      emptyFileCrc: emptyCrc);
+
+    SevenZipArchiveDecodeResult r = SevenZipArchiveDecoder.DecodeAllFilesToArray(archive, out SevenZipDecodedFile[] files);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, r);
+    Assert.Equal(2, files.Length);
+    Assert.Equal("empty", files[0].Name);
+    Assert.Empty(files[0].Bytes);
+    Assert.Equal("file.bin", files[1].Name);
+    Assert.Equal(data, files[1].Bytes);
+  }
+
+  [Fact]
+  public void DecodeAllFilesToArray_FirstFileEmptyStream_WithFilesInfoCrcMismatch_InvalidData()
+  {
+    byte[] data = new byte[128];
+    for (int i = 0; i < data.Length; i++)
+      data[i] = (byte)(i * 17 + 3);
+
+    byte[] archive = Build7z_TwoFiles_FirstEmpty_SecondLzma2Copy(
+      emptyName: "empty",
+      fileName: "file.bin",
+      fileBytes: data,
+      dictionarySize: 1 << 20,
+      emptyFileCrc: 1u);
+
+    SevenZipArchiveDecodeResult r = SevenZipArchiveDecoder.DecodeAllFilesToArray(archive, out _);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.InvalidData, r);
+  }
+
   private static byte[] Build7z_TwoFiles_FirstEmpty_SecondLzma2Copy(
     string emptyName,
     string fileName,
     ReadOnlySpan<byte> fileBytes,
-    int dictionarySize)
+    int dictionarySize,
+    uint? emptyFileCrc = null)
   {
     byte[] packedStream = Lzma2CopyEncoder.Encode(fileBytes, dictionarySize, out byte lzma2PropsByte);
 
@@ -46,7 +92,8 @@ public sealed class SevenZipArchiveDecoderEmptyStreamsTests
       fileName: fileName,
       packSize: (ulong)packedStream.Length,
       unpackSize: (ulong)fileBytes.Length,
-      lzma2PropertiesByte: lzma2PropsByte);
+      lzma2PropertiesByte: lzma2PropsByte,
+      emptyFileCrc);
 
     uint nextHeaderCrc = Crc32.Compute(nextHeader);
 
@@ -71,7 +118,8 @@ public sealed class SevenZipArchiveDecoderEmptyStreamsTests
     string fileName,
     ulong packSize,
     ulong unpackSize,
-    byte lzma2PropertiesByte)
+    byte lzma2PropertiesByte,
+    uint? emptyFileCrc = null)
   {
     List<byte> h = new(256)
     {
@@ -118,6 +166,22 @@ public sealed class SevenZipArchiveDecoderEmptyStreamsTests
     WriteU64(h, 1);
     h.Add(0x80);
 
+    // kCRC (FilesInfo): задаём CRC только для empty-файла (file0).
+    if (emptyFileCrc.HasValue)
+    {
+      h.Add(SevenZipNid.Crc);
+
+      // Payload:
+      // AllAreDefined=0 (есть битовая маска)
+      // Defined bits на 2 файла: [true,false] => 0x80
+      // CRCs[NumDefined] => 1 значение (для file0)
+      WriteU64(h, 6); // 1 + 1 + 4
+
+      h.Add(0x00); // AllAreDefined=0
+      h.Add(0x80); // Defined bits
+      WriteU32LE(h, emptyFileCrc.Value);
+    }
+
     // kName
     h.Add(SevenZipNid.Name);
     byte[] namesBytes = Encoding.Unicode.GetBytes(emptyName + "\0" + fileName + "\0");
@@ -139,5 +203,13 @@ public sealed class SevenZipArchiveDecoderEmptyStreamsTests
 
     for (int i = 0; i < written; i++)
       dst.Add(tmp[i]);
+  }
+
+  private static void WriteU32LE(List<byte> dst, uint value)
+  {
+    dst.Add((byte)value);
+    dst.Add((byte)(value >> 8));
+    dst.Add((byte)(value >> 16));
+    dst.Add((byte)(value >> 24));
   }
 }
