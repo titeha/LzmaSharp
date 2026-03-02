@@ -32,7 +32,39 @@ public class SevenZipArchiveDecoderTests
     Assert.True(bytesConsumed <= archive.Length);
   }
 
-  private static byte[] Build7zArchive_SingleFile_SingleFolder_Lzma2Copy(byte[] fileBytes, string fileName)
+  [Fact]
+  public void DecodeSingleFile_ОдинФайл_Lzma2Copy_WithFolderCrc_Ok()
+  {
+    byte[] fileBytes = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 255, 254, 253, 0, 0, 1, 65, 66, 67, 68, 69, 70,];
+    const string fileName = "file.bin";
+
+    uint crc = Crc32.Compute(fileBytes);
+    byte[] archive = Build7zArchive_SingleFile_SingleFolder_Lzma2Copy(fileBytes, fileName, folderCrc: crc);
+
+    SevenZipArchiveDecodeResult r = SevenZipArchiveDecoder.DecodeSingleFileToArray(
+      archive, out byte[] decoded, out string? decodedName, out _);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, r);
+    Assert.Equal(fileBytes, decoded);
+    Assert.Equal(fileName, decodedName);
+  }
+
+  [Fact]
+  public void DecodeSingleFile_ОдинФайл_Lzma2Copy_WithFolderCrcMismatch_InvalidData()
+  {
+    byte[] fileBytes = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 255, 254, 253, 0, 0, 1, 65, 66, 67, 68, 69, 70,];
+    const string fileName = "file.bin";
+
+    uint crcWrong = Crc32.Compute(fileBytes) ^ 1u;
+    byte[] archive = Build7zArchive_SingleFile_SingleFolder_Lzma2Copy(fileBytes, fileName, folderCrc: crcWrong);
+
+    SevenZipArchiveDecodeResult r = SevenZipArchiveDecoder.DecodeSingleFileToArray(
+      archive, out _, out _, out _);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.InvalidData, r);
+  }
+
+  private static byte[] Build7zArchive_SingleFile_SingleFolder_Lzma2Copy(byte[] fileBytes, string fileName, uint? folderCrc = null)
   {
     const int dictionarySize = 1 << 20;
     // Для COPY-чанков LZMA2 размер payload кодируется в 16 битах и должен быть в диапазоне [1..65536].
@@ -47,7 +79,8 @@ public class SevenZipArchiveDecoderTests
         packSizes: [(ulong)packedStreams.Length],
         folderUnpackSize: (ulong)fileBytes.Length,
         coder: new SevenZipCoderInfo([0x21], [lzma2PropsByte], numInStreams: 1, numOutStreams: 1),
-        fileName);
+        fileName,
+        folderCrc);
 
     uint nextHeaderCrc = Crc32.Compute(nextHeader);
 
@@ -79,7 +112,7 @@ public class SevenZipArchiveDecoderTests
     return [.. archive];
   }
 
-  private static byte[] BuildHeaderSingleFolderSingleStream(ulong[] packSizes, ulong folderUnpackSize, SevenZipCoderInfo coder, string fileName)
+  private static byte[] BuildHeaderSingleFolderSingleStream(ulong[] packSizes, ulong folderUnpackSize, SevenZipCoderInfo coder, string fileName, uint? folderCrc)
   {
     // Содержимое Header:
     // Header
@@ -93,7 +126,7 @@ public class SevenZipArchiveDecoderTests
 
     WriteNid(header, SevenZipNid.Header);
 
-    WriteStreamsInfo(header, packSizes, folderUnpackSize, coder);
+    WriteStreamsInfo(header, packSizes, folderUnpackSize, coder, folderCrc);
     WriteFilesInfo(header, fileName);
 
     WriteNid(header, SevenZipNid.End);
@@ -101,12 +134,12 @@ public class SevenZipArchiveDecoderTests
     return [.. header];
   }
 
-  private static void WriteStreamsInfo(List<byte> output, ulong[] packSizes, ulong folderUnpackSize, SevenZipCoderInfo coder)
+  private static void WriteStreamsInfo(List<byte> output, ulong[] packSizes, ulong folderUnpackSize, SevenZipCoderInfo coder, uint? folderCrc)
   {
     WriteNid(output, SevenZipNid.MainStreamsInfo);
 
     WritePackInfo(output, packSizes);
-    WriteUnpackInfo(output, folderUnpackSize, coder);
+    WriteUnpackInfo(output, folderUnpackSize, coder, folderCrc);
 
     // SubStreamsInfo: на этом шаге делаем пустую секцию.
     WriteSubStreamsInfoEmpty(output);
@@ -133,7 +166,7 @@ public class SevenZipArchiveDecoderTests
     WriteNid(output, SevenZipNid.End);
   }
 
-  private static void WriteUnpackInfo(List<byte> output, ulong folderUnpackSize, SevenZipCoderInfo coder)
+  private static void WriteUnpackInfo(List<byte> output, ulong folderUnpackSize, SevenZipCoderInfo coder, uint? folderCrc)
   {
     WriteNid(output, SevenZipNid.UnpackInfo);
 
@@ -151,6 +184,16 @@ public class SevenZipArchiveDecoderTests
     // CodersUnpackSize
     WriteNid(output, SevenZipNid.CodersUnpackSize);
     WriteEncodedUInt64(output, folderUnpackSize);
+
+    if (folderCrc.HasValue)
+    {
+      WriteNid(output, SevenZipNid.Crc);
+
+      // Digests(NumFolders): AllAreDefined=1 => CRC есть для каждого folder.
+      WriteByte(output, 1);
+
+      WriteUInt32LE(output, folderCrc.Value);
+    }
 
     // End
     WriteNid(output, SevenZipNid.End);
@@ -261,4 +304,12 @@ public class SevenZipArchiveDecoderTests
   private static void WriteByte(List<byte> output, byte value) => output.Add(value);
 
   private static void WriteNid(List<byte> output, byte nid) => output.Add(nid);
+
+  private static void WriteUInt32LE(List<byte> output, uint value)
+  {
+    output.Add((byte)value);
+    output.Add((byte)(value >> 8));
+    output.Add((byte)(value >> 16));
+    output.Add((byte)(value >> 24));
+  }
 }

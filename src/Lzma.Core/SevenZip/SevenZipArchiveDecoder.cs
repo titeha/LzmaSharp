@@ -1,3 +1,5 @@
+using Lzma.Core.Checksums;
+
 namespace Lzma.Core.SevenZip;
 
 public static class SevenZipArchiveDecoder
@@ -245,6 +247,32 @@ public static class SevenZipArchiveDecoder
       }
     }
 
+    // CRC: folder-level (UnpackInfo.kCRC)
+    bool[]? folderCrcDefined = unpackInfo.FolderCrcDefined;
+    uint[]? folderCrc = unpackInfo.FolderCrc;
+
+    if (folderCrcDefined is null != folderCrc is null)
+      return SevenZipArchiveDecodeResult.InvalidData;
+
+    if (folderCrcDefined is not null && folderCrcDefined.Length != folderCount)
+      return SevenZipArchiveDecodeResult.InvalidData;
+
+    if (folderCrc is not null && folderCrc.Length != folderCount)
+      return SevenZipArchiveDecodeResult.InvalidData;
+
+    // CRC: stream-level (SubStreamsInfo.kCRC)
+    bool[][]? unpackCrcDefinedPerFolder = sub?.UnpackCrcDefinedPerFolder;
+    uint[][]? unpackCrcPerFolder = sub?.UnpackCrcPerFolder;
+
+    if (unpackCrcDefinedPerFolder is null != unpackCrcPerFolder is null)
+      return SevenZipArchiveDecodeResult.InvalidData;
+
+    if (unpackCrcDefinedPerFolder is not null && unpackCrcDefinedPerFolder.Length != folderCount)
+      return SevenZipArchiveDecodeResult.InvalidData;
+
+    if (unpackCrcPerFolder is not null && unpackCrcPerFolder.Length != folderCount)
+      return SevenZipArchiveDecodeResult.InvalidData;
+
     // В 7z количество unpack-стримов обычно НЕ равно количеству файлов:
     // kEmptyStream описывает файлы без потока данных.
     ulong totalUnpackStreamsU64 = 0;
@@ -312,6 +340,44 @@ public static class SevenZipArchiveDecoder
 
         if (size > folderUnpacked.Length - cursor)
           return SevenZipArchiveDecodeResult.InvalidData;
+
+        // Валидация CRC32 (если задана).
+        bool hasExpectedCrc = false;
+        uint expectedCrc = 0;
+
+        // 1) CRC на уровне unpack-stream (SubStreamsInfo.kCRC)
+        if (unpackCrcDefinedPerFolder is not null)
+        {
+          bool[] def = unpackCrcDefinedPerFolder[folderIndex];
+          uint[] crc = unpackCrcPerFolder![folderIndex];
+
+          if (def is null || crc is null || def.Length != expectedStreams || crc.Length != expectedStreams)
+            return SevenZipArchiveDecodeResult.InvalidData;
+
+          if (def[s])
+          {
+            hasExpectedCrc = true;
+            expectedCrc = crc[s];
+          }
+        }
+
+        // 2) Fallback: CRC на уровне folder (UnpackInfo.kCRC), только для 1-stream folder
+        if (!hasExpectedCrc && expectedStreams == 1 && folderCrcDefined?[folderIndex] == true)
+        {
+          if (folderCrc is null)
+            return SevenZipArchiveDecodeResult.InvalidData;
+
+          hasExpectedCrc = true;
+          expectedCrc = folderCrc[folderIndex];
+        }
+
+        if (hasExpectedCrc)
+        {
+          ReadOnlySpan<byte> span = folderUnpacked.AsSpan(cursor, size);
+          uint actual = Crc32.Compute(span);
+          if (actual != expectedCrc)
+            return SevenZipArchiveDecodeResult.InvalidData;
+        }
 
         byte[] fileBytes = new byte[size];
         Array.Copy(folderUnpacked, cursor, fileBytes, 0, size);
