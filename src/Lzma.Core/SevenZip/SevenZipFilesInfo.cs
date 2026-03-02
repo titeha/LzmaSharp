@@ -3,7 +3,14 @@ namespace Lzma.Core.SevenZip;
 /// <summary>
 /// Информация о файлах из блока FilesInfo в заголовке 7z.
 /// </summary>
-public readonly struct SevenZipFilesInfo(ulong fileCount, string[]? names, bool[]? emptyStreams = null, bool[]? emptyFiles = null, bool[]? anti = null)
+public readonly struct SevenZipFilesInfo(
+  ulong fileCount,
+  string[]? names,
+  bool[]? emptyStreams = null,
+  bool[]? emptyFiles = null,
+  bool[]? anti = null,
+  bool[]? crcDefined = null,
+  uint[]? crc = null)
 {
   /// <summary>
   /// Количество файлов в архиве.
@@ -41,4 +48,18 @@ public readonly struct SevenZipFilesInfo(ulong fileCount, string[]? names, bool[
   public bool[]? Anti { get; } = anti;
 
   public bool HasAnti => Anti is not null;
+
+  /// <summary>
+  /// FilesInfo.kCRC: флаг "CRC определён" для каждого файла.
+  /// Длина = FileCount. Если свойство отсутствует — null.
+  /// </summary>
+  public bool[]? CrcDefined { get; } = crcDefined;
+
+  /// <summary>
+  /// FilesInfo.kCRC: CRC32 для каждого файла.
+  /// Длина = FileCount. Если CRC не определён (CrcDefined=false), значение может быть 0.
+  /// </summary>
+  public uint[]? Crc { get; } = crc;
+
+  public bool HasCrc => CrcDefined is not null;
 }

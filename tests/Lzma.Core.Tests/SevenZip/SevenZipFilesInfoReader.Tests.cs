@@ -151,4 +151,69 @@ public sealed class SevenZipFilesInfoReaderTests
     Assert.Equal(SevenZipFilesInfoReadResult.InvalidData, r);
     Assert.Equal(0, consumed);
   }
+
+  [Fact]
+  public void TryRead_Crc_AllAreDefined_СохраняетCrcДляВсехФайлов()
+  {
+    // numFiles = 3
+    // kCRC: allAreDefined=1 + 3 CRC32
+    byte[] bytes =
+    [
+      SevenZipNid.FilesInfo, 0x03,
+
+    SevenZipNid.Crc,
+    0x0D, // size = 1 + 3*4
+    0x01, // allAreDefined
+
+    0x44, 0x33, 0x22, 0x11, // 0x11223344
+    0x88, 0x77, 0x66, 0x55, // 0x55667788
+    0xDD, 0xCC, 0xBB, 0xAA, // 0xAABBCCDD
+
+    SevenZipNid.End,
+  ];
+
+    var r = SevenZipFilesInfoReader.TryRead(bytes, out SevenZipFilesInfo files, out int consumed);
+
+    Assert.Equal(SevenZipFilesInfoReadResult.Ok, r);
+    Assert.Equal(bytes.Length, consumed);
+
+    Assert.NotNull(files.CrcDefined);
+    Assert.NotNull(files.Crc);
+
+    Assert.Equal([true, true, true], files.CrcDefined!);
+    Assert.Equal([0x11223344u, 0x55667788u, 0xAABBCCDDu], files.Crc!);
+  }
+
+  [Fact]
+  public void TryRead_Crc_PartialDefined_СохраняетCrcТолькоДляDefined()
+  {
+    // numFiles = 3
+    // defined bits: [true,false,true] => 0x80 + 0x20 = 0xA0
+    // CRCs идут в порядке индексов defined: file0, file2
+    byte[] bytes =
+    [
+      SevenZipNid.FilesInfo, 0x03,
+
+    SevenZipNid.Crc,
+    0x0A, // size = 1(all) + 1(bits) + 2*4(crc)
+    0x00, // allAreDefined=0
+    0xA0, // bits
+
+    0x44, 0x33, 0x22, 0x11, // file0 = 0x11223344
+    0xDD, 0xCC, 0xBB, 0xAA, // file2 = 0xAABBCCDD
+
+    SevenZipNid.End,
+  ];
+
+    var r = SevenZipFilesInfoReader.TryRead(bytes, out SevenZipFilesInfo files, out int consumed);
+
+    Assert.Equal(SevenZipFilesInfoReadResult.Ok, r);
+    Assert.Equal(bytes.Length, consumed);
+
+    Assert.NotNull(files.CrcDefined);
+    Assert.NotNull(files.Crc);
+
+    Assert.Equal([true, false, true], files.CrcDefined!);
+    Assert.Equal([0x11223344u, 0u, 0xAABBCCDDu], files.Crc!);
+  }
 }

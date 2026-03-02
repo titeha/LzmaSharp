@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Text;
 
 namespace Lzma.Core.SevenZip;
@@ -11,6 +12,9 @@ public static class SevenZipFilesInfoReader
   {
     filesInfo = default;
     bytesConsumed = 0;
+
+    bool[]? crcDefined = null;
+    uint[]? crc = null;
 
     if (src.Length == 0)
       return SevenZipFilesInfoReadResult.NeedMoreInput;
@@ -62,7 +66,7 @@ public static class SevenZipFilesInfoReader
 
       int size = (int)sizeU64;
 
-      if ((uint)size > (uint)(src.Length - offset))
+      if (size > src.Length - offset)
         return SevenZipFilesInfoReadResult.NeedMoreInput;
 
       ReadOnlySpan<byte> payload = src.Slice(offset, size);
@@ -134,6 +138,20 @@ public static class SevenZipFilesInfoReader
         }
       }
 
+      if (nid == SevenZipNid.Crc)
+      {
+        // kCRC в FilesInfo: Digests(NumFiles)
+        // BYTE AllAreDefined
+        // if (AllAreDefined == 0) { for(NumFiles) BIT Defined }
+        // UINT32 CRCs[NumDefined]
+        if (crcDefined is not null || crc is not null)
+          return SevenZipFilesInfoReadResult.InvalidData;
+
+        var crcRes = TryParseCrcDigest(payload, fileCountInt, out crcDefined, out crc);
+        if (crcRes != SevenZipFilesInfoReadResult.Ok)
+          return crcRes;
+      }
+
       // Пропускаем данные свойства (в т.ч. kName, мы уже распарсили payload).
       offset += size;
     }
@@ -152,7 +170,7 @@ public static class SevenZipFilesInfoReader
         return res;
     }
 
-    filesInfo = new SevenZipFilesInfo(fileCount, names, emptyStreams, emptyFiles, anti);
+    filesInfo = new SevenZipFilesInfo(fileCount, names, emptyStreams, emptyFiles, anti, crcDefined, crc);
     bytesConsumed = offset;
     return SevenZipFilesInfoReadResult.Ok;
   }
@@ -217,6 +235,77 @@ public static class SevenZipFilesInfoReader
       return SevenZipFilesInfoReadResult.InvalidData;
 
     names = result;
+    return SevenZipFilesInfoReadResult.Ok;
+  }
+
+  private static SevenZipFilesInfoReadResult TryParseCrcDigest(
+  ReadOnlySpan<byte> payload,
+  int fileCount,
+  out bool[]? defined,
+  out uint[]? crc)
+  {
+    defined = null;
+    crc = null;
+
+    if (payload.Length < 1)
+      return SevenZipFilesInfoReadResult.InvalidData;
+
+    byte allAreDefined = payload[0];
+    int offset = 1;
+
+    bool[] def = new bool[fileCount];
+    int definedCount = 0;
+
+    if (allAreDefined == 1)
+    {
+      Array.Fill(def, true);
+      definedCount = fileCount;
+    }
+    else if (allAreDefined == 0)
+    {
+      int definedBytes = (fileCount + 7) / 8;
+
+      // Строго: минимум должен быть хотя бы байты битового массива.
+      if (payload.Length < 1 + definedBytes)
+        return SevenZipFilesInfoReadResult.InvalidData;
+
+      for (int i = 0; i < fileCount; i++)
+      {
+        byte b = payload[offset + (i >> 3)];
+        byte mask = (byte)(0x80 >> (i & 7));
+        bool isDef = (b & mask) != 0;
+        def[i] = isDef;
+        if (isDef)
+          definedCount++;
+      }
+
+      offset += definedBytes;
+    }
+    else
+      return SevenZipFilesInfoReadResult.InvalidData;
+
+    ulong crcBytesU64 = (ulong)definedCount * 4UL;
+
+    // Строго: payload должен заканчиваться ровно на CRCs.
+    if (crcBytesU64 != (ulong)(payload.Length - offset))
+      return SevenZipFilesInfoReadResult.InvalidData;
+
+    uint[] values = new uint[fileCount];
+
+    for (int i = 0; i < fileCount; i++)
+    {
+      if (!def[i])
+        continue;
+
+      values[i] = BinaryPrimitives.ReadUInt32LittleEndian(payload.Slice(offset, 4));
+      offset += 4;
+    }
+
+    if (offset != payload.Length)
+      return SevenZipFilesInfoReadResult.InvalidData;
+
+    defined = def;
+    crc = values;
     return SevenZipFilesInfoReadResult.Ok;
   }
 
