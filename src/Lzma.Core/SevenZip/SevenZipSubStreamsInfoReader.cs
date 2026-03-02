@@ -1,3 +1,5 @@
+using System.Buffers.Binary;
+
 namespace Lzma.Core.SevenZip;
 
 public enum SevenZipSubStreamsInfoReadResult
@@ -51,6 +53,9 @@ public static class SevenZipSubStreamsInfoReader
     bool seenNumUnpackStream = false;
     bool seenSize = false;
 
+    bool[][]? unpackCrcDefinedPerFolder = null;
+    uint[][]? unpackCrcPerFolder = null;
+
     while (true)
     {
       if (offset >= src.Length)
@@ -97,7 +102,7 @@ public static class SevenZipSubStreamsInfoReader
           return SevenZipSubStreamsInfoReadResult.InvalidData;
         }
 
-        subStreamsInfo = new SevenZipSubStreamsInfo(numUnpackStreamsPerFolder, unpackSizesPerFolder);
+        subStreamsInfo = new SevenZipSubStreamsInfo(numUnpackStreamsPerFolder, unpackSizesPerFolder, unpackCrcDefinedPerFolder, unpackCrcPerFolder);
         bytesConsumed = offset;
         return SevenZipSubStreamsInfoReadResult.Ok;
       }
@@ -239,14 +244,20 @@ public static class SevenZipSubStreamsInfoReader
         // if (AllAreDefined == 0) { for(NumStreams) BIT Defined }
         // UINT32 CRCs[NumDefined]
         //
-        // На этом этапе мы CRC не используем, но должны корректно пропустить секцию.
-        // В нашей текущей модели считаем NumStreams = sum(NumUnpackStreamsPerFolder).
-        // (Более точный расчёт зависит от наличия CRC на уровне folder в UnpackInfo.)
-        // kCRC в SubStreamsInfo: Digests для "количества потоков с неизвестным CRC".
+        // Важно: "NumStreams" здесь — количество unpack-stream'ов с НЕИЗВЕСТНЫМ CRC.
         // Если у folder ровно один sub-stream и CRC задан на уровне folder (UnpackInfo.kCRC),
         // то для этого sub-stream CRC в SubStreamsInfo не ожидается.
 
+        if (unpackCrcDefinedPerFolder is not null)
+        {
+          subStreamsInfo = null;
+          bytesConsumed = 0;
+          return SevenZipSubStreamsInfoReadResult.InvalidData; // дублирование kCRC
+        }
+
         bool[]? folderCrcDefined = unpackInfo.FolderCrcDefined;
+        uint[]? folderCrc = unpackInfo.FolderCrc;
+
         if (folderCrcDefined is not null && folderCrcDefined.Length != folderCount)
         {
           subStreamsInfo = null;
@@ -254,8 +265,60 @@ public static class SevenZipSubStreamsInfoReader
           return SevenZipSubStreamsInfoReadResult.InvalidData;
         }
 
-        ulong numStreamsU64 = 0;
+        if (folderCrc is not null && folderCrc.Length != folderCount)
+        {
+          subStreamsInfo = null;
+          bytesConsumed = 0;
+          return SevenZipSubStreamsInfoReadResult.InvalidData;
+        }
 
+        // Если folderCrcDefined задан и где-то true, но сам массив CRC отсутствует — это несогласованное состояние.
+        if (folderCrcDefined is not null && folderCrc is null)
+        {
+          for (int f = 0; f < folderCount; f++)
+          {
+            if (folderCrcDefined[f])
+            {
+              subStreamsInfo = null;
+              bytesConsumed = 0;
+              return SevenZipSubStreamsInfoReadResult.InvalidData;
+            }
+          }
+        }
+
+        // Аллоцируем CRC-матрицы для ВСЕХ unpack-stream'ов (включая те, чей CRC задан на уровне folder).
+        unpackCrcDefinedPerFolder = new bool[folderCount][];
+        unpackCrcPerFolder = new uint[folderCount][];
+
+        for (int f = 0; f < folderCount; f++)
+        {
+          ulong nU64 = numUnpackStreamsPerFolder[f];
+          if (nU64 > int.MaxValue)
+          {
+            subStreamsInfo = null;
+            bytesConsumed = 0;
+            return SevenZipSubStreamsInfoReadResult.NotSupported;
+          }
+
+          int streams = (int)nU64;
+          var def = new bool[streams];
+          var crc = new uint[streams];
+
+          bool hasFolderCrc = folderCrcDefined?[f] == true;
+
+          // 1 stream + CRC на уровне folder => seed из UnpackInfo (в SubStreamsInfo это НЕ кодируется).
+          if (streams == 1 && hasFolderCrc)
+          {
+            def[0] = true;
+            crc[0] = folderCrc![f];
+          }
+
+          unpackCrcDefinedPerFolder[f] = def;
+          unpackCrcPerFolder[f] = crc;
+        }
+
+        // Считаем количество "unknown CRC streams"
+        ulong numUnknownStreamsU64 = 0;
         for (int f = 0; f < folderCount; f++)
         {
           ulong n = numUnpackStreamsPerFolder[f];
@@ -272,17 +335,17 @@ public static class SevenZipSubStreamsInfoReader
           if (n == 1 && hasFolderCrc)
             continue;
 
-          numStreamsU64 += n;
+          numUnknownStreamsU64 += n;
         }
 
-        if (numStreamsU64 > int.MaxValue)
+        if (numUnknownStreamsU64 > int.MaxValue)
         {
           subStreamsInfo = null;
           bytesConsumed = 0;
           return SevenZipSubStreamsInfoReadResult.NotSupported;
         }
 
-        int numStreams = (int)numStreamsU64;
+        int numUnknownStreams = (int)numUnknownStreamsU64;
 
         if (offset >= src.Length)
         {
@@ -294,12 +357,15 @@ public static class SevenZipSubStreamsInfoReader
         byte allAreDefined = src[offset++];
 
         int definedCount;
+        ReadOnlySpan<byte> definedBits = default;
 
         if (allAreDefined == 1)
-          definedCount = numStreams;
+        {
+          definedCount = numUnknownStreams;
+        }
         else if (allAreDefined == 0)
         {
-          int definedBytes = (numStreams + 7) / 8;
+          int definedBytes = (numUnknownStreams + 7) / 8;
           if (src.Length - offset < definedBytes)
           {
             subStreamsInfo = null;
@@ -307,12 +373,12 @@ public static class SevenZipSubStreamsInfoReader
             return SevenZipSubStreamsInfoReadResult.NeedMoreInput;
           }
 
-          definedCount = 0;
+          definedBits = src.Slice(offset, definedBytes);
 
-          // Биты MSB->LSB: 0x80, 0x40, ... 0x01
-          for (int i = 0; i < numStreams; i++)
+          definedCount = 0;
+          for (int i = 0; i < numUnknownStreams; i++)
           {
-            byte b = src[offset + (i >> 3)];
+            byte b = definedBits[i >> 3];
             byte mask = (byte)(0x80 >> (i & 7));
             if ((b & mask) != 0)
               definedCount++;
@@ -335,7 +401,50 @@ public static class SevenZipSubStreamsInfoReader
           return SevenZipSubStreamsInfoReadResult.NeedMoreInput;
         }
 
-        offset += (int)crcBytesU64;
+        // Маппинг CRCs на "unknown streams" в порядке folder->stream.
+        int unknownIndex = 0;
+
+        for (int f = 0; f < folderCount; f++)
+        {
+          int streams = (int)numUnpackStreamsPerFolder[f];
+          bool hasFolderCrc = folderCrcDefined?[f] == true;
+
+          if (streams == 1 && hasFolderCrc)
+            continue;
+
+          for (int s = 0; s < streams; s++)
+          {
+            bool isDefined;
+
+            if (allAreDefined == 1)
+            {
+              isDefined = true;
+            }
+            else
+            {
+              byte b = definedBits[unknownIndex >> 3];
+              byte mask = (byte)(0x80 >> (unknownIndex & 7));
+              isDefined = (b & mask) != 0;
+            }
+
+            if (isDefined)
+            {
+              unpackCrcDefinedPerFolder[f][s] = true;
+              unpackCrcPerFolder[f][s] = BinaryPrimitives.ReadUInt32LittleEndian(src.Slice(offset, 4));
+              offset += 4;
+            }
+
+            unknownIndex++;
+          }
+        }
+
+        if (unknownIndex != numUnknownStreams)
+        {
+          subStreamsInfo = null;
+          bytesConsumed = 0;
+          return SevenZipSubStreamsInfoReadResult.InvalidData;
+        }
+
         continue;
       }
 

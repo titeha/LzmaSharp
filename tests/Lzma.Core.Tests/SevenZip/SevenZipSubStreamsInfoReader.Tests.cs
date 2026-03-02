@@ -109,6 +109,13 @@ public class SevenZipSubStreamsInfoReaderTests
     Assert.NotNull(sub);
     Assert.Equal([1UL], sub!.NumUnpackStreamsPerFolder);
     Assert.Equal([10UL], sub.UnpackSizesPerFolder[0]);
+
+    Assert.NotNull(sub.UnpackCrcDefinedPerFolder);
+    Assert.NotNull(sub.UnpackCrcPerFolder);
+
+    Assert.Equal([true], sub.UnpackCrcDefinedPerFolder![0]);
+    Assert.Equal([0x11223344u], sub.UnpackCrcPerFolder![0]);
+
   }
 
   [Fact]
@@ -143,6 +150,12 @@ public class SevenZipSubStreamsInfoReaderTests
     Assert.NotNull(sub);
     Assert.Equal([3UL], sub!.NumUnpackStreamsPerFolder);
     Assert.Equal([2UL, 3UL, 5UL], sub.UnpackSizesPerFolder[0]);
+
+    Assert.NotNull(sub.UnpackCrcDefinedPerFolder);
+    Assert.NotNull(sub.UnpackCrcPerFolder);
+
+    Assert.Equal([true, false, true], sub.UnpackCrcDefinedPerFolder![0]);
+    Assert.Equal([0x44332211u, 0u, 0x88776655u], sub.UnpackCrcPerFolder![0]);
   }
 
   [Fact]
@@ -187,7 +200,8 @@ public class SevenZipSubStreamsInfoReaderTests
     var unpackInfo = new SevenZipUnpackInfo(
       folders: [folder],
       folderUnpackSizes: [[10UL]],
-      folderCrcDefined: [true]);
+      folderCrcDefined: [true],
+      folderCrc: [0x11223344u]);
 
     byte[] src =
     [
@@ -204,6 +218,79 @@ public class SevenZipSubStreamsInfoReaderTests
     Assert.NotNull(sub);
     Assert.Equal([1UL], sub!.NumUnpackStreamsPerFolder);
     Assert.Equal([10UL], sub.UnpackSizesPerFolder[0]);
+
+    Assert.NotNull(sub.UnpackCrcDefinedPerFolder);
+    Assert.NotNull(sub.UnpackCrcPerFolder);
+
+    Assert.Equal([true], sub.UnpackCrcDefinedPerFolder![0]);
+    Assert.Equal([0x11223344u], sub.UnpackCrcPerFolder![0]);
+  }
+
+  [Fact]
+  public void TryRead_Crc_MultiFolder_SkipsSingleStreamFolderWithFolderCrc()
+  {
+    var coder = new SevenZipCoderInfo(methodId: [0x21], properties: [], numInStreams: 1, numOutStreams: 1);
+
+    var folder0 = new SevenZipFolder(
+      Coders: [coder],
+      BindPairs: [],
+      PackedStreamIndices: [0],
+      NumInStreams: 1,
+      NumOutStreams: 1);
+
+    var folder1 = new SevenZipFolder(
+      Coders: [coder],
+      BindPairs: [],
+      PackedStreamIndices: [1],
+      NumInStreams: 1,
+      NumOutStreams: 1);
+
+    var unpackInfo = new SevenZipUnpackInfo(
+      folders: [folder0, folder1],
+      folderUnpackSizes: [[10UL], [20UL]],
+      folderCrcDefined: [true, false],
+      folderCrc: [0x11111111u, 0u]);
+
+    // folder0: n=1 (по умолчанию), folder1: n=2
+    // Size: для folder1 читаем 1 размер (5), второй будет 15
+    // CRC: unknown streams = 2 (только folder1), AllAreDefined=1 => 2 CRC значения
+    byte[] src =
+    [
+      SevenZipNid.SubStreamsInfo,
+
+    SevenZipNid.NumUnpackStream,
+    0x01, // folder0
+    0x02, // folder1
+
+    SevenZipNid.Size,
+    0x05, // folder1 stream0
+
+    SevenZipNid.Crc,
+    0x01, // AllAreDefined=1
+    0xDD, 0xCC, 0xBB, 0xAA, // 0xAABBCCDD
+    0x04, 0x03, 0x02, 0x01, // 0x01020304
+
+    SevenZipNid.End,
+  ];
+
+    var result = SevenZipSubStreamsInfoReader.TryRead(src, unpackInfo, out var sub, out var bytesConsumed);
+
+    Assert.Equal(SevenZipSubStreamsInfoReadResult.Ok, result);
+    Assert.Equal(src.Length, bytesConsumed);
+    Assert.NotNull(sub);
+
+    Assert.Equal([1UL, 2UL], sub!.NumUnpackStreamsPerFolder);
+    Assert.Equal([10UL], sub.UnpackSizesPerFolder[0]);
+    Assert.Equal([5UL, 15UL], sub.UnpackSizesPerFolder[1]);
+
+    Assert.NotNull(sub.UnpackCrcDefinedPerFolder);
+    Assert.NotNull(sub.UnpackCrcPerFolder);
+
+    Assert.Equal([true], sub.UnpackCrcDefinedPerFolder![0]);
+    Assert.Equal([0x11111111u], sub.UnpackCrcPerFolder![0]);
+
+    Assert.Equal([true, true], sub.UnpackCrcDefinedPerFolder![1]);
+    Assert.Equal([0xAABBCCDDu, 0x01020304u], sub.UnpackCrcPerFolder![1]);
   }
 
   private static SevenZipUnpackInfo CreateUnpackInfo(ulong folderUnpackSize)
