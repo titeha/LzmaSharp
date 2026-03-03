@@ -123,13 +123,66 @@ public sealed class SevenZipArchiveDecoderEmptyStreamsTests
     Assert.Equal(SevenZipArchiveDecodeResult.InvalidData, r);
   }
 
+  [Fact]
+  public void DecodeToEntries_FirstEntryIsDirectory_WhenEmptyStreamAndNoEmptyFileProperty()
+  {
+    byte[] data = new byte[128];
+    for (int i = 0; i < data.Length; i++)
+      data[i] = (byte)(i * 17 + 3);
+
+    byte[] archive = Build7z_TwoFiles_FirstEmpty_SecondLzma2Copy(
+      emptyName: "dir",
+      fileName: "file.bin",
+      fileBytes: data,
+      dictionarySize: 1 << 20,
+      firstEmptyIsFile: false);
+
+    SevenZipArchiveDecodeResult r = SevenZipArchiveDecoder.DecodeToEntries(archive, out SevenZipDecodedEntry[] entries);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, r);
+    Assert.Equal(2, entries.Length);
+
+    Assert.Equal("dir", entries[0].Name);
+    Assert.True(entries[0].IsDirectory);
+    Assert.Empty(entries[0].Bytes);
+
+    Assert.Equal("file.bin", entries[1].Name);
+    Assert.False(entries[1].IsDirectory);
+    Assert.Equal(data, entries[1].Bytes);
+  }
+
+  [Fact]
+  public void DecodeToEntries_FirstEntryIsEmptyFile_WhenEmptyFileBitSet()
+  {
+    byte[] data = new byte[128];
+    for (int i = 0; i < data.Length; i++)
+      data[i] = (byte)(i * 17 + 3);
+
+    byte[] archive = Build7z_TwoFiles_FirstEmpty_SecondLzma2Copy(
+      emptyName: "empty.txt",
+      fileName: "file.bin",
+      fileBytes: data,
+      dictionarySize: 1 << 20,
+      firstEmptyIsFile: true);
+
+    SevenZipArchiveDecodeResult r = SevenZipArchiveDecoder.DecodeToEntries(archive, out SevenZipDecodedEntry[] entries);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, r);
+    Assert.Equal(2, entries.Length);
+
+    Assert.Equal("empty.txt", entries[0].Name);
+    Assert.False(entries[0].IsDirectory);
+    Assert.Empty(entries[0].Bytes);
+  }
+
   private static byte[] Build7z_TwoFiles_FirstEmpty_SecondLzma2Copy(
     string emptyName,
     string fileName,
     ReadOnlySpan<byte> fileBytes,
     int dictionarySize,
     uint? emptyFileCrc = null,
-    uint? secondFileCrc = null)
+    uint? secondFileCrc = null,
+    bool firstEmptyIsFile = false)
   {
     byte[] packedStream = Lzma2CopyEncoder.Encode(fileBytes, dictionarySize, out byte lzma2PropsByte);
 
@@ -140,7 +193,8 @@ public sealed class SevenZipArchiveDecoderEmptyStreamsTests
       unpackSize: (ulong)fileBytes.Length,
       lzma2PropertiesByte: lzma2PropsByte,
       emptyFileCrc: emptyFileCrc,
-      secondFileCrc: secondFileCrc);
+      secondFileCrc: secondFileCrc,
+      firstEmptyIsFile);
 
     uint nextHeaderCrc = Crc32.Compute(nextHeader);
 
@@ -167,7 +221,8 @@ public sealed class SevenZipArchiveDecoderEmptyStreamsTests
     ulong unpackSize,
     byte lzma2PropertiesByte,
     uint? emptyFileCrc = null,
-    uint? secondFileCrc = null)
+    uint? secondFileCrc = null,
+    bool firstEmptyIsFile = false)
   {
     List<byte> h = new(256)
     {
@@ -213,6 +268,15 @@ public sealed class SevenZipArchiveDecoderEmptyStreamsTests
     h.Add(SevenZipNid.EmptyStream);
     WriteU64(h, 1);
     h.Add(0x80);
+
+    // kEmptyFile: для EmptyStreams (у нас он один) BIT IsEmptyFile.
+    // Если true => 0x80, если false => 0x00.
+    if (firstEmptyIsFile)
+    {
+      h.Add(SevenZipNid.EmptyFile);
+      WriteU64(h, 1);     // payload = 1 байт, потому что NumEmptyStreams=1
+      h.Add(0x80);        // единственный empty-stream является пустым файлом
+    }
 
     // kCRC (FilesInfo): CRC по файлам. Пишем один блок kCRC, если задан хоть один CRC.
     if (emptyFileCrc.HasValue || secondFileCrc.HasValue)
