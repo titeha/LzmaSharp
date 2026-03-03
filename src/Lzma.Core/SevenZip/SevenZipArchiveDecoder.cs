@@ -327,6 +327,13 @@ public static class SevenZipArchiveDecoder
       if (folderRes != SevenZipFolderDecodeResult.Ok)
         return SevenZipArchiveDecodeResult.InternalError;
 
+      if (folderCrcDefined?[folderIndex] == true)
+      {
+        uint actualFolderCrc = Crc32.Compute(folderUnpacked.AsSpan());
+        if (actualFolderCrc != folderCrc![folderIndex])
+          return SevenZipArchiveDecodeResult.InvalidData;
+      }
+
       ulong expectedStreamsU64 = numUnpackStreamsPerFolder[folderIndex];
       if (expectedStreamsU64 > int.MaxValue)
         return SevenZipArchiveDecodeResult.NotSupported;

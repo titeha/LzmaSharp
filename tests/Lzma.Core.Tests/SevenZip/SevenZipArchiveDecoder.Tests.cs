@@ -58,6 +58,15 @@ public class SevenZipArchiveDecoderTests
     uint crcWrong = Crc32.Compute(fileBytes) ^ 1u;
     byte[] archive = Build7zArchive_SingleFile_SingleFolder_Lzma2Copy(fileBytes, fileName, folderCrc: crcWrong);
 
+    var reader = new SevenZipArchiveReader();
+    Assert.Equal(SevenZipArchiveReadResult.Ok, reader.Read(archive, out _));
+
+    var ui = reader.Header!.Value.StreamsInfo.UnpackInfo!;
+    Assert.NotNull(ui.FolderCrcDefined);
+    Assert.NotNull(ui.FolderCrc);
+    Assert.True(ui.FolderCrcDefined![0]);
+    Assert.Equal(crcWrong, ui.FolderCrc![0]);
+
     SevenZipArchiveDecodeResult r = SevenZipArchiveDecoder.DecodeSingleFileToArray(
       archive, out _, out _, out _);
 
