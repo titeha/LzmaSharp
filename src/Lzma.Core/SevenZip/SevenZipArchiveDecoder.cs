@@ -446,6 +446,210 @@ public static class SevenZipArchiveDecoder
     return SevenZipArchiveDecodeResult.Ok;
   }
 
+  public static SevenZipArchiveDecodeResult DecodeToEntries(ReadOnlySpan<byte> archive, out SevenZipDecodedEntry[] entries)
+    => DecodeToEntries(archive, out entries, out _);
+
+  public static SevenZipArchiveDecodeResult DecodeToEntries(
+    ReadOnlySpan<byte> archive,
+    out SevenZipDecodedEntry[] entries,
+    out int bytesConsumed)
+  {
+    entries = [];
+
+    // 1) Сначала делаем обычную распаковку (чтобы не трогать уже стабилизированный код).
+    SevenZipArchiveDecodeResult r = DecodeToArray(archive, out SevenZipDecodedFile[] files, out bytesConsumed);
+    if (r != SevenZipArchiveDecodeResult.Ok)
+      return r;
+
+    // 2) Повторно читаем только header, чтобы получить EmptyStream/EmptyFile и вычислить IsDirectory.
+    SevenZipArchiveReader reader = new();
+    SevenZipArchiveReadResult read = reader.Read(archive, out _);
+
+    if (read == SevenZipArchiveReadResult.NeedMoreInput)
+      return SevenZipArchiveDecodeResult.NeedMoreData;
+    if (read == SevenZipArchiveReadResult.InvalidData)
+      return SevenZipArchiveDecodeResult.InvalidData;
+    if (read == SevenZipArchiveReadResult.NotSupported)
+      return SevenZipArchiveDecodeResult.NotSupported;
+    if (read != SevenZipArchiveReadResult.Ok)
+      return SevenZipArchiveDecodeResult.InternalError;
+
+    SevenZipHeader? header = reader.Header;
+    if (!header.HasValue)
+      return SevenZipArchiveDecodeResult.InvalidData;
+
+    SevenZipFilesInfo fi = header.Value.FilesInfo;
+
+    if (fi.FileCount > int.MaxValue)
+      return SevenZipArchiveDecodeResult.NotSupported;
+
+    int fileCount = (int)fi.FileCount;
+    if (files.Length != fileCount)
+      return SevenZipArchiveDecodeResult.InvalidData;
+
+    bool[]? emptyStreams = fi.EmptyStreams;
+    bool[]? emptyFiles = fi.EmptyFiles;
+
+    var result = new SevenZipDecodedEntry[fileCount];
+
+    for (int i = 0; i < fileCount; i++)
+    {
+      // Если kEmptyFile отсутствует, то все EmptyStream считаем директориями.
+      bool isDirectory = emptyStreams?[i] == true && (emptyFiles?[i] != true);
+      result[i] = new SevenZipDecodedEntry(files[i].Name, files[i].Bytes, isDirectory);
+    }
+
+    entries = result;
+    return SevenZipArchiveDecodeResult.Ok;
+  }
+
+  public static SevenZipArchiveDecodeResult ExtractToDirectory(
+  ReadOnlySpan<byte> archive,
+  string destinationDirectory,
+  bool overwrite = false)
+  => ExtractToDirectory(archive, destinationDirectory, overwrite, out _);
+
+  public static SevenZipArchiveDecodeResult ExtractToDirectory(
+    ReadOnlySpan<byte> archive,
+    string destinationDirectory,
+    bool overwrite,
+    out int bytesConsumed)
+  {
+    bytesConsumed = 0;
+
+    if (destinationDirectory is null)
+      return SevenZipArchiveDecodeResult.InvalidData;
+
+    SevenZipArchiveDecodeResult r = DecodeToEntries(archive, out SevenZipDecodedEntry[] entries, out bytesConsumed);
+    if (r != SevenZipArchiveDecodeResult.Ok)
+      return r;
+
+    try
+    {
+      string root = Path.GetFullPath(destinationDirectory);
+
+      // Нормализуем так, чтобы проверка StartsWith была корректной (root обязательно с разделителем).
+      string rootWithSep = root;
+      if (!rootWithSep.EndsWith(Path.DirectorySeparatorChar))
+        rootWithSep += Path.DirectorySeparatorChar;
+
+      Directory.CreateDirectory(root);
+
+      StringComparison cmp = OperatingSystem.IsWindows()
+        ? StringComparison.OrdinalIgnoreCase
+        : StringComparison.Ordinal;
+
+      for (int i = 0; i < entries.Length; i++)
+      {
+        if (!TryBuildSafePath(rootWithSep, entries[i].Name, cmp, out string fullPath))
+          return SevenZipArchiveDecodeResult.InvalidData;
+
+        if (entries[i].IsDirectory)
+        {
+          Directory.CreateDirectory(fullPath);
+          continue;
+        }
+
+        string? dir = Path.GetDirectoryName(fullPath);
+        if (dir is null)
+          return SevenZipArchiveDecodeResult.InvalidData;
+
+        Directory.CreateDirectory(dir);
+
+        if (!overwrite && File.Exists(fullPath))
+          return SevenZipArchiveDecodeResult.InvalidData;
+
+        File.WriteAllBytes(fullPath, entries[i].Bytes);
+      }
+
+      return SevenZipArchiveDecodeResult.Ok;
+    }
+    catch (IOException)
+    {
+      return SevenZipArchiveDecodeResult.InternalError;
+    }
+    catch (UnauthorizedAccessException)
+    {
+      return SevenZipArchiveDecodeResult.InternalError;
+    }
+    catch (ArgumentException)
+    {
+      return SevenZipArchiveDecodeResult.InvalidData;
+    }
+    catch (NotSupportedException)
+    {
+      return SevenZipArchiveDecodeResult.InvalidData;
+    }
+  }
+
+  /// <summary>
+  /// Строит безопасный путь назначения для элемента архива.
+  /// Запрещает абсолютные пути, пустые сегменты, "."/"..", и выход за пределы root.
+  /// </summary>
+  private static bool TryBuildSafePath(
+    string rootWithSep,
+    string entryName,
+    StringComparison comparison,
+    out string fullPath)
+  {
+    fullPath = string.Empty;
+
+    if (string.IsNullOrEmpty(entryName))
+      return false;
+
+    if (entryName.Contains('\0'))
+      return false;
+
+    // Для Windows дополнительно режем "C:" и альтернативные потоки.
+    if (OperatingSystem.IsWindows() && entryName.Contains(':'))
+      return false;
+
+    // Нормализуем разделители на '/', чтобы проще валидировать сегменты.
+    string n = entryName.Replace('\\', '/').Trim();
+
+    // Абсолютные пути не принимаем.
+    if (n.StartsWith('/'))
+      return false;
+
+    // Убираем хвостовые '/', чтобы "dir/" и "dir" были эквивалентны.
+    n = n.TrimEnd('/');
+
+    if (n.Length == 0)
+      return false;
+
+    // Валидируем сегменты: запрещаем пустые, "." и ".."
+    int segStart = 0;
+    for (int i = 0; i <= n.Length; i++)
+      if (i == n.Length || n[i] == '/')
+      {
+        int segLen = i - segStart;
+        if (segLen <= 0)
+          return false;
+
+        // "." ?
+        if (segLen == 1 && n[segStart] == '.')
+          return false;
+
+        // ".." ?
+        if (segLen == 2 && n[segStart] == '.' && n[segStart + 1] == '.')
+          return false;
+
+        segStart = i + 1;
+      }
+
+    // Конвертируем в системные разделители.
+    string relative = n.Replace('/', Path.DirectorySeparatorChar);
+
+    string combined = Path.GetFullPath(Path.Combine(rootWithSep, relative));
+
+    // Защита от выхода за пределы root.
+    if (!combined.StartsWith(rootWithSep, comparison))
+      return false;
+
+    fullPath = combined;
+    return true;
+  }
+
   private static SevenZipArchiveDecodeResult TryGetFolderFinalOutSize(
     SevenZipFolder folder,
     ulong[] folderUnpackSizes,

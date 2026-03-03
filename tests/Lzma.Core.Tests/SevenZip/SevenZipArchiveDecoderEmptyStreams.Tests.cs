@@ -175,6 +175,79 @@ public sealed class SevenZipArchiveDecoderEmptyStreamsTests
     Assert.Empty(entries[0].Bytes);
   }
 
+  [Fact]
+  public void ExtractToDirectory_DirectoryEntryAndFile_CreatesOnDisk_Ok()
+  {
+    byte[] data = new byte[128];
+    for (int i = 0; i < data.Length; i++)
+      data[i] = (byte)(i * 17 + 3);
+
+    // 1й элемент = директория "dir", 2й = файл "dir/file.bin"
+    // Если у тебя уже есть параметр firstEmptyIsFile — передай false.
+    byte[] archive = Build7z_TwoFiles_FirstEmpty_SecondLzma2Copy(
+      emptyName: "dir",
+      fileName: "dir/file.bin",
+      fileBytes: data,
+      dictionarySize: 1 << 20);
+
+    string root = Path.Combine(Path.GetTempPath(), "LzmaSharpTests", Guid.NewGuid().ToString("N"));
+
+    try
+    {
+      SevenZipArchiveDecodeResult r = SevenZipArchiveDecoder.ExtractToDirectory(archive, root, overwrite: false, out int consumed);
+
+      Assert.Equal(SevenZipArchiveDecodeResult.Ok, r);
+      Assert.True(consumed > 0);
+
+      string dirPath = Path.Combine(root, "dir");
+      Assert.True(Directory.Exists(dirPath));
+
+      string filePath = Path.Combine(root, "dir", "file.bin");
+      Assert.True(File.Exists(filePath));
+      Assert.Equal(data, File.ReadAllBytes(filePath));
+    }
+    finally
+    {
+      if (Directory.Exists(root))
+        Directory.Delete(root, recursive: true);
+    }
+  }
+
+  [Fact]
+  public void ExtractToDirectory_PathTraversal_IsRejected()
+  {
+    byte[] data = new byte[16];
+    for (int i = 0; i < data.Length; i++)
+      data[i] = (byte)(i + 1);
+
+    byte[] archive = Build7z_TwoFiles_FirstEmpty_SecondLzma2Copy(
+      emptyName: "dir",
+      fileName: "../evil.bin",
+      fileBytes: data,
+      dictionarySize: 1 << 20);
+
+    string root = Path.Combine(Path.GetTempPath(), "LzmaSharpTests", Guid.NewGuid().ToString("N"));
+
+    try
+    {
+      Directory.CreateDirectory(root);
+
+      string outside = Path.GetFullPath(Path.Combine(root, "..", "evil.bin"));
+      if (File.Exists(outside))
+        File.Delete(outside);
+
+      SevenZipArchiveDecodeResult r = SevenZipArchiveDecoder.ExtractToDirectory(archive, root, overwrite: true, out _);
+
+      Assert.Equal(SevenZipArchiveDecodeResult.InvalidData, r);
+      Assert.False(File.Exists(outside));
+    }
+    finally
+    {
+      if (Directory.Exists(root))
+        Directory.Delete(root, recursive: true);
+    }
+  }
+
   private static byte[] Build7z_TwoFiles_FirstEmpty_SecondLzma2Copy(
     string emptyName,
     string fileName,
