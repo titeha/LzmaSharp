@@ -391,12 +391,23 @@ public static class SevenZipArchiveDecoder
           expectedCrc = folderCrc[folderIndex];
         }
 
-        if (hasExpectedCrc)
+        bool hasFileCrc = fileCrcDefined?[fileIndex] == true;
+        uint expectedFileCrc = hasFileCrc ? fileCrc![fileIndex] : 0;
+
+        if (hasExpectedCrc || hasFileCrc)
         {
           ReadOnlySpan<byte> span = folderUnpacked.AsSpan(cursor, size);
-          uint actual = Crc32.Compute(span);
-          if (actual != expectedCrc)
-            return SevenZipArchiveDecodeResult.InvalidData;
+          uint? actualCrc = null;
+
+          actualCrc ??= Crc32.Compute(span);
+
+          // (2) Новая проверка FilesInfo.kCRC:
+          if (fileCrcDefined?[fileIndex] == true)
+          {
+            actualCrc ??= Crc32.Compute(span);
+            if (actualCrc.Value != fileCrc![fileIndex])
+              return SevenZipArchiveDecodeResult.InvalidData;
+          }
         }
 
         byte[] fileBytes = new byte[size];
@@ -412,7 +423,6 @@ public static class SevenZipArchiveDecoder
         return SevenZipArchiveDecodeResult.InvalidData;
     }
 
-    // Если в конце остались файлы без потока (kEmptyStream), возвращаем их как пустые.
     while (emptyStreams is not null && fileIndex < fileCount && emptyStreams[fileIndex])
     {
       if (fileCrcDefined?[fileIndex] == true && fileCrc![fileIndex] != emptyStreamCrc)
