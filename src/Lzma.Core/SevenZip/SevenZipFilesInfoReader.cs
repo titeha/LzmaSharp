@@ -497,60 +497,6 @@ public static class SevenZipFilesInfoReader
     return SevenZipFilesInfoReadResult.Ok;
   }
 
-  private static SevenZipFilesInfoReadResult TryParseBoolVector(ReadOnlySpan<byte> payload, int count, out bool[]? vector)
-  {
-    vector = null;
-
-    if (payload.Length < 1)
-      return SevenZipFilesInfoReadResult.InvalidData;
-
-    // Формат из SDK: byte allAreDefined; если 1 => все значения true.
-    // Если 0 => далее битовый массив (старшие биты вперёд, 0x80..0x01).
-    byte allAreDefined = payload[0];
-
-    if (allAreDefined == 1)
-    {
-      // Строго: ожидаем ровно 1 байт полезной нагрузки.
-      if (payload.Length != 1)
-        return SevenZipFilesInfoReadResult.InvalidData;
-
-      bool[] v = new bool[count];
-      Array.Fill(v, true);
-      vector = v;
-      return SevenZipFilesInfoReadResult.Ok;
-    }
-
-    if (allAreDefined != 0)
-      return SevenZipFilesInfoReadResult.InvalidData;
-
-    int bytesRequired = (count + 7) / 8;
-
-    // Строго: payload = 1 + ceil(count/8).
-    if (payload.Length != 1 + bytesRequired)
-      return SevenZipFilesInfoReadResult.InvalidData;
-
-    bool[] result = new bool[count];
-
-    int index = 1;
-    byte mask = 0;
-    byte b = 0;
-
-    for (int i = 0; i < count; i++)
-    {
-      if (mask == 0)
-      {
-        b = payload[index++];
-        mask = 0x80;
-      }
-
-      result[i] = (b & mask) != 0;
-      mask >>= 1;
-    }
-
-    vector = result;
-    return SevenZipFilesInfoReadResult.Ok;
-  }
-
   private static SevenZipFilesInfoReadResult TryParseEmptyStreamVector(
   ReadOnlySpan<byte> payload,
   int fileCount,
