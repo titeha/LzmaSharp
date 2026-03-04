@@ -22,6 +22,12 @@ public static class SevenZipFilesInfoReader
     bool[]? winAttribDefined = null;
     uint[]? winAttrib = null;
 
+    bool[]? cTimeDefined = null;
+    ulong[]? cTime = null;
+
+    bool[]? aTimeDefined = null;
+    ulong[]? aTime = null;
+
     if (src.Length == 0)
       return SevenZipFilesInfoReadResult.NeedMoreInput;
 
@@ -169,6 +175,26 @@ public static class SevenZipFilesInfoReader
           return timeRes;
       }
 
+      if (nid == SevenZipNid.CTime)
+      {
+        if (cTimeDefined is not null || cTime is not null)
+          return SevenZipFilesInfoReadResult.InvalidData;
+
+        var res = TryParseTimeProperty(payload, fileCountInt, out cTimeDefined, out cTime);
+        if (res != SevenZipFilesInfoReadResult.Ok)
+          return res;
+      }
+
+      if (nid == SevenZipNid.ATime)
+      {
+        if (aTimeDefined is not null || aTime is not null)
+          return SevenZipFilesInfoReadResult.InvalidData;
+
+        var res = TryParseTimeProperty(payload, fileCountInt, out aTimeDefined, out aTime);
+        if (res != SevenZipFilesInfoReadResult.Ok)
+          return res;
+      }
+
       if (nid == SevenZipNid.WinAttrib)
       {
         // kWinAttributes: BYTE AllAreDefined; [bits if 0]; BYTE External; [DataIndex if External!=0]; Attrs[NumDefined] (UINT32)
@@ -198,7 +224,22 @@ public static class SevenZipFilesInfoReader
         return res;
     }
 
-    filesInfo = new SevenZipFilesInfo(fileCount, names, emptyStreams, emptyFiles, anti, crcDefined, crc, mTimeDefined, mTime, winAttribDefined, winAttrib);
+    filesInfo = new SevenZipFilesInfo(
+      fileCount,
+      names,
+      emptyStreams,
+      emptyFiles,
+      anti,
+      crcDefined,
+      crc,
+      mTimeDefined,
+      mTime,
+      winAttribDefined,
+      winAttrib,
+      cTimeDefined,
+      cTime,
+      aTimeDefined,
+      aTime);
     bytesConsumed = offset;
     return SevenZipFilesInfoReadResult.Ok;
   }

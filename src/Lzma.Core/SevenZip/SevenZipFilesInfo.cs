@@ -14,7 +14,11 @@ public readonly struct SevenZipFilesInfo(
   bool[]? mTimeDefined = null,
   ulong[]? mTime = null,
   bool[]? winAttribDefined = null,
-  uint[]? winAttrib = null)
+  uint[]? winAttrib = null,
+  bool[]? cTimeDefined = null,
+  ulong[]? cTime = null,
+  bool[]? aTimeDefined = null,
+  ulong[]? aTime = null)
 {
   /// <summary>
   /// Количество файлов в архиве.
@@ -95,4 +99,12 @@ public readonly struct SevenZipFilesInfo(
   public uint[]? WinAttrib { get; } = winAttrib;
 
   public bool HasWinAttrib => WinAttribDefined is not null;
+
+  public bool[]? CTimeDefined { get; } = cTimeDefined;
+  public ulong[]? CTime { get; } = cTime;
+  public bool HasCTime => CTimeDefined is not null;
+
+  public bool[]? ATimeDefined { get; } = aTimeDefined;
+  public ulong[]? ATime { get; } = aTime;
+  public bool HasATime => ATimeDefined is not null;
 }

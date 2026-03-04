@@ -288,4 +288,71 @@ public sealed class SevenZipFilesInfoReaderTests
     Assert.Equal([true, false, true], files.WinAttribDefined!);
     Assert.Equal([0x11223344u, 0u, 0xAABBCCDDu], files.WinAttrib!);
   }
+
+  [Fact]
+  public void TryRead_CTime_AllAreDefined_ЧитаетсяКорректно()
+  {
+    byte[] bytes =
+    [
+      SevenZipNid.FilesInfo, 0x02,
+
+    SevenZipNid.CTime,
+    0x12, // 18 = 1(all) + 1(external) + 2*8
+    0x01, // all
+    0x00, // external
+
+    // file0: 0x1122334455667788
+    0x88,0x77,0x66,0x55,0x44,0x33,0x22,0x11,
+    // file1: 0x0102030405060708
+    0x08,0x07,0x06,0x05,0x04,0x03,0x02,0x01,
+
+    SevenZipNid.End,
+  ];
+
+    var r = SevenZipFilesInfoReader.TryRead(bytes, out SevenZipFilesInfo files, out int consumed);
+
+    Assert.Equal(SevenZipFilesInfoReadResult.Ok, r);
+    Assert.Equal(bytes.Length, consumed);
+
+    Assert.NotNull(files.CTimeDefined);
+    Assert.NotNull(files.CTime);
+
+    Assert.Equal([true, true], files.CTimeDefined!);
+    Assert.Equal([0x1122334455667788UL, 0x0102030405060708UL], files.CTime!);
+  }
+
+  [Fact]
+  public void TryRead_ATime_PartialDefined_ЧитаетсяКорректно()
+  {
+    // 3 файла, defined: [true,false,true] => 0xA0
+    // payload: all=0, bits(1), external=0, 2*8
+    byte[] bytes =
+    [
+      SevenZipNid.FilesInfo, 0x03,
+
+    SevenZipNid.ATime,
+    0x13, // 19 = 1(all)+1(bits)+1(external)+16
+    0x00, // all=0
+    0xA0, // bits
+    0x00, // external=0
+
+    // file0
+    0x88,0x77,0x66,0x55,0x44,0x33,0x22,0x11,
+    // file2
+    0x11,0x00,0xFF,0xEE,0xDD,0xCC,0xBB,0xAA,
+
+    SevenZipNid.End,
+  ];
+
+    var r = SevenZipFilesInfoReader.TryRead(bytes, out SevenZipFilesInfo files, out int consumed);
+
+    Assert.Equal(SevenZipFilesInfoReadResult.Ok, r);
+    Assert.Equal(bytes.Length, consumed);
+
+    Assert.NotNull(files.ATimeDefined);
+    Assert.NotNull(files.ATime);
+
+    Assert.Equal([true, false, true], files.ATimeDefined!);
+    Assert.Equal([0x1122334455667788UL, 0UL, 0xAABBCCDDEEFF0011UL], files.ATime!);
+  }
 }
