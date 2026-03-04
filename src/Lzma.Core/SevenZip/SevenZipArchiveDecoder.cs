@@ -568,6 +568,24 @@ public static class SevenZipArchiveDecoder
     if (winAttrib is not null && winAttrib.Length != fileCount)
       return SevenZipArchiveDecodeResult.InvalidData;
 
+    bool[]? cTimeDefined = filesInfo.CTimeDefined;
+    ulong[]? cTime = filesInfo.CTime;
+    if (cTimeDefined is null != cTime is null)
+      return SevenZipArchiveDecodeResult.InvalidData;
+    if (cTimeDefined is not null && cTimeDefined.Length != fileCount)
+      return SevenZipArchiveDecodeResult.InvalidData;
+    if (cTime is not null && cTime.Length != fileCount)
+      return SevenZipArchiveDecodeResult.InvalidData;
+
+    bool[]? aTimeDefined = filesInfo.ATimeDefined;
+    ulong[]? aTime = filesInfo.ATime;
+    if (aTimeDefined is null != aTime is null)
+      return SevenZipArchiveDecodeResult.InvalidData;
+    if (aTimeDefined is not null && aTimeDefined.Length != fileCount)
+      return SevenZipArchiveDecodeResult.InvalidData;
+    if (aTime is not null && aTime.Length != fileCount)
+      return SevenZipArchiveDecodeResult.InvalidData;
+
     try
     {
       string root = Path.GetFullPath(destinationDirectory);
@@ -615,6 +633,65 @@ public static class SevenZipArchiveDecoder
         string fullPath = fullPaths[i];
         if (fullPath.Length == 0)
           return SevenZipArchiveDecodeResult.InvalidData;
+
+        // kCTime: сырой FILETIME (UTC). Best-effort: если ОС/ФС не дала — не валим извлечение.
+        // Но битые значения в заголовке считаем InvalidData.
+        if (cTimeDefined?[i] == true)
+        {
+          ulong raw = cTime![i];
+          if (raw > long.MaxValue)
+            return SevenZipArchiveDecodeResult.InvalidData;
+
+          DateTime dt;
+          try
+          {
+            dt = DateTime.FromFileTimeUtc((long)raw);
+          }
+          catch (ArgumentOutOfRangeException)
+          {
+            return SevenZipArchiveDecodeResult.InvalidData;
+          }
+
+          try
+          {
+            if (entries[i].IsDirectory)
+              Directory.SetCreationTimeUtc(fullPath, dt);
+            else
+              File.SetCreationTimeUtc(fullPath, dt);
+          }
+          catch (IOException) { }
+          catch (UnauthorizedAccessException) { }
+          catch (PlatformNotSupportedException) { }
+        }
+
+        // kATime: сырой FILETIME (UTC).
+        if (aTimeDefined?[i] == true)
+        {
+          ulong raw = aTime![i];
+          if (raw > long.MaxValue)
+            return SevenZipArchiveDecodeResult.InvalidData;
+
+          DateTime dt;
+          try
+          {
+            dt = DateTime.FromFileTimeUtc((long)raw);
+          }
+          catch (ArgumentOutOfRangeException)
+          {
+            return SevenZipArchiveDecodeResult.InvalidData;
+          }
+
+          try
+          {
+            if (entries[i].IsDirectory)
+              Directory.SetLastAccessTimeUtc(fullPath, dt);
+            else
+              File.SetLastAccessTimeUtc(fullPath, dt);
+          }
+          catch (IOException) { }
+          catch (UnauthorizedAccessException) { }
+          catch (PlatformNotSupportedException) { }
+        }
 
         // kMTime: значение хранится как Windows FILETIME (UTC).
         if (mTimeDefined?[i] == true)
