@@ -16,6 +16,12 @@ public static class SevenZipFilesInfoReader
     bool[]? crcDefined = null;
     uint[]? crc = null;
 
+    bool[]? mTimeDefined = null;
+    ulong[]? mTime = null;
+
+    bool[]? winAttribDefined = null;
+    uint[]? winAttrib = null;
+
     if (src.Length == 0)
       return SevenZipFilesInfoReadResult.NeedMoreInput;
 
@@ -152,6 +158,28 @@ public static class SevenZipFilesInfoReader
           return crcRes;
       }
 
+      if (nid == SevenZipNid.MTime)
+      {
+        // kMTime: BYTE AllAreDefined; [bits if 0]; BYTE External; [DataIndex if External!=0]; Times[NumDefined] (REAL_UINT64)
+        if (mTimeDefined is not null || mTime is not null)
+          return SevenZipFilesInfoReadResult.InvalidData;
+
+        var timeRes = TryParseTimeProperty(payload, fileCountInt, out mTimeDefined, out mTime);
+        if (timeRes != SevenZipFilesInfoReadResult.Ok)
+          return timeRes;
+      }
+
+      if (nid == SevenZipNid.WinAttrib)
+      {
+        // kWinAttributes: BYTE AllAreDefined; [bits if 0]; BYTE External; [DataIndex if External!=0]; Attrs[NumDefined] (UINT32)
+        if (winAttribDefined is not null || winAttrib is not null)
+          return SevenZipFilesInfoReadResult.InvalidData;
+
+        var attrRes = TryParseWinAttribProperty(payload, fileCountInt, out winAttribDefined, out winAttrib);
+        if (attrRes != SevenZipFilesInfoReadResult.Ok)
+          return attrRes;
+      }
+
       // Пропускаем данные свойства (в т.ч. kName, мы уже распарсили payload).
       offset += size;
     }
@@ -170,7 +198,7 @@ public static class SevenZipFilesInfoReader
         return res;
     }
 
-    filesInfo = new SevenZipFilesInfo(fileCount, names, emptyStreams, emptyFiles, anti, crcDefined, crc);
+    filesInfo = new SevenZipFilesInfo(fileCount, names, emptyStreams, emptyFiles, anti, crcDefined, crc, mTimeDefined, mTime, winAttribDefined, winAttrib);
     bytesConsumed = offset;
     return SevenZipFilesInfoReadResult.Ok;
   }
@@ -306,6 +334,166 @@ public static class SevenZipFilesInfoReader
 
     defined = def;
     crc = values;
+    return SevenZipFilesInfoReadResult.Ok;
+  }
+
+  private static SevenZipFilesInfoReadResult TryParseTimeProperty(
+  ReadOnlySpan<byte> payload,
+  int fileCount,
+  out bool[]? defined,
+  out ulong[]? times)
+  {
+    defined = null;
+    times = null;
+
+    // минимум: AllAreDefined + External
+    if (payload.Length < 2)
+      return SevenZipFilesInfoReadResult.InvalidData;
+
+    byte allAreDefined = payload[0];
+    int offset = 1;
+
+    bool[] def = new bool[fileCount];
+    int definedCount = 0;
+
+    if (allAreDefined == 1)
+    {
+      Array.Fill(def, true);
+      definedCount = fileCount;
+    }
+    else if (allAreDefined == 0)
+    {
+      int definedBytes = (fileCount + 7) / 8;
+
+      // нужно минимум: AllAreDefined + bits + External
+      if (payload.Length < 1 + definedBytes + 1)
+        return SevenZipFilesInfoReadResult.InvalidData;
+
+      for (int i = 0; i < fileCount; i++)
+      {
+        byte b = payload[offset + (i >> 3)];
+        byte mask = (byte)(0x80 >> (i & 7));
+        bool isDef = (b & mask) != 0;
+        def[i] = isDef;
+        if (isDef)
+          definedCount++;
+      }
+
+      offset += definedBytes;
+    }
+    else
+    {
+      return SevenZipFilesInfoReadResult.InvalidData;
+    }
+
+    if (offset >= payload.Length)
+      return SevenZipFilesInfoReadResult.InvalidData;
+
+    byte external = payload[offset++];
+    if (external != 0)
+      return SevenZipFilesInfoReadResult.NotSupported;
+
+    ulong timeBytesU64 = (ulong)definedCount * 8UL;
+
+    // строго: хвост payload — ровно times
+    if (timeBytesU64 != (ulong)(payload.Length - offset))
+      return SevenZipFilesInfoReadResult.InvalidData;
+
+    ulong[] values = new ulong[fileCount];
+
+    for (int i = 0; i < fileCount; i++)
+    {
+      if (!def[i])
+        continue;
+
+      values[i] = BinaryPrimitives.ReadUInt64LittleEndian(payload.Slice(offset, 8));
+      offset += 8;
+    }
+
+    if (offset != payload.Length)
+      return SevenZipFilesInfoReadResult.InvalidData;
+
+    defined = def;
+    times = values;
+    return SevenZipFilesInfoReadResult.Ok;
+  }
+
+  private static SevenZipFilesInfoReadResult TryParseWinAttribProperty(
+    ReadOnlySpan<byte> payload,
+    int fileCount,
+    out bool[]? defined,
+    out uint[]? attrib)
+  {
+    defined = null;
+    attrib = null;
+
+    // минимум: AllAreDefined + External
+    if (payload.Length < 2)
+      return SevenZipFilesInfoReadResult.InvalidData;
+
+    byte allAreDefined = payload[0];
+    int offset = 1;
+
+    bool[] def = new bool[fileCount];
+    int definedCount = 0;
+
+    if (allAreDefined == 1)
+    {
+      Array.Fill(def, true);
+      definedCount = fileCount;
+    }
+    else if (allAreDefined == 0)
+    {
+      int definedBytes = (fileCount + 7) / 8;
+
+      // нужно минимум: AllAreDefined + bits + External
+      if (payload.Length < 1 + definedBytes + 1)
+        return SevenZipFilesInfoReadResult.InvalidData;
+
+      for (int i = 0; i < fileCount; i++)
+      {
+        byte b = payload[offset + (i >> 3)];
+        byte mask = (byte)(0x80 >> (i & 7));
+        bool isDef = (b & mask) != 0;
+        def[i] = isDef;
+        if (isDef)
+          definedCount++;
+      }
+
+      offset += definedBytes;
+    }
+    else
+      return SevenZipFilesInfoReadResult.InvalidData;
+
+    if (offset >= payload.Length)
+      return SevenZipFilesInfoReadResult.InvalidData;
+
+    byte external = payload[offset++];
+    if (external != 0)
+      return SevenZipFilesInfoReadResult.NotSupported;
+
+    ulong attrBytesU64 = (ulong)definedCount * 4UL;
+
+    // строго: хвост payload — ровно attrs
+    if (attrBytesU64 != (ulong)(payload.Length - offset))
+      return SevenZipFilesInfoReadResult.InvalidData;
+
+    uint[] values = new uint[fileCount];
+
+    for (int i = 0; i < fileCount; i++)
+    {
+      if (!def[i])
+        continue;
+
+      values[i] = BinaryPrimitives.ReadUInt32LittleEndian(payload.Slice(offset, 4));
+      offset += 4;
+    }
+
+    if (offset != payload.Length)
+      return SevenZipFilesInfoReadResult.InvalidData;
+
+    defined = def;
+    attrib = values;
     return SevenZipFilesInfoReadResult.Ok;
   }
 

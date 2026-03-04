@@ -216,4 +216,76 @@ public sealed class SevenZipFilesInfoReaderTests
     Assert.Equal([true, false, true], files.CrcDefined!);
     Assert.Equal([0x11223344u, 0u, 0xAABBCCDDu], files.Crc!);
   }
+
+  [Fact]
+  public void TryRead_MTime_AllAreDefined_ЧитаетсяКорректно()
+  {
+    // numFiles = 3
+    // payload: all=1, external=0, 3 * uint64
+    byte[] bytes =
+    [
+      SevenZipNid.FilesInfo, 0x03,
+
+    SevenZipNid.MTime,
+    0x1A, // size = 26 = 1 + 1 + 3*8
+    0x01, // AllAreDefined=1
+    0x00, // External=0
+
+    // 0x1122334455667788
+    0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11,
+    // 0x0102030405060708
+    0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01,
+    // 0xAABBCCDDEEFF0011
+    0x11, 0x00, 0xFF, 0xEE, 0xDD, 0xCC, 0xBB, 0xAA,
+
+    SevenZipNid.End,
+  ];
+
+    var r = SevenZipFilesInfoReader.TryRead(bytes, out SevenZipFilesInfo files, out int consumed);
+
+    Assert.Equal(SevenZipFilesInfoReadResult.Ok, r);
+    Assert.Equal(bytes.Length, consumed);
+
+    Assert.NotNull(files.MTimeDefined);
+    Assert.NotNull(files.MTime);
+
+    Assert.Equal([true, true, true], files.MTimeDefined!);
+    Assert.Equal([0x1122334455667788UL, 0x0102030405060708UL, 0xAABBCCDDEEFF0011UL], files.MTime!);
+  }
+
+  [Fact]
+  public void TryRead_WinAttrib_PartialDefined_ЧитаетсяКорректно()
+  {
+    // numFiles = 3
+    // defined bits: [true,false,true] => 0x80 + 0x20 = 0xA0
+    // payload: all=0, bits(1), external=0, 2 * uint32
+    byte[] bytes =
+    [
+      SevenZipNid.FilesInfo, 0x03,
+
+    SevenZipNid.WinAttrib,
+    0x0B, // size = 11 = 1 + 1 + 1 + 2*4
+    0x00, // AllAreDefined=0
+    0xA0, // bits
+    0x00, // External=0
+
+    // file0 = 0x11223344
+    0x44, 0x33, 0x22, 0x11,
+    // file2 = 0xAABBCCDD
+    0xDD, 0xCC, 0xBB, 0xAA,
+
+    SevenZipNid.End,
+  ];
+
+    var r = SevenZipFilesInfoReader.TryRead(bytes, out SevenZipFilesInfo files, out int consumed);
+
+    Assert.Equal(SevenZipFilesInfoReadResult.Ok, r);
+    Assert.Equal(bytes.Length, consumed);
+
+    Assert.NotNull(files.WinAttribDefined);
+    Assert.NotNull(files.WinAttrib);
+
+    Assert.Equal([true, false, true], files.WinAttribDefined!);
+    Assert.Equal([0x11223344u, 0u, 0xAABBCCDDu], files.WinAttrib!);
+  }
 }

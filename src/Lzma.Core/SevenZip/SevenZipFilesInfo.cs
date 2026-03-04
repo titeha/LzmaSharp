@@ -10,7 +10,11 @@ public readonly struct SevenZipFilesInfo(
   bool[]? emptyFiles = null,
   bool[]? anti = null,
   bool[]? crcDefined = null,
-  uint[]? crc = null)
+  uint[]? crc = null,
+  bool[]? mTimeDefined = null,
+  ulong[]? mTime = null,
+  bool[]? winAttribDefined = null,
+  uint[]? winAttrib = null)
 {
   /// <summary>
   /// Количество файлов в архиве.
@@ -62,4 +66,33 @@ public readonly struct SevenZipFilesInfo(
   public uint[]? Crc { get; } = crc;
 
   public bool HasCrc => CrcDefined is not null;
+
+  /// <summary>
+  /// FilesInfo.kMTime: флаг "время определено" для каждого файла.
+  /// Длина = FileCount. Если свойство отсутствует — null.
+  /// </summary>
+  public bool[]? MTimeDefined { get; } = mTimeDefined;
+
+  /// <summary>
+  /// FilesInfo.kMTime: время (REAL_UINT64) для каждого файла.
+  /// Значение хранится как сырой 64-битный timestamp из 7z (Windows FILETIME/NTFS time).
+  /// Если время не определено (MTimeDefined=false), значение может быть 0.
+  /// </summary>
+  public ulong[]? MTime { get; } = mTime;
+
+  public bool HasMTime => MTimeDefined is not null;
+
+  /// <summary>
+  /// FilesInfo.kWinAttributes: флаг "атрибуты определены" для каждого файла.
+  /// Длина = FileCount. Если свойство отсутствует — null.
+  /// </summary>
+  public bool[]? WinAttribDefined { get; } = winAttribDefined;
+
+  /// <summary>
+  /// FilesInfo.kWinAttributes: UINT32 атрибуты для каждого файла.
+  /// Если атрибуты не определены (WinAttribDefined=false), значение может быть 0.
+  /// </summary>
+  public uint[]? WinAttrib { get; } = winAttrib;
+
+  public bool HasWinAttrib => WinAttribDefined is not null;
 }
