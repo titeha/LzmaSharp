@@ -495,7 +495,7 @@ public static class SevenZipArchiveDecoder
     for (int i = 0; i < fileCount; i++)
     {
       // Если kEmptyFile отсутствует, то все EmptyStream считаем директориями.
-      bool isDirectory = emptyStreams?[i] == true && (emptyFiles?[i] != true);
+      bool isDirectory = emptyStreams?[i] == true && emptyFiles?[i] != true;
       result[i] = new SevenZipDecodedEntry(files[i].Name, files[i].Bytes, isDirectory);
     }
 
@@ -524,6 +524,50 @@ public static class SevenZipArchiveDecoder
     if (r != SevenZipArchiveDecodeResult.Ok)
       return r;
 
+    // Читаем header ещё раз, чтобы получить метаданные (MTime / WinAttrib).
+    SevenZipFilesInfo filesInfo;
+    {
+      SevenZipArchiveReader reader = new();
+      SevenZipArchiveReadResult read = reader.Read(archive, out _);
+
+      if (read == SevenZipArchiveReadResult.NeedMoreInput)
+        return SevenZipArchiveDecodeResult.NeedMoreData;
+      if (read == SevenZipArchiveReadResult.InvalidData)
+        return SevenZipArchiveDecodeResult.InvalidData;
+      if (read == SevenZipArchiveReadResult.NotSupported)
+        return SevenZipArchiveDecodeResult.NotSupported;
+      if (read != SevenZipArchiveReadResult.Ok)
+        return SevenZipArchiveDecodeResult.InternalError;
+
+      SevenZipHeader? header = reader.Header;
+      if (!header.HasValue)
+        return SevenZipArchiveDecodeResult.InvalidData;
+
+      filesInfo = header.Value.FilesInfo;
+    }
+
+    int fileCount = entries.Length;
+    if (filesInfo.FileCount != (ulong)fileCount)
+      return SevenZipArchiveDecodeResult.InvalidData;
+
+    bool[]? mTimeDefined = filesInfo.MTimeDefined;
+    ulong[]? mTime = filesInfo.MTime;
+    if (mTimeDefined is null != mTime is null)
+      return SevenZipArchiveDecodeResult.InvalidData;
+    if (mTimeDefined is not null && mTimeDefined.Length != fileCount)
+      return SevenZipArchiveDecodeResult.InvalidData;
+    if (mTime is not null && mTime.Length != fileCount)
+      return SevenZipArchiveDecodeResult.InvalidData;
+
+    bool[]? winAttribDefined = filesInfo.WinAttribDefined;
+    uint[]? winAttrib = filesInfo.WinAttrib;
+    if (winAttribDefined is null != winAttrib is null)
+      return SevenZipArchiveDecodeResult.InvalidData;
+    if (winAttribDefined is not null && winAttribDefined.Length != fileCount)
+      return SevenZipArchiveDecodeResult.InvalidData;
+    if (winAttrib is not null && winAttrib.Length != fileCount)
+      return SevenZipArchiveDecodeResult.InvalidData;
+
     try
     {
       string root = Path.GetFullPath(destinationDirectory);
@@ -539,10 +583,14 @@ public static class SevenZipArchiveDecoder
         ? StringComparison.OrdinalIgnoreCase
         : StringComparison.Ordinal;
 
+      string[] fullPaths = new string[fileCount];
+
       for (int i = 0; i < entries.Length; i++)
       {
         if (!TryBuildSafePath(rootWithSep, entries[i].Name, cmp, out string fullPath))
           return SevenZipArchiveDecodeResult.InvalidData;
+
+        fullPaths[i] = fullPath;
 
         if (entries[i].IsDirectory)
         {
@@ -560,6 +608,63 @@ public static class SevenZipArchiveDecoder
           return SevenZipArchiveDecodeResult.InvalidData;
 
         File.WriteAllBytes(fullPath, entries[i].Bytes);
+      }
+
+      for (int i = 0; i < fileCount; i++)
+      {
+        string fullPath = fullPaths[i];
+        if (fullPath.Length == 0)
+          return SevenZipArchiveDecodeResult.InvalidData;
+
+        // kMTime: значение хранится как Windows FILETIME (UTC).
+        if (mTimeDefined?[i] == true)
+        {
+          ulong raw = mTime![i];
+
+          // Битые значения — InvalidData.
+          if (raw > long.MaxValue)
+            return SevenZipArchiveDecodeResult.InvalidData;
+
+          DateTime dt;
+          try
+          {
+            dt = DateTime.FromFileTimeUtc((long)raw);
+          }
+          catch (ArgumentOutOfRangeException)
+          {
+            return SevenZipArchiveDecodeResult.InvalidData;
+          }
+
+          // Best-effort: если ОС/ФС не дала выставить — не валим извлечение.
+          try
+          {
+            if (entries[i].IsDirectory)
+              Directory.SetLastWriteTimeUtc(fullPath, dt);
+            else
+              File.SetLastWriteTimeUtc(fullPath, dt);
+          }
+          catch (IOException) { }
+          catch (UnauthorizedAccessException) { }
+        }
+
+        // kWinAttributes: применяем только на Windows.
+        if (OperatingSystem.IsWindows() && winAttribDefined?[i] == true)
+        {
+          FileAttributes attrs = (FileAttributes)winAttrib![i];
+
+          // Подстрахуемся по признаку IsDirectory.
+          if (entries[i].IsDirectory)
+            attrs |= FileAttributes.Directory;
+          else
+            attrs &= ~FileAttributes.Directory;
+
+          try
+          {
+            File.SetAttributes(fullPath, attrs);
+          }
+          catch (IOException) { }
+          catch (UnauthorizedAccessException) { }
+        }
       }
 
       return SevenZipArchiveDecodeResult.Ok;

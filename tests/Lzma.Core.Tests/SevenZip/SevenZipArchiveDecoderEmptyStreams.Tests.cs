@@ -248,6 +248,57 @@ public sealed class SevenZipArchiveDecoderEmptyStreamsTests
     }
   }
 
+  [Fact]
+  public void ExtractToDirectory_AppliesMTimeAndWinAttrib_ForSecondFile()
+  {
+    byte[] data = new byte[128];
+    for (int i = 0; i < data.Length; i++)
+      data[i] = (byte)(i * 17 + 3);
+
+    DateTime expectedUtc = new DateTime(2020, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+    long fileTimeUtc = expectedUtc.ToFileTimeUtc();
+
+    uint attrib = (uint)FileAttributes.ReadOnly;
+
+    byte[] archive = Build7z_TwoFiles_FirstEmpty_SecondLzma2Copy(
+      emptyName: "dir",
+      fileName: "dir/file.bin",
+      fileBytes: data,
+      dictionarySize: 1 << 20,
+      firstEmptyIsFile: false,
+      secondFileMTimeFileTimeUtc: fileTimeUtc,
+      secondFileWinAttrib: attrib);
+
+    string root = Path.Combine(Path.GetTempPath(), "LzmaSharpTests", Guid.NewGuid().ToString("N"));
+    string filePath = Path.Combine(root, "dir", "file.bin");
+
+    try
+    {
+      SevenZipArchiveDecodeResult r = SevenZipArchiveDecoder.ExtractToDirectory(archive, root, overwrite: true, out _);
+      Assert.Equal(SevenZipArchiveDecodeResult.Ok, r);
+
+      Assert.True(File.Exists(filePath));
+
+      DateTime actualUtc = File.GetLastWriteTimeUtc(filePath);
+      Assert.True((actualUtc - expectedUtc).Duration() <= TimeSpan.FromSeconds(2));
+
+      if (OperatingSystem.IsWindows())
+      {
+        FileAttributes actualAttr = File.GetAttributes(filePath);
+        Assert.True((actualAttr & FileAttributes.ReadOnly) != 0);
+      }
+    }
+    finally
+    {
+      // Чтобы recursive delete не упал на ReadOnly
+      if (OperatingSystem.IsWindows() && File.Exists(filePath))
+        File.SetAttributes(filePath, FileAttributes.Normal);
+
+      if (Directory.Exists(root))
+        Directory.Delete(root, recursive: true);
+    }
+  }
+
   private static byte[] Build7z_TwoFiles_FirstEmpty_SecondLzma2Copy(
     string emptyName,
     string fileName,
@@ -255,7 +306,9 @@ public sealed class SevenZipArchiveDecoderEmptyStreamsTests
     int dictionarySize,
     uint? emptyFileCrc = null,
     uint? secondFileCrc = null,
-    bool firstEmptyIsFile = false)
+    bool firstEmptyIsFile = false,
+    long? secondFileMTimeFileTimeUtc = null,
+    uint? secondFileWinAttrib = null)
   {
     byte[] packedStream = Lzma2CopyEncoder.Encode(fileBytes, dictionarySize, out byte lzma2PropsByte);
 
@@ -267,7 +320,9 @@ public sealed class SevenZipArchiveDecoderEmptyStreamsTests
       lzma2PropertiesByte: lzma2PropsByte,
       emptyFileCrc: emptyFileCrc,
       secondFileCrc: secondFileCrc,
-      firstEmptyIsFile);
+      firstEmptyIsFile,
+      secondFileMTimeFileTimeUtc,
+      secondFileWinAttrib);
 
     uint nextHeaderCrc = Crc32.Compute(nextHeader);
 
@@ -295,7 +350,9 @@ public sealed class SevenZipArchiveDecoderEmptyStreamsTests
     byte lzma2PropertiesByte,
     uint? emptyFileCrc = null,
     uint? secondFileCrc = null,
-    bool firstEmptyIsFile = false)
+    bool firstEmptyIsFile = false,
+    long? secondFileMTimeFileTimeUtc = null,
+    uint? secondFileWinAttrib = null)
   {
     List<byte> h = new(256)
     {
@@ -384,6 +441,28 @@ public sealed class SevenZipArchiveDecoderEmptyStreamsTests
         WriteU32LE(h, secondFileCrc.Value);
     }
 
+    // kMTime: определено только для второго файла (file1) => bits = 0x40.
+    if (secondFileMTimeFileTimeUtc.HasValue)
+    {
+      h.Add(SevenZipNid.MTime);
+      WriteU64(h, 11); // 1(all) + 1(bits) + 1(external) + 8(time)
+      h.Add(0x00);     // AllAreDefined=0
+      h.Add(0x40);     // bits: [false,true]
+      h.Add(0x00);     // External=0
+      WriteU64LE(h, unchecked((ulong)secondFileMTimeFileTimeUtc.Value));
+    }
+
+    // kWinAttributes: определено только для второго файла (file1) => bits = 0x40.
+    if (secondFileWinAttrib.HasValue)
+    {
+      h.Add(SevenZipNid.WinAttrib);
+      WriteU64(h, 7);  // 1(all) + 1(bits) + 1(external) + 4(attr)
+      h.Add(0x00);     // AllAreDefined=0
+      h.Add(0x40);     // bits: [false,true]
+      h.Add(0x00);     // External=0
+      WriteU32LE(h, secondFileWinAttrib.Value);
+    }
+
     // kName
     h.Add(SevenZipNid.Name);
     byte[] namesBytes = Encoding.Unicode.GetBytes(emptyName + "\0" + fileName + "\0");
@@ -413,5 +492,17 @@ public sealed class SevenZipArchiveDecoderEmptyStreamsTests
     dst.Add((byte)(value >> 8));
     dst.Add((byte)(value >> 16));
     dst.Add((byte)(value >> 24));
+  }
+
+  private static void WriteU64LE(List<byte> dst, ulong value)
+  {
+    dst.Add((byte)value);
+    dst.Add((byte)(value >> 8));
+    dst.Add((byte)(value >> 16));
+    dst.Add((byte)(value >> 24));
+    dst.Add((byte)(value >> 32));
+    dst.Add((byte)(value >> 40));
+    dst.Add((byte)(value >> 48));
+    dst.Add((byte)(value >> 56));
   }
 }
