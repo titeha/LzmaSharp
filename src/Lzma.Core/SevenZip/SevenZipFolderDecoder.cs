@@ -1,6 +1,8 @@
 using System.Buffers.Binary;
 using System.IO.Compression;
 
+using ICSharpCode.SharpZipLib.BZip2;
+
 using Lzma.Core.Lzma1;
 using Lzma.Core.Lzma2;
 
@@ -623,6 +625,74 @@ public static class SevenZipFolderDecoder
 
         // Для raw LZMA хвост не валидируем.
         return SevenZipFolderDecodeResult.Ok;
+      }
+
+      if (IsBZip2MethodId(coder.MethodId))
+      {
+        // BZip2 (7z): MethodId = { 04 02 02 }.
+        // Для декодирования используем обычный bzip2 stream-декодер.
+        // Properties здесь не нужны, поэтому пока игнорируем их, как и в ветке Deflate.
+        decoded = new byte[expectedUnpackSize];
+
+        try
+        {
+          byte[] src = input.ToArray();
+          using var ms = new MemoryStream(src, writable: false);
+          using var bs = new BZip2InputStream(ms)
+          {
+            IsStreamOwner = false,
+          };
+
+          int written = 0;
+          while (written < decoded.Length)
+          {
+            int n = bs.Read(decoded, written, decoded.Length - written);
+            if (n == 0)
+              break;
+
+            written += n;
+          }
+
+          if (written != decoded.Length)
+          {
+            decoded = [];
+            return SevenZipFolderDecodeResult.InvalidData;
+          }
+
+          // Лишних распакованных байт быть не должно.
+          if (bs.ReadByte() != -1)
+          {
+            decoded = [];
+            return SevenZipFolderDecodeResult.InvalidData;
+          }
+
+          // Как и для LZMA2/Deflate, допускаем хвост из нулей в packed stream.
+          if (ms.Position < ms.Length)
+          {
+            int pos = (int)ms.Position;
+            ReadOnlySpan<byte> tail = input[pos..];
+            for (int i = 0; i < tail.Length; i++)
+            {
+              if (tail[i] != 0)
+              {
+                decoded = [];
+                return SevenZipFolderDecodeResult.InvalidData;
+              }
+            }
+          }
+
+          return SevenZipFolderDecodeResult.Ok;
+        }
+        catch (BZip2Exception)
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.InvalidData;
+        }
+        catch (EndOfStreamException)
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.InvalidData;
+        }
       }
 
       if (IsDeflateMethodId(coder.MethodId))
@@ -1516,6 +1586,12 @@ public static class SevenZipFolderDecoder
   {
     // Methods.txt: 04.. (Misc) / 01 (Zip) / 08 (Deflate) => { 04 01 08 }.
     return methodId.Length == 3 && methodId[0] == 0x04 && methodId[1] == 0x01 && methodId[2] == 0x08;
+  }
+
+  private static bool IsBZip2MethodId(byte[] methodId)
+  {
+    // Methods.txt: 04.. (Misc) / 02 (BZip2) / 02 => { 04 02 02 }.
+    return methodId.Length == 3 && methodId[0] == 0x04 && methodId[1] == 0x02 && methodId[2] == 0x02;
   }
 
   private static void BcjArmDecodeInPlace(Span<byte> data, uint startOffset)
