@@ -6,6 +6,8 @@ using ICSharpCode.SharpZipLib.BZip2;
 using Lzma.Core.Lzma1;
 using Lzma.Core.Lzma2;
 
+using SharpCompress.Compressors.PPMd;
+
 namespace Lzma.Core.SevenZip;
 
 public enum SevenZipFolderDecodeResult
@@ -689,6 +691,66 @@ public static class SevenZipFolderDecoder
           return SevenZipFolderDecodeResult.InvalidData;
         }
         catch (EndOfStreamException)
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.InvalidData;
+        }
+      }
+
+      // PPMd (7z): MethodId = { 03 04 01 }.
+      // Properties = 5 bytes: [0]=order, [1..4]=memSize (UInt32 LE).
+      if (coder.MethodId.Length == 3 &&
+          coder.MethodId[0] == 0x03 &&
+          coder.MethodId[1] == 0x04 &&
+          coder.MethodId[2] == 0x01)
+      {
+        if (coder.Properties is null || coder.Properties.Length != 5)
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.InvalidData;
+        }
+
+        decoded = new byte[expectedUnpackSize];
+
+        try
+        {
+          // PpmdStream работает со Stream, поэтому делаем MemoryStream по входным байтам.
+          // (Да, тут есть копия input -> byte[]. Оптимизацию без копии сделаем позже отдельным шагом.)
+          byte[] src = input.ToArray();
+          using var ms = new MemoryStream(src, writable: false);
+
+          // Важно: создаём свойства ИЗ массива properties.
+          // SharpCompress по props.Length==5 переключается в PPMdVersion.H7Z.
+          var ppmdProps = new PpmdProperties(coder.Properties);
+          using var ps = PpmdStream.Create(ppmdProps, ms, compress: false);
+
+          int written = 0;
+          while (written < decoded.Length)
+          {
+            int n = ps.Read(decoded, written, decoded.Length - written);
+            if (n == 0)
+              break;
+            written += n;
+          }
+
+          if (written != decoded.Length)
+          {
+            decoded = [];
+            return SevenZipFolderDecodeResult.InvalidData;
+          }
+
+          // Важно:
+          // Для PPMd (7z) не пытаемся читать "ещё байт" из распакованного потока
+          // и не валидируем хвост packed stream. В 7z распакованный размер задан контейнером,
+          // а EndMarker может отсутствовать.
+          return SevenZipFolderDecodeResult.Ok;
+        }
+        catch (NotSupportedException)
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.NotSupported;
+        }
+        catch (InvalidDataException)
         {
           decoded = [];
           return SevenZipFolderDecodeResult.InvalidData;
