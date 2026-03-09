@@ -404,17 +404,15 @@ public static class SevenZipArchiveDecoder
         if (hasExpectedCrc || hasFileCrc)
         {
           ReadOnlySpan<byte> span = folderUnpacked.AsSpan(cursor, size);
-          uint? actualCrc = null;
+          uint actualCrc = Crc32.Compute(span);
 
-          actualCrc ??= Crc32.Compute(span);
+          // 1) CRC на уровне unpack-stream (SubStreamsInfo.kCRC) / fallback на folder CRC.
+          if (hasExpectedCrc && actualCrc != expectedCrc)
+            return SevenZipArchiveDecodeResult.InvalidData;
 
-          // (2) Новая проверка FilesInfo.kCRC:
-          if (fileCrcDefined?[fileIndex] == true)
-          {
-            actualCrc ??= Crc32.Compute(span);
-            if (actualCrc.Value != fileCrc![fileIndex])
-              return SevenZipArchiveDecodeResult.InvalidData;
-          }
+          // 2) CRC на уровне файла (FilesInfo.kCRC).
+          if (hasFileCrc && actualCrc != expectedFileCrc)
+            return SevenZipArchiveDecodeResult.InvalidData;
         }
 
         byte[] fileBytes = new byte[size];
