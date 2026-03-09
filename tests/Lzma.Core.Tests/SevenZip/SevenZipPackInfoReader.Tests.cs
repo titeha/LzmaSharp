@@ -84,6 +84,8 @@ public class SevenZipPackInfoReaderTests
     Assert.Equal(0UL, packInfo.PackPos);
     Assert.Single(packInfo.PackSizes);
     Assert.Equal(1UL, packInfo.PackSizes[0]);
+    Assert.Equal(0x11223344u, packInfo.Crc![0]);
+    Assert.NotNull(packInfo.CrcDefined);
   }
 
   [Fact]
@@ -107,6 +109,8 @@ public class SevenZipPackInfoReaderTests
 
         SevenZipNid.End,
     ];
+    bool[] crcDefinedExpected = [false, true];
+    uint[] crcExpected = [0, 0x11223344];
 
     SevenZipPackInfoReadResult res = SevenZipPackInfoReader.TryRead(data, out SevenZipPackInfo packInfo, out int bytesConsumed);
 
@@ -116,6 +120,8 @@ public class SevenZipPackInfoReaderTests
     Assert.Equal(2, packInfo.PackSizes.Length);
     Assert.Equal(1UL, packInfo.PackSizes[0]);
     Assert.Equal(2UL, packInfo.PackSizes[1]);
+    Assert.Equal(crcDefinedExpected, packInfo.CrcDefined);
+    Assert.Equal(crcExpected, packInfo.Crc);
   }
 
   [Fact]

@@ -1,3 +1,5 @@
+using System.Buffers.Binary;
+
 namespace Lzma.Core.SevenZip;
 
 public enum SevenZipPackInfoReadResult
@@ -21,6 +23,9 @@ public static class SevenZipPackInfoReader
   {
     packInfo = default;
     bytesConsumed = 0;
+
+    bool[]? crcDefined = null;
+    uint[]? crc = null;
 
     // Парсим атомарно: если данных не хватает, не двигаем bytesConsumed.
     int cursor = 0;
@@ -64,7 +69,7 @@ public static class SevenZipPackInfoReader
         if (!haveSizes)
           return SevenZipPackInfoReadResult.InvalidData;
 
-        packInfo = new SevenZipPackInfo(packPos, sizes);
+        packInfo = new SevenZipPackInfo(packPos, sizes, crcDefined, crc);
         bytesConsumed = cursor;
         return SevenZipPackInfoReadResult.Ok;
       }
@@ -94,7 +99,6 @@ public static class SevenZipPackInfoReader
       {
         // kCRC в PackInfo кодируется как Digests(NumPackStreams):
         // BYTE AllAreDefined; если 0 => далее BIT-вектор Defined[NumStreams]; затем CRCs[NumDefined] (UINT32).
-        // См. 7zFormat.txt: Digests + PackInfo. :contentReference[oaicite:3]{index=3}
 
         if (!haveSizes)
           return SevenZipPackInfoReadResult.InvalidData;
@@ -109,19 +113,34 @@ public static class SevenZipPackInfoReader
 
         byte allAreDefined = input[cursor++];
 
-        int definedCount;
-
         if (allAreDefined == 1)
-          definedCount = numPackStreams;
-        else if (allAreDefined == 0)
+        {
+          // CRC задан для всех потоков.
+          ulong needed = (ulong)numPackStreams * 4UL;
+          if (needed > (ulong)(input.Length - cursor))
+            return SevenZipPackInfoReadResult.NeedMoreInput;
+
+          crcDefined = new bool[numPackStreams];
+          crc = new uint[numPackStreams];
+
+          for (int i = 0; i < numPackStreams; i++)
+          {
+            crcDefined[i] = true;
+            crc[i] = BinaryPrimitives.ReadUInt32LittleEndian(input.Slice(cursor, 4));
+            cursor += 4;
+          }
+
+          continue;
+        }
+
+        if (allAreDefined == 0)
         {
           int definedBytes = (numPackStreams + 7) / 8;
           if (input.Length - cursor < definedBytes)
             return SevenZipPackInfoReadResult.NeedMoreInput;
 
-          definedCount = 0;
-
-          // Биты MSB->LSB: 0x80, 0x40, ... 0x01
+          // Сначала считаем количество defined, чтобы проверить, хватит ли байт под CRC.
+          int definedCount = 0;
           for (int i = 0; i < numPackStreams; i++)
           {
             byte b = input[cursor + (i >> 3)];
@@ -130,19 +149,37 @@ public static class SevenZipPackInfoReader
               definedCount++;
           }
 
+          ulong needed = (ulong)definedCount * 4UL;
+          if (needed > (ulong)(input.Length - cursor - definedBytes))
+            return SevenZipPackInfoReadResult.NeedMoreInput;
+
+          crcDefined = new bool[numPackStreams];
+          crc = new uint[numPackStreams];
+
+          // Заполняем defined
+          for (int i = 0; i < numPackStreams; i++)
+          {
+            byte b = input[cursor + (i >> 3)];
+            byte mask = (byte)(0x80 >> (i & 7));
+            crcDefined[i] = (b & mask) != 0;
+          }
+
           cursor += definedBytes;
+
+          // Читаем CRC только для defined
+          for (int i = 0; i < numPackStreams; i++)
+          {
+            if (!crcDefined[i])
+              continue;
+
+            crc[i] = BinaryPrimitives.ReadUInt32LittleEndian(input.Slice(cursor, 4));
+            cursor += 4;
+          }
+
+          continue;
         }
-        else
-          return SevenZipPackInfoReadResult.InvalidData;
 
-        // CRCs идут подряд только для "defined" элементов.
-        // Каждый CRC = UINT32 (4 байта, little-endian).
-        ulong crcBytesU64 = (ulong)definedCount * 4UL;
-        if (crcBytesU64 > (ulong)(input.Length - cursor))
-          return SevenZipPackInfoReadResult.NeedMoreInput;
-
-        cursor += (int)crcBytesU64;
-        continue;
+        return SevenZipPackInfoReadResult.InvalidData;
       }
 
       return SevenZipPackInfoReadResult.InvalidData;

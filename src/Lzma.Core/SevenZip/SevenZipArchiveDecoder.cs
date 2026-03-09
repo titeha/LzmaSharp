@@ -308,6 +308,50 @@ public static class SevenZipArchiveDecoder
 
     ReadOnlySpan<byte> packed = reader.PackedStreams.Span;
 
+    // PackInfo.kCRC: CRC32 по packed stream'ам (если задано).
+    if (streamsInfo.PackInfo is not { } packInfo)
+      return SevenZipArchiveDecodeResult.InvalidData;
+
+    bool[]? packCrcDefined = packInfo.CrcDefined;
+    uint[]? packCrc = packInfo.Crc;
+
+    if ((packCrcDefined is null) != (packCrc is null))
+      return SevenZipArchiveDecodeResult.InvalidData;
+
+    if (packCrcDefined is not null)
+    {
+      if (packCrcDefined.Length != packInfo.PackSizes.Length)
+        return SevenZipArchiveDecodeResult.InvalidData;
+
+      if (packCrc!.Length != packInfo.PackSizes.Length)
+        return SevenZipArchiveDecodeResult.InvalidData;
+
+      ulong start = packInfo.PackPos;
+
+      for (int i = 0; i < packInfo.PackSizes.Length; i++)
+      {
+        ulong sizeU64 = packInfo.PackSizes[i];
+
+        if (start > (ulong)packed.Length)
+          return SevenZipArchiveDecodeResult.InvalidData;
+
+        if (sizeU64 > (ulong)packed.Length - start)
+          return SevenZipArchiveDecodeResult.InvalidData;
+
+        if (packCrcDefined[i])
+        {
+          if (start > int.MaxValue || sizeU64 > int.MaxValue)
+            return SevenZipArchiveDecodeResult.NotSupported;
+
+          uint actual = Crc32.Compute(packed.Slice((int)start, (int)sizeU64));
+          if (actual != packCrc[i])
+            return SevenZipArchiveDecodeResult.InvalidData;
+        }
+
+        start += sizeU64;
+      }
+    }
+
     List<SevenZipDecodedFile> decoded = new(fileCount);
 
     int fileIndex = 0;
