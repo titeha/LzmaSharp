@@ -632,6 +632,10 @@ public static class SevenZipArchiveDecoder
     {
       string root = Path.GetFullPath(destinationDirectory);
 
+      // destinationDirectory должен быть каталогом, а не существующим файлом.
+      if (File.Exists(root))
+        return SevenZipArchiveDecodeResult.InvalidData;
+
       // Нормализуем так, чтобы проверка StartsWith была корректной (root обязательно с разделителем).
       string rootWithSep = root;
       if (!rootWithSep.EndsWith(Path.DirectorySeparatorChar))
