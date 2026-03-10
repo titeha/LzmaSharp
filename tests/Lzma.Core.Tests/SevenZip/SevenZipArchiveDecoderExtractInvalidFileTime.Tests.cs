@@ -69,6 +69,60 @@ public sealed class SevenZipArchiveDecoderExtractInvalidFileTimeTests
     }
   }
 
+  [Theory]
+  [MemberData(nameof(InvalidTimeProperties))]
+  public void ExtractToDirectory_FileTimeAboveDateTimeMax_InvalidData(byte timeNid)
+  {
+    byte[] plain = MakePattern(128, mul: 31, add: 7);
+
+    // ВАЖНО:
+    // значение ещё влезает в long, поэтому проверка raw > long.MaxValue НЕ сработает;
+    // должны попасть именно в DateTime.FromFileTimeUtc(...), а затем в catch ArgumentOutOfRangeException.
+    ulong invalidRawFileTime = checked((ulong)(DateTime.MaxValue.ToFileTimeUtc() + 1));
+
+    byte[] archive = BuildArchiveSingleFileCopyWithTime(
+        plain,
+        fileName: "file.bin",
+        timeNid: timeNid,
+        rawFileTime: invalidRawFileTime);
+
+    // Сам архив и decode-часть корректны.
+    SevenZipArchiveDecodeResult r1 = SevenZipArchiveDecoder.DecodeToEntries(
+        archive,
+        out SevenZipDecodedEntry[] entries,
+        out int consumed1);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, r1);
+    Assert.Equal(archive.Length, consumed1);
+
+    Assert.Single(entries);
+    Assert.Equal("file.bin", entries[0].Name);
+    Assert.False(entries[0].IsDirectory);
+    Assert.Equal(plain, entries[0].Bytes);
+
+    string root = Path.Combine(
+        Path.GetTempPath(),
+        "LzmaSharpTests",
+        nameof(SevenZipArchiveDecoderExtractInvalidFileTimeTests),
+        Guid.NewGuid().ToString("N"));
+
+    try
+    {
+      SevenZipArchiveDecodeResult r2 = SevenZipArchiveDecoder.ExtractToDirectory(
+          archive,
+          root,
+          overwrite: false,
+          out int consumed2);
+
+      Assert.Equal(SevenZipArchiveDecodeResult.InvalidData, r2);
+      Assert.Equal(archive.Length, consumed2);
+    }
+    finally
+    {
+      TryDeleteTree(root);
+    }
+  }
+
   private static byte[] BuildArchiveSingleFileCopyWithTime(
       byte[] plain,
       string fileName,
