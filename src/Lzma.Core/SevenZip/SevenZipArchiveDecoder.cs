@@ -654,6 +654,10 @@ public static class SevenZipArchiveDecoder
 
         if (entries[i].IsDirectory)
         {
+          // Нельзя создать каталог поверх уже существующего файла.
+          if (File.Exists(fullPath))
+            return SevenZipArchiveDecodeResult.InvalidData;
+
           Directory.CreateDirectory(fullPath);
           continue;
         }
@@ -663,6 +667,10 @@ public static class SevenZipArchiveDecoder
           return SevenZipArchiveDecodeResult.InvalidData;
 
         Directory.CreateDirectory(dir);
+
+        // Нельзя записать файл поверх уже существующего каталога.
+        if (Directory.Exists(fullPath))
+          return SevenZipArchiveDecodeResult.InvalidData;
 
         if (!overwrite && File.Exists(fullPath))
           return SevenZipArchiveDecodeResult.InvalidData;
