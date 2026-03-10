@@ -632,8 +632,18 @@ public static class SevenZipArchiveDecoder
     {
       string root = Path.GetFullPath(destinationDirectory);
 
+      StringComparison cmp = OperatingSystem.IsWindows()
+        ? StringComparison.OrdinalIgnoreCase
+        : StringComparison.Ordinal;
+
       // destinationDirectory должен быть каталогом, а не существующим файлом.
       if (File.Exists(root))
+        return SevenZipArchiveDecodeResult.InvalidData;
+
+      // destinationDirectory должен быть каталогом.
+      // Если сам путь или любой его родительский сегмент уже существует как файл,
+      // считаем это ошибкой входных данных, а не InternalError.
+      if (HasFileOnDirectoryPath(root, cmp))
         return SevenZipArchiveDecodeResult.InvalidData;
 
       // Нормализуем так, чтобы проверка StartsWith была корректной (root обязательно с разделителем).
@@ -642,10 +652,6 @@ public static class SevenZipArchiveDecoder
         rootWithSep += Path.DirectorySeparatorChar;
 
       Directory.CreateDirectory(root);
-
-      StringComparison cmp = OperatingSystem.IsWindows()
-        ? StringComparison.OrdinalIgnoreCase
-        : StringComparison.Ordinal;
 
       string[] fullPaths = new string[fileCount];
 
@@ -911,6 +917,33 @@ public static class SevenZipArchiveDecoder
 
       if (File.Exists(current))
         return true;
+
+      string? parent = Path.GetDirectoryName(current);
+      if (parent is null || string.Equals(parent, current, comparison))
+        return false;
+
+      current = parent;
+    }
+
+    return false;
+  }
+
+  /// <summary>
+  /// Проверяет, что путь каталога не совпадает с файлом
+  /// и что среди его родительских сегментов нет файлов.
+  /// Если по пути уже встречается существующий каталог, дальше вверх можно не идти.
+  /// </summary>
+  private static bool HasFileOnDirectoryPath(string fullDirectoryPath, StringComparison comparison)
+  {
+    string? current = fullDirectoryPath;
+
+    while (current is not null)
+    {
+      if (File.Exists(current))
+        return true;
+
+      if (Directory.Exists(current))
+        return false;
 
       string? parent = Path.GetDirectoryName(current);
       if (parent is null || string.Equals(parent, current, comparison))
