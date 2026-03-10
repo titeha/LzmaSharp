@@ -654,8 +654,8 @@ public static class SevenZipArchiveDecoder
 
         if (entries[i].IsDirectory)
         {
-          // Нельзя создать каталог поверх уже существующего файла.
-          if (File.Exists(fullPath))
+          // Нельзя создавать каталог, если он сам или любой его родитель уже существует как файл.
+          if (HasFileOnPath(root, fullPath, includeSelf: true, cmp))
             return SevenZipArchiveDecodeResult.InvalidData;
 
           Directory.CreateDirectory(fullPath);
@@ -664,6 +664,10 @@ public static class SevenZipArchiveDecoder
 
         string? dir = Path.GetDirectoryName(fullPath);
         if (dir is null)
+          return SevenZipArchiveDecodeResult.InvalidData;
+
+        // Нельзя создавать родительские каталоги, если на этом пути уже лежит файл.
+        if (HasFileOnPath(root, fullPath, includeSelf: false, cmp))
           return SevenZipArchiveDecodeResult.InvalidData;
 
         Directory.CreateDirectory(dir);
@@ -880,6 +884,38 @@ public static class SevenZipArchiveDecoder
 
     fullPath = combined;
     return true;
+  }
+
+  /// <summary>
+  /// Проверяет, что на пути от root до fullPath нет сегментов,
+  /// которые уже существуют как файл.
+  /// Для каталогов includeSelf=true, чтобы поймать случай
+  /// "в архиве каталог, а на диске по тому же пути уже файл".
+  /// </summary>
+  private static bool HasFileOnPath(
+      string root,
+      string fullPath,
+      bool includeSelf,
+      StringComparison comparison)
+  {
+    string? current = includeSelf ? fullPath : Path.GetDirectoryName(fullPath);
+
+    while (current is not null)
+    {
+      if (string.Equals(current, root, comparison))
+        return false;
+
+      if (File.Exists(current))
+        return true;
+
+      string? parent = Path.GetDirectoryName(current);
+      if (parent is null || string.Equals(parent, current, comparison))
+        return false;
+
+      current = parent;
+    }
+
+    return false;
   }
 
   private static SevenZipArchiveDecodeResult TryGetFolderFinalOutSize(
