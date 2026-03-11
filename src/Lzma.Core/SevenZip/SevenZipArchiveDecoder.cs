@@ -899,8 +899,16 @@ public static class SevenZipArchiveDecoder
         if (last == ' ' || last == '.')
           return false;
 
+        // Windows не допускает зарезервированные символы и управляющие коды
+        // внутри имени файла/каталога.
+        for (int j = 0; j < segment.Length; j++)
+        {
+          if (IsInvalidWindowsNameChar(segment[j]))
+            return false;
+        }
+
         // "NUL.txt" и "CON.tar.gz" тоже эквивалентны device-именам,
-        // поэтому сравниваем только базовое имя до первой точки.
+        // поэтому сравниваем базовое имя до первой точки.
         int dotIndex = segment.IndexOf('.');
         ReadOnlySpan<char> baseName = dotIndex >= 0 ? segment[..dotIndex] : segment;
 
@@ -922,6 +930,27 @@ public static class SevenZipArchiveDecoder
 
     fullPath = combined;
     return true;
+  }
+
+  /// <summary>
+  /// Проверяет символы, недопустимые в Win32-именах файлов/каталогов.
+  /// ':' и NUL здесь тоже считаем недопустимыми, хотя они уже режутся выше.
+  /// </summary>
+  private static bool IsInvalidWindowsNameChar(char c)
+  {
+    // U+0000..U+001F в обычных именах Windows запрещены.
+    if (c < 32u)
+      return true;
+
+    return c == '<'
+        || c == '>'
+        || c == ':'
+        || c == '"'
+        || c == '/'
+        || c == '\\'
+        || c == '|'
+        || c == '?'
+        || c == '*';
   }
 
   /// <summary>
