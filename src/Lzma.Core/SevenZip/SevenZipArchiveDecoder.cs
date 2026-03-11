@@ -851,7 +851,10 @@ public static class SevenZipArchiveDecoder
       return false;
 
     // Нормализуем разделители на '/', чтобы проще валидировать сегменты.
-    string n = entryName.Replace('\\', '/').Trim();
+    // ВАЖНО: ничего не Trim()'им.
+    // Иначе имя вроде "name " на Windows тихо превратится в "name",
+    // что приведёт к неверному извлечению вместо InvalidData.
+    string n = entryName.Replace('\\', '/');
 
     // Абсолютные пути не принимаем.
     if (n.StartsWith('/'))
@@ -863,25 +866,50 @@ public static class SevenZipArchiveDecoder
     if (n.Length == 0)
       return false;
 
-    // Валидируем сегменты: запрещаем пустые, "." и ".."
+    bool isWindows = OperatingSystem.IsWindows();
+
+    // Валидируем сегменты: запрещаем пустые, "." и "..".
+    // На Windows также запрещаем device-имена и сегменты,
+    // оканчивающиеся пробелом или точкой.
     int segStart = 0;
+
     for (int i = 0; i <= n.Length; i++)
-      if (i == n.Length || n[i] == '/')
+    {
+      if (i != n.Length && n[i] != '/')
+        continue;
+
+      int segLen = i - segStart;
+      if (segLen <= 0)
+        return false;
+
+      // "." ?
+      if (segLen == 1 && n[segStart] == '.')
+        return false;
+
+      // ".." ?
+      if (segLen == 2 && n[segStart] == '.' && n[segStart + 1] == '.')
+        return false;
+
+      if (isWindows)
       {
-        int segLen = i - segStart;
-        if (segLen <= 0)
+        ReadOnlySpan<char> segment = n.AsSpan(segStart, segLen);
+
+        // Windows не допускает имена, оканчивающиеся пробелом или точкой.
+        char last = segment[^1];
+        if (last == ' ' || last == '.')
           return false;
 
-        // "." ?
-        if (segLen == 1 && n[segStart] == '.')
-          return false;
+        // "NUL.txt" и "CON.tar.gz" тоже эквивалентны device-именам,
+        // поэтому сравниваем только базовое имя до первой точки.
+        int dotIndex = segment.IndexOf('.');
+        ReadOnlySpan<char> baseName = dotIndex >= 0 ? segment[..dotIndex] : segment;
 
-        // ".." ?
-        if (segLen == 2 && n[segStart] == '.' && n[segStart + 1] == '.')
+        if (IsWindowsReservedDeviceName(baseName))
           return false;
-
-        segStart = i + 1;
       }
+
+      segStart = i + 1;
+    }
 
     // Конвертируем в системные разделители.
     string relative = n.Replace('/', Path.DirectorySeparatorChar);
@@ -894,6 +922,49 @@ public static class SevenZipArchiveDecoder
 
     fullPath = combined;
     return true;
+  }
+
+  /// <summary>
+  /// Проверяет device-имена Windows:
+  /// CON, PRN, AUX, NUL, COM1..COM9, LPT1..LPT9,
+  /// а также варианты с superscript-цифрами COM¹/COM²/COM³, LPT¹/LPT²/LPT³.
+  /// Сравнение выполняется без учёта регистра.
+  /// </summary>
+  private static bool IsWindowsReservedDeviceName(ReadOnlySpan<char> name)
+  {
+    if (name.Length == 0)
+      return false;
+
+    if (name.Equals("CON".AsSpan(), StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("PRN".AsSpan(), StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("AUX".AsSpan(), StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("NUL".AsSpan(), StringComparison.OrdinalIgnoreCase))
+    {
+      return true;
+    }
+
+    if (name.Length == 4)
+    {
+      ReadOnlySpan<char> prefix = name[..3];
+      char suffix = name[3];
+
+      if ((prefix.Equals("COM".AsSpan(), StringComparison.OrdinalIgnoreCase) ||
+           prefix.Equals("LPT".AsSpan(), StringComparison.OrdinalIgnoreCase)) &&
+          IsWindowsReservedDeviceIndex(suffix))
+      {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private static bool IsWindowsReservedDeviceIndex(char c)
+  {
+    return (uint)(c - '1') <= 8
+        || c == '¹'
+        || c == '²'
+        || c == '³';
   }
 
   /// <summary>
