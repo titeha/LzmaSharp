@@ -682,12 +682,19 @@ public static class SevenZipArchiveDecoder
 
         Directory.CreateDirectory(dir);
 
-        // Нельзя записать файл поверх уже существующего каталога.
         if (Directory.Exists(fullPath))
           return SevenZipArchiveDecodeResult.InvalidData;
 
-        if (!overwrite && File.Exists(fullPath))
-          return SevenZipArchiveDecodeResult.InvalidData;
+        if (File.Exists(fullPath))
+        {
+          if (!overwrite)
+            return SevenZipArchiveDecodeResult.InvalidData;
+
+          // Если перезаписываем существующий файл, заранее снимаем специальные атрибуты.
+          // Это нужно, чтобы запись поверх read-only файла не улетала в UnauthorizedAccessException.
+          if (!TryPrepareExistingFileForOverwrite(fullPath))
+            return SevenZipArchiveDecodeResult.InvalidData;
+        }
 
         File.WriteAllBytes(fullPath, entries[i].Bytes);
       }
@@ -825,6 +832,32 @@ public static class SevenZipArchiveDecoder
     catch (NotSupportedException)
     {
       return SevenZipArchiveDecodeResult.InvalidData;
+    }
+  }
+
+  /// <summary>
+  /// Подготавливает существующий файл к перезаписи.
+  /// Сейчас достаточно снять специальные атрибуты (в первую очередь ReadOnly),
+  /// чтобы обычная запись поверх файла не падала по доступу.
+  /// </summary>
+  private static bool TryPrepareExistingFileForOverwrite(string fullPath)
+  {
+    try
+    {
+      File.SetAttributes(fullPath, FileAttributes.Normal);
+      return true;
+    }
+    catch (IOException)
+    {
+      return false;
+    }
+    catch (UnauthorizedAccessException)
+    {
+      return false;
+    }
+    catch (ArgumentException)
+    {
+      return false;
     }
   }
 
