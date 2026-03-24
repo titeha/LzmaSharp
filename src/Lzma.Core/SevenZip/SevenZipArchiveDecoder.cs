@@ -653,14 +653,35 @@ public static class SevenZipArchiveDecoder
 
       Directory.CreateDirectory(root);
 
+      StringComparer pathComparer = OperatingSystem.IsWindows()
+        ? StringComparer.OrdinalIgnoreCase
+        : StringComparer.Ordinal;
+
       string[] fullPaths = new string[fileCount];
 
+      HashSet<string> seenOutputPaths = new(pathComparer);
+
+      // Сначала считаем и валидируем ВСЕ итоговые пути.
+      // Это нужно, чтобы не получить частичное извлечение,
+      // если две записи архива схлопываются в один путь на текущей ОС
+      // (например, A.bin и a.bin на Windows).
       for (int i = 0; i < entries.Length; i++)
       {
         if (!TryBuildSafePath(rootWithSep, entries[i].Name, cmp, out string fullPath))
           return SevenZipArchiveDecodeResult.InvalidData;
 
+        if (!seenOutputPaths.Add(fullPath))
+          return SevenZipArchiveDecodeResult.InvalidData;
+
         fullPaths[i] = fullPath;
+      }
+
+      // Только после этого реально создаём каталоги и пишем файлы.
+      for (int i = 0; i < entries.Length; i++)
+      {
+        string fullPath = fullPaths[i];
+        if (fullPath.Length == 0)
+          return SevenZipArchiveDecodeResult.InvalidData;
 
         if (entries[i].IsDirectory)
         {
@@ -690,8 +711,6 @@ public static class SevenZipArchiveDecoder
           if (!overwrite)
             return SevenZipArchiveDecodeResult.InvalidData;
 
-          // Если перезаписываем существующий файл, заранее снимаем специальные атрибуты.
-          // Это нужно, чтобы запись поверх read-only файла не улетала в UnauthorizedAccessException.
           if (!TryPrepareExistingFileForOverwrite(fullPath))
             return SevenZipArchiveDecodeResult.InvalidData;
         }
