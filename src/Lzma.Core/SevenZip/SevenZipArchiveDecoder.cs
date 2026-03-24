@@ -676,6 +676,35 @@ public static class SevenZipArchiveDecoder
         fullPaths[i] = fullPath;
       }
 
+      HashSet<string> plannedFilePaths = new(pathComparer);
+      for (int i = 0; i < entries.Length; i++)
+      {
+        if (!entries[i].IsDirectory)
+          plannedFilePaths.Add(fullPaths[i]);
+      }
+
+      // Если один entry архива является файлом, а другой лежит "под ним"
+      // (например, "dir" и "dir/file.bin"), отказываем ДО начала записи.
+      for (int i = 0; i < entries.Length; i++)
+      {
+        string? current = Path.GetDirectoryName(fullPaths[i]);
+
+        while (current is not null)
+        {
+          if (string.Equals(current, root, cmp))
+            break;
+
+          if (plannedFilePaths.Contains(current))
+            return SevenZipArchiveDecodeResult.InvalidData;
+
+          string? parent = Path.GetDirectoryName(current);
+          if (parent is null || string.Equals(parent, current, cmp))
+            break;
+
+          current = parent;
+        }
+      }
+
       // Только после этого реально создаём каталоги и пишем файлы.
       for (int i = 0; i < entries.Length; i++)
       {
