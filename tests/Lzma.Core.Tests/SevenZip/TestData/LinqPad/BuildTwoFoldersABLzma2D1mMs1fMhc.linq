@@ -30,8 +30,8 @@ void Main()
 
 	try
 	{
-		WriteFilledFile(Path.Combine(workDir, "a.bin"), 4096, 0x41);
-		WriteFilledFile(Path.Combine(workDir, "b.bin"), 6000, 0x42);
+		File.WriteAllBytes(Path.Combine(workDir, "a.bin"), MakeBytes(4096, mul: 17, add: 3));
+		File.WriteAllBytes(Path.Combine(workDir, "b.bin"), MakeBytes(6000, mul: 31, add: 7));
 
 		if (File.Exists(archivePath))
 			File.Delete(archivePath);
@@ -99,11 +99,12 @@ void Main()
 	}
 }
 
-static void WriteFilledFile(string path, int length, byte value)
+static byte[] MakeBytes(int length, int mul, int add)
 {
-	byte[] data = GC.AllocateUninitializedArray<byte>(length);
-	data.AsSpan().Fill(value);
-	File.WriteAllBytes(path, data);
+	byte[] bytes = new byte[length];
+	for (int i = 0; i < bytes.Length; i++)
+		bytes[i] = unchecked((byte)(i * mul + add));
+	return bytes;
 }
 
 static string Find7ZipExe()
