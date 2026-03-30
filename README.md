@@ -12,7 +12,7 @@
 ```
 LzmaSharp.sln
 src/
-  LzmaCore/        # Ядро: LZMA2 encode/decode (без UI/без шифрования)
+  Lzma.Core/        # Ядро: LZMA2 encode/decode (без UI/без шифрования)
   LzmaCli/         # Утилита для ручных прогонов (не основной продукт)
 tests/
   LzmaTests/       # NUnit: регресс и совместимость
