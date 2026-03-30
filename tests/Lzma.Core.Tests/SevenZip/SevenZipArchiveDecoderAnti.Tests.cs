@@ -18,6 +18,90 @@ public sealed class SevenZipArchiveDecoderAntiTests
     Assert.Empty(files);
   }
 
+  [Fact]
+  public void DecodeToArray_ЕслиЕстьAntiItem_ВозвращаетNotSupported()
+  {
+    byte[] archive = Build7z_OneEmptyAntiFile_WithName("anti");
+
+    SevenZipArchiveDecodeResult r = SevenZipArchiveDecoder.DecodeToArray(
+        archive,
+        out SevenZipDecodedFile[] files,
+        out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.NotSupported, r);
+    Assert.Equal(archive.Length, bytesConsumed);
+    Assert.Empty(files);
+  }
+
+  [Fact]
+  public void DecodeToEntries_ЕслиЕстьAntiItem_ВозвращаетNotSupported()
+  {
+    byte[] archive = Build7z_OneEmptyAntiFile_WithName("anti");
+
+    SevenZipArchiveDecodeResult r = SevenZipArchiveDecoder.DecodeToEntries(
+        archive,
+        out SevenZipDecodedEntry[] entries,
+        out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.NotSupported, r);
+    Assert.Equal(archive.Length, bytesConsumed);
+    Assert.Empty(entries);
+  }
+
+  [Fact]
+  public void DecodeSingleFileToArray_ЕслиЕстьAntiItem_ВозвращаетNotSupported()
+  {
+    byte[] archive = Build7z_OneEmptyAntiFile_WithName("anti");
+
+    SevenZipArchiveDecodeResult r = SevenZipArchiveDecoder.DecodeSingleFileToArray(
+        archive,
+        out byte[] fileBytes,
+        out string fileName,
+        out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.NotSupported, r);
+    Assert.Equal(archive.Length, bytesConsumed);
+    Assert.Empty(fileBytes);
+    Assert.Equal(string.Empty, fileName);
+  }
+
+  [Fact]
+  public void ExtractToDirectory_ЕслиЕстьAntiItem_ВозвращаетNotSupported()
+  {
+    byte[] archive = Build7z_OneEmptyAntiFile_WithName("anti");
+
+    string root = Path.Combine(
+        Path.GetTempPath(),
+        "LzmaSharpTests",
+        nameof(SevenZipArchiveDecoderAntiTests),
+        Guid.NewGuid().ToString("N"));
+
+    try
+    {
+      SevenZipArchiveDecodeResult r = SevenZipArchiveDecoder.ExtractToDirectory(
+          archive,
+          root,
+          overwrite: false,
+          out int bytesConsumed);
+
+      Assert.Equal(SevenZipArchiveDecodeResult.NotSupported, r);
+      Assert.Equal(archive.Length, bytesConsumed);
+
+      // До реального извлечения доходить не должно.
+      Assert.False(Directory.Exists(root));
+    }
+    finally
+    {
+      try
+      {
+        if (Directory.Exists(root))
+          Directory.Delete(root, recursive: true);
+      }
+      catch
+      {
+      }
+    }
+  }
   private static byte[] Build7z_OneEmptyAntiFile_WithName(string name)
   {
     List<byte> h = new(128)
