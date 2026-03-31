@@ -26,6 +26,124 @@ public sealed class SevenZipArchiveDecoderNoNamesTests
     Assert.Equal(plain, files[0].Bytes);
   }
 
+  [Fact]
+  public void DecodeToArray_ЕслиНетKName_ИспользуетFallbackИмя_ИВозвращаетBytesConsumed()
+  {
+    byte[] plain = new byte[64];
+    for (int i = 0; i < plain.Length; i++)
+      plain[i] = (byte)(i * 13 + 1);
+
+    byte[] archive = Build7zArchive_SingleFile_Lzma2Copy_NoNames(
+        plainFileBytes: plain,
+        dictionarySize: 1 << 20);
+
+    SevenZipArchiveDecodeResult r = SevenZipArchiveDecoder.DecodeToArray(
+        archive,
+        out SevenZipDecodedFile[] files,
+        out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, r);
+    Assert.Equal(archive.Length, bytesConsumed);
+
+    Assert.Single(files);
+    Assert.Equal("file_0", files[0].Name);
+    Assert.Equal(plain, files[0].Bytes);
+  }
+
+  [Fact]
+  public void DecodeToEntries_ЕслиНетKName_ИспользуетFallbackИмя()
+  {
+    byte[] plain = new byte[64];
+    for (int i = 0; i < plain.Length; i++)
+      plain[i] = (byte)(i * 13 + 1);
+
+    byte[] archive = Build7zArchive_SingleFile_Lzma2Copy_NoNames(
+        plainFileBytes: plain,
+        dictionarySize: 1 << 20);
+
+    SevenZipArchiveDecodeResult r = SevenZipArchiveDecoder.DecodeToEntries(
+        archive,
+        out SevenZipDecodedEntry[] entries,
+        out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, r);
+    Assert.Equal(archive.Length, bytesConsumed);
+
+    Assert.Single(entries);
+    Assert.Equal("file_0", entries[0].Name);
+    Assert.False(entries[0].IsDirectory);
+    Assert.Equal(plain, entries[0].Bytes);
+  }
+
+  [Fact]
+  public void DecodeSingleFileToArray_ЕслиНетKName_ИспользуетFallbackИмя()
+  {
+    byte[] plain = new byte[64];
+    for (int i = 0; i < plain.Length; i++)
+      plain[i] = (byte)(i * 13 + 1);
+
+    byte[] archive = Build7zArchive_SingleFile_Lzma2Copy_NoNames(
+        plainFileBytes: plain,
+        dictionarySize: 1 << 20);
+
+    SevenZipArchiveDecodeResult r = SevenZipArchiveDecoder.DecodeSingleFileToArray(
+        archive,
+        out byte[] fileBytes,
+        out string fileName,
+        out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, r);
+    Assert.Equal(archive.Length, bytesConsumed);
+
+    Assert.Equal("file_0", fileName);
+    Assert.Equal(plain, fileBytes);
+  }
+
+  [Fact]
+  public void ExtractToDirectory_ЕслиНетKName_ИспользуетFallbackИмя()
+  {
+    byte[] plain = new byte[64];
+    for (int i = 0; i < plain.Length; i++)
+      plain[i] = (byte)(i * 13 + 1);
+
+    byte[] archive = Build7zArchive_SingleFile_Lzma2Copy_NoNames(
+        plainFileBytes: plain,
+        dictionarySize: 1 << 20);
+
+    string root = Path.Combine(
+        Path.GetTempPath(),
+        "LzmaSharpTests",
+        nameof(SevenZipArchiveDecoderNoNamesTests),
+        Guid.NewGuid().ToString("N"));
+
+    try
+    {
+      SevenZipArchiveDecodeResult r = SevenZipArchiveDecoder.ExtractToDirectory(
+          archive,
+          root,
+          overwrite: false,
+          out int bytesConsumed);
+
+      Assert.Equal(SevenZipArchiveDecodeResult.Ok, r);
+      Assert.Equal(archive.Length, bytesConsumed);
+
+      string path = Path.Combine(root, "file_0");
+      Assert.True(File.Exists(path));
+      Assert.Equal(plain, File.ReadAllBytes(path));
+    }
+    finally
+    {
+      try
+      {
+        if (Directory.Exists(root))
+          Directory.Delete(root, recursive: true);
+      }
+      catch
+      {
+      }
+    }
+  }
+
   private static byte[] Build7zArchive_SingleFile_Lzma2Copy_NoNames(ReadOnlySpan<byte> plainFileBytes, int dictionarySize)
   {
     byte[] packedStream = Lzma2CopyEncoder.Encode(plainFileBytes, dictionarySize, out byte lzma2PropertiesByte);
