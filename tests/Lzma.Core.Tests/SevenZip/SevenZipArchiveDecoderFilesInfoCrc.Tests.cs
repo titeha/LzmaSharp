@@ -92,6 +92,143 @@ public sealed class SevenZipArchiveDecoderFilesInfoCrcTests
     Assert.Equal(archive.Length, bytesConsumed);
   }
 
+  [Fact]
+  public void PublicApis_FilesInfoCrcMismatch_NonEmptyFile_InvalidData()
+  {
+    byte[] plain = MakePattern(128, mul: 31, add: 7);
+    uint wrongCrc = Crc32.Compute(plain) ^ 0xFFFFFFFFu;
+
+    byte[] archive = BuildArchiveSingleFileCopyWithFilesInfoCrc(
+        plain,
+        fileName: "file.bin",
+        fileCrc: wrongCrc);
+
+    SevenZipArchiveDecodeResult r1 = SevenZipArchiveDecoder.DecodeAllFilesToArray(
+        archive,
+        out SevenZipDecodedFile[] files);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.InvalidData, r1);
+    Assert.Empty(files);
+
+    SevenZipArchiveDecodeResult r2 = SevenZipArchiveDecoder.DecodeToEntries(
+        archive,
+        out SevenZipDecodedEntry[] entries,
+        out int consumed2);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.InvalidData, r2);
+    Assert.Equal(archive.Length, consumed2);
+    Assert.Empty(entries);
+
+    SevenZipArchiveDecodeResult r3 = SevenZipArchiveDecoder.DecodeSingleFileToArray(
+        archive,
+        out byte[] fileBytes,
+        out string fileName,
+        out int consumed3);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.InvalidData, r3);
+    Assert.Equal(archive.Length, consumed3);
+    Assert.Empty(fileBytes);
+    Assert.Equal(string.Empty, fileName);
+
+    string root = Path.Combine(
+        Path.GetTempPath(),
+        "LzmaSharpTests",
+        nameof(SevenZipArchiveDecoderFilesInfoCrcTests),
+        Guid.NewGuid().ToString("N"));
+
+    try
+    {
+      SevenZipArchiveDecodeResult r4 = SevenZipArchiveDecoder.ExtractToDirectory(
+          archive,
+          root,
+          overwrite: false,
+          out int consumed4);
+
+      Assert.Equal(SevenZipArchiveDecodeResult.InvalidData, r4);
+      Assert.Equal(archive.Length, consumed4);
+
+      // До создания destination доходить не должно.
+      Assert.False(Directory.Exists(root));
+    }
+    finally
+    {
+      TryDeleteTree(root);
+    }
+  }
+
+  [Fact]
+  public void PublicApis_FilesInfoCrcMismatch_EmptyFile_InvalidData()
+  {
+    const uint wrongCrc = 0x11223344u;
+
+    byte[] archive = BuildArchiveSingleEmptyFileWithFilesInfoCrc(
+        fileName: "empty.bin",
+        fileCrc: wrongCrc);
+
+    SevenZipArchiveDecodeResult r1 = SevenZipArchiveDecoder.DecodeAllFilesToArray(
+        archive,
+        out SevenZipDecodedFile[] files);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.InvalidData, r1);
+    Assert.Empty(files);
+
+    SevenZipArchiveDecodeResult r2 = SevenZipArchiveDecoder.DecodeToEntries(
+        archive,
+        out SevenZipDecodedEntry[] entries,
+        out int consumed2);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.InvalidData, r2);
+    Assert.Equal(archive.Length, consumed2);
+    Assert.Empty(entries);
+
+    SevenZipArchiveDecodeResult r3 = SevenZipArchiveDecoder.DecodeSingleFileToArray(
+        archive,
+        out byte[] fileBytes,
+        out string fileName,
+        out int consumed3);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.InvalidData, r3);
+    Assert.Equal(archive.Length, consumed3);
+    Assert.Empty(fileBytes);
+    Assert.Equal(string.Empty, fileName);
+
+    string root = Path.Combine(
+        Path.GetTempPath(),
+        "LzmaSharpTests",
+        nameof(SevenZipArchiveDecoderFilesInfoCrcTests),
+        Guid.NewGuid().ToString("N"));
+
+    try
+    {
+      SevenZipArchiveDecodeResult r4 = SevenZipArchiveDecoder.ExtractToDirectory(
+          archive,
+          root,
+          overwrite: false,
+          out int consumed4);
+
+      Assert.Equal(SevenZipArchiveDecodeResult.InvalidData, r4);
+      Assert.Equal(archive.Length, consumed4);
+
+      Assert.False(Directory.Exists(root));
+    }
+    finally
+    {
+      TryDeleteTree(root);
+    }
+  }
+
+  private static void TryDeleteTree(string root)
+  {
+    try
+    {
+      if (Directory.Exists(root))
+        Directory.Delete(root, recursive: true);
+    }
+    catch
+    {
+    }
+  }
+
   private static byte[] BuildArchiveSingleFileCopyWithFilesInfoCrc(
       byte[] plain,
       string fileName,
