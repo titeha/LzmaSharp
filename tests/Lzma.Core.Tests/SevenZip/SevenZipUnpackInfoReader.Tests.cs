@@ -263,4 +263,158 @@ public sealed class SevenZipUnpackInfoReaderTests
     Assert.Equal(0x11223344u, unpackInfo.FolderCrc![0]);
     Assert.Equal(0u, unpackInfo.FolderCrc![1]);
   }
+
+
+  [Fact]
+  public void TryRead_EmptyBuffer_ReturnsNeedMoreInput_AndConsumesNothing()
+  {
+    var res = SevenZipUnpackInfoReader.TryRead([], out SevenZipUnpackInfo unpackInfo, out int consumed);
+
+    Assert.Equal(SevenZipUnpackInfoReadResult.NeedMoreInput, res);
+    Assert.Equal(0, consumed);
+    Assert.Null(unpackInfo);
+  }
+
+  [Fact]
+  public void TryRead_FirstByteIsNotUnpackInfo_ReturnsInvalidData_AndConsumesNothing()
+  {
+    byte[] data =
+    [
+      SevenZipNid.PackInfo,
+      SevenZipNid.End,
+    ];
+
+    var res = SevenZipUnpackInfoReader.TryRead(data, out SevenZipUnpackInfo unpackInfo, out int consumed);
+
+    Assert.Equal(SevenZipUnpackInfoReadResult.InvalidData, res);
+    Assert.Equal(0, consumed);
+    Assert.Null(unpackInfo);
+  }
+
+  [Fact]
+  public void TryRead_NumCodersIsZero_ReturnsInvalidData_AndConsumesNothing()
+  {
+    byte[] data =
+    [
+      SevenZipNid.UnpackInfo,
+      SevenZipNid.Folder,
+      0x01,
+      0x00,
+      0x00,
+    ];
+
+    var res = SevenZipUnpackInfoReader.TryRead(data, out SevenZipUnpackInfo unpackInfo, out int consumed);
+
+    Assert.Equal(SevenZipUnpackInfoReadResult.InvalidData, res);
+    Assert.Equal(0, consumed);
+    Assert.Null(unpackInfo);
+  }
+
+  [Fact]
+  public void TryRead_MethodIdSizeIsZero_ReturnsInvalidData_AndConsumesNothing()
+  {
+    byte[] data =
+    [
+      SevenZipNid.UnpackInfo,
+      SevenZipNid.Folder,
+      0x01,
+      0x00,
+      0x01,
+      0x00,
+    ];
+
+    var res = SevenZipUnpackInfoReader.TryRead(data, out SevenZipUnpackInfo unpackInfo, out int consumed);
+
+    Assert.Equal(SevenZipUnpackInfoReadResult.InvalidData, res);
+    Assert.Equal(0, consumed);
+    Assert.Null(unpackInfo);
+  }
+
+  [Fact]
+  public void TryRead_ReservedBit6IsSet_ReturnsInvalidData_AndConsumesNothing()
+  {
+    byte[] data =
+    [
+      SevenZipNid.UnpackInfo,
+      SevenZipNid.Folder,
+      0x01,
+      0x00,
+      0x01,
+      0x41,
+      0x21,
+    ];
+
+    var res = SevenZipUnpackInfoReader.TryRead(data, out SevenZipUnpackInfo unpackInfo, out int consumed);
+
+    Assert.Equal(SevenZipUnpackInfoReadResult.InvalidData, res);
+    Assert.Equal(0, consumed);
+    Assert.Null(unpackInfo);
+  }
+
+  [Fact]
+  public void TryRead_AlternativeMethodsBitIsSet_ReturnsInvalidData_AndConsumesNothing()
+  {
+    byte[] data =
+    [
+      SevenZipNid.UnpackInfo,
+      SevenZipNid.Folder,
+      0x01,
+      0x00,
+      0x01,
+      0x81,
+      0x21,
+    ];
+
+    var res = SevenZipUnpackInfoReader.TryRead(data, out SevenZipUnpackInfo unpackInfo, out int consumed);
+
+    Assert.Equal(SevenZipUnpackInfoReadResult.InvalidData, res);
+    Assert.Equal(0, consumed);
+    Assert.Null(unpackInfo);
+  }
+
+  [Fact]
+  public void TryRead_ComplexCoderWithZeroInputStreams_ReturnsInvalidData_AndConsumesNothing()
+  {
+    byte[] data =
+    [
+      SevenZipNid.UnpackInfo,
+      SevenZipNid.Folder,
+      0x01,
+      0x00,
+      0x01,
+      0x11,
+      0x21,
+      0x00,
+      0x01,
+    ];
+
+    var res = SevenZipUnpackInfoReader.TryRead(data, out SevenZipUnpackInfo unpackInfo, out int consumed);
+
+    Assert.Equal(SevenZipUnpackInfoReadResult.InvalidData, res);
+    Assert.Equal(0, consumed);
+    Assert.Null(unpackInfo);
+  }
+
+  [Fact]
+  public void TryRead_ComplexCoderWithZeroOutputStreams_ReturnsInvalidData_AndConsumesNothing()
+  {
+    byte[] data =
+    [
+      SevenZipNid.UnpackInfo,
+      SevenZipNid.Folder,
+      0x01,
+      0x00,
+      0x01,
+      0x11,
+      0x21,
+      0x01,
+      0x00,
+    ];
+
+    var res = SevenZipUnpackInfoReader.TryRead(data, out SevenZipUnpackInfo unpackInfo, out int consumed);
+
+    Assert.Equal(SevenZipUnpackInfoReadResult.InvalidData, res);
+    Assert.Equal(0, consumed);
+    Assert.Null(unpackInfo);
+  }
 }
