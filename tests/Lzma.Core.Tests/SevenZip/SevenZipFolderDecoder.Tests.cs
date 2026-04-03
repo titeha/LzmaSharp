@@ -404,6 +404,72 @@ public class SevenZipFolderDecoderTests
     Assert.Empty(output);
   }
 
+  [Fact]
+  public void DecodeFolderToArray_Delta_EmptyProperties_UsesDelta1()
+  {
+    // Для delta=1 поток хранит первый байт как есть,
+    // а дальше — разности относительно предыдущего декодированного байта.
+    byte[] packed = [0x10, 0x10, 0x10, 0x10];
+
+    var coder = new SevenZipCoderInfo(
+      methodId: [0x03],
+      properties: [],
+      numInStreams: 1,
+      numOutStreams: 1);
+
+    SevenZipFolderDecodeResult result = DecodeSingleCoderFolderToArray(
+      coder: coder,
+      packed: packed,
+      expectedUnpackSize: packed.Length,
+      output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.Ok, result);
+    Assert.Equal(new byte[] { 0x10, 0x20, 0x30, 0x40 }, output);
+  }
+
+  [Fact]
+  public void DecodeFolderToArray_Delta_PropertyOne_UsesDelta2()
+  {
+    // properties[0] = delta - 1, поэтому 0x01 => delta = 2.
+    byte[] packed = [0x10, 0x20, 0x20, 0x20, 0x20, 0x20];
+
+    var coder = new SevenZipCoderInfo(
+      methodId: [0x03],
+      properties: [0x01],
+      numInStreams: 1,
+      numOutStreams: 1);
+
+    SevenZipFolderDecodeResult result = DecodeSingleCoderFolderToArray(
+      coder: coder,
+      packed: packed,
+      expectedUnpackSize: packed.Length,
+      output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.Ok, result);
+    Assert.Equal(new byte[] { 0x10, 0x20, 0x30, 0x40, 0x50, 0x60 }, output);
+  }
+
+  [Fact]
+  public void DecodeFolderToArray_Delta_InvalidPropertiesLength_ReturnsInvalidData()
+  {
+    byte[] packed = [0x10, 0x20, 0x30, 0x40];
+
+    var coder = new SevenZipCoderInfo(
+      methodId: [0x03],
+      properties: [0x00, 0x01],
+      numInStreams: 1,
+      numOutStreams: 1);
+
+    SevenZipFolderDecodeResult result = DecodeSingleCoderFolderToArray(
+      coder: coder,
+      packed: packed,
+      expectedUnpackSize: packed.Length,
+      output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.InvalidData, result);
+    Assert.Empty(output);
+  }
+
   private static SevenZipFolderDecodeResult DecodeSingleCoderFolderToArray(
     SevenZipCoderInfo coder,
     ReadOnlySpan<byte> packed,
