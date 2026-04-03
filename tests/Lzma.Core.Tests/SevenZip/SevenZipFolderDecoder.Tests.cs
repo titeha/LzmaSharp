@@ -278,6 +278,165 @@ public class SevenZipFolderDecoderTests
     Assert.Equal(expected, output);
   }
 
+  [Fact]
+  public void DecodeFolderToArray_Swap2_ReturnsSwappedPairs()
+  {
+    byte[] packed = [0x10, 0x20, 0x30, 0x40];
+
+    var coder = new SevenZipCoderInfo(
+      methodId: [0x02, 0x03, 0x02],
+      properties: [],
+      numInStreams: 1,
+      numOutStreams: 1);
+
+    SevenZipFolderDecodeResult result = DecodeSingleCoderFolderToArray(
+      coder: coder,
+      packed: packed,
+      expectedUnpackSize: packed.Length,
+      output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.Ok, result);
+    Assert.Equal(new byte[] { 0x20, 0x10, 0x40, 0x30 }, output);
+  }
+
+  [Fact]
+  public void DecodeFolderToArray_Swap2_OddTail_PreservesTail()
+  {
+    byte[] packed = [0x10, 0x20, 0x30, 0x40, 0x55];
+
+    var coder = new SevenZipCoderInfo(
+      methodId: [0x02, 0x03, 0x02],
+      properties: [],
+      numInStreams: 1,
+      numOutStreams: 1);
+
+    SevenZipFolderDecodeResult result = DecodeSingleCoderFolderToArray(
+      coder: coder,
+      packed: packed,
+      expectedUnpackSize: packed.Length,
+      output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.Ok, result);
+    Assert.Equal(new byte[] { 0x20, 0x10, 0x40, 0x30, 0x55 }, output);
+  }
+
+  [Fact]
+  public void DecodeFolderToArray_Swap2_WithProperties_ReturnsInvalidData()
+  {
+    byte[] packed = [0x10, 0x20, 0x30, 0x40];
+
+    var coder = new SevenZipCoderInfo(
+      methodId: [0x02, 0x03, 0x02],
+      properties: [0x01],
+      numInStreams: 1,
+      numOutStreams: 1);
+
+    SevenZipFolderDecodeResult result = DecodeSingleCoderFolderToArray(
+      coder: coder,
+      packed: packed,
+      expectedUnpackSize: packed.Length,
+      output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.InvalidData, result);
+    Assert.Empty(output);
+  }
+
+  [Fact]
+  public void DecodeFolderToArray_Swap4_ReturnsWordsWithReversedByteOrder()
+  {
+    byte[] packed = [0x10, 0x20, 0x30, 0x40, 0xAA, 0xBB, 0xCC, 0xDD];
+
+    var coder = new SevenZipCoderInfo(
+      methodId: [0x02, 0x03, 0x04],
+      properties: [],
+      numInStreams: 1,
+      numOutStreams: 1);
+
+    SevenZipFolderDecodeResult result = DecodeSingleCoderFolderToArray(
+      coder: coder,
+      packed: packed,
+      expectedUnpackSize: packed.Length,
+      output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.Ok, result);
+    Assert.Equal(new byte[] { 0x40, 0x30, 0x20, 0x10, 0xDD, 0xCC, 0xBB, 0xAA }, output);
+  }
+
+  [Fact]
+  public void DecodeFolderToArray_Swap4_TailShorterThanWord_PreservesTail()
+  {
+    byte[] packed = [0x10, 0x20, 0x30, 0x40, 0x55, 0x66];
+
+    var coder = new SevenZipCoderInfo(
+      methodId: [0x02, 0x03, 0x04],
+      properties: [],
+      numInStreams: 1,
+      numOutStreams: 1);
+
+    SevenZipFolderDecodeResult result = DecodeSingleCoderFolderToArray(
+      coder: coder,
+      packed: packed,
+      expectedUnpackSize: packed.Length,
+      output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.Ok, result);
+    Assert.Equal(new byte[] { 0x40, 0x30, 0x20, 0x10, 0x55, 0x66 }, output);
+  }
+
+  [Fact]
+  public void DecodeFolderToArray_Swap4_WithProperties_ReturnsInvalidData()
+  {
+    byte[] packed = [0x10, 0x20, 0x30, 0x40];
+
+    var coder = new SevenZipCoderInfo(
+      methodId: [0x02, 0x03, 0x04],
+      properties: [0x01],
+      numInStreams: 1,
+      numOutStreams: 1);
+
+    SevenZipFolderDecodeResult result = DecodeSingleCoderFolderToArray(
+      coder: coder,
+      packed: packed,
+      expectedUnpackSize: packed.Length,
+      output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.InvalidData, result);
+    Assert.Empty(output);
+  }
+
+  private static SevenZipFolderDecodeResult DecodeSingleCoderFolderToArray(
+    SevenZipCoderInfo coder,
+    ReadOnlySpan<byte> packed,
+    int expectedUnpackSize,
+    out byte[] output)
+  {
+    var packInfo = new SevenZipPackInfo(
+      packPos: 0,
+      packSizes: [(ulong)packed.Length]);
+
+    var folder = new SevenZipFolder(
+      Coders: [coder],
+      BindPairs: [],
+      PackedStreamIndices: [0],
+      NumInStreams: 1,
+      NumOutStreams: 1);
+
+    var unpackInfo = new SevenZipUnpackInfo(
+      folders: [folder],
+      folderUnpackSizes: [[(ulong)expectedUnpackSize]]);
+
+    var streamsInfo = new SevenZipStreamsInfo(
+      packInfo: packInfo,
+      unpackInfo: unpackInfo,
+      subStreamsInfo: null);
+
+    return SevenZipFolderDecoder.DecodeFolderToArray(
+      streamsInfo: streamsInfo,
+      packedStreams: packed,
+      folderIndex: 0,
+      output: out output);
+  }
+
   private static byte[] Build7zArchive_SingleFile_SingleFolder_Lzma2LzmaChunkedLiteralOnly(
       ReadOnlySpan<byte> plainFileBytes,
       string fileName,
