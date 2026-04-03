@@ -470,6 +470,76 @@ public class SevenZipFolderDecoderTests
     Assert.Empty(output);
   }
 
+  [Fact]
+  public void DecodeFolderToArray_BcjArm64_WithStartOffset_UsesOffsetInProgramCounter()
+  {
+    // Та же BL-инструкция, что и в тесте без props,
+    // но теперь pc начинается не с 64, а с 64 + startOffset.
+    // startOffset = 4 => pc = 68 => pc>>2 = 17.
+    // 64 - 17 = 47 => 0x9400002F.
+    byte[] packed = new byte[64 + 4];
+    packed[64] = 0x40;
+    packed[65] = 0x00;
+    packed[66] = 0x00;
+    packed[67] = 0x94;
+
+    byte[] properties = new byte[4];
+    BinaryPrimitives.WriteUInt32LittleEndian(properties, 4u);
+
+    var coder = new SevenZipCoderInfo(
+      methodId: [0x0A],
+      properties: properties,
+      numInStreams: 1,
+      numOutStreams: 1);
+
+    SevenZipFolderDecodeResult result = DecodeSingleCoderFolderToArray(
+      coder: coder,
+      packed: packed,
+      expectedUnpackSize: packed.Length,
+      output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.Ok, result);
+    Assert.Equal(0x2F, output[64]);
+    Assert.Equal(0x00, output[65]);
+    Assert.Equal(0x00, output[66]);
+    Assert.Equal(0x94, output[67]);
+  }
+
+  [Fact]
+  public void DecodeFolderToArray_Bcj_InvalidPropertiesLength_ReturnsInvalidData()
+  {
+    byte[] packed = [0x00, 0x00, 0x00, 0x00];
+
+    byte[][] methodIds =
+    [
+      [0x04], // x86
+      [0x07], // ARM
+      [0x08], // ARMT
+      [0x05], // PPC
+      [0x09], // SPARC
+      [0x06], // IA64
+      [0x0A], // ARM64
+    ];
+
+    foreach (byte[] methodId in methodIds)
+    {
+      var coder = new SevenZipCoderInfo(
+        methodId: methodId,
+        properties: [0x01],
+        numInStreams: 1,
+        numOutStreams: 1);
+
+      SevenZipFolderDecodeResult result = DecodeSingleCoderFolderToArray(
+        coder: coder,
+        packed: packed,
+        expectedUnpackSize: packed.Length,
+        output: out byte[] output);
+
+      Assert.Equal(SevenZipFolderDecodeResult.InvalidData, result);
+      Assert.Empty(output);
+    }
+  }
+
   private static SevenZipFolderDecodeResult DecodeSingleCoderFolderToArray(
     SevenZipCoderInfo coder,
     ReadOnlySpan<byte> packed,
