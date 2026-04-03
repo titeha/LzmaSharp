@@ -5,10 +5,10 @@ using Lzma.Core.SevenZip;
 
 namespace Lzma.Core.Tests.SevenZip;
 
-public sealed class SevenZipReal7zBcj2NotSupportedTests
+public sealed class SevenZipReal7zBcj2Tests
 {
   [Fact]
-  public void DecodeToArray_Real7z_7Zip_Bcj2_ReturnsNotSupported()
+  public void DecodeToArray_Real7z_7Zip_Bcj2_Ok()
   {
     byte[] archive = ReadTestDataBytes("TestData/Real/bcj2_x86_lzma2_d1m_mhc.7z");
 
@@ -25,7 +25,7 @@ public sealed class SevenZipReal7zBcj2NotSupportedTests
     var bcj2 = folder.Coders.First(c => IsBcj2(c.MethodId));
     Assert.True(bcj2.NumInStreams != 1 || bcj2.NumOutStreams != 1);
 
-    // 2) Декодирование пока не поддерживаем => NotSupported (это фиксируем контрактом).
+    // 2) Декодирование BCJ2 уже поддержано и должно успешно вернуть файл.
     SevenZipArchiveDecodeResult r = SevenZipArchiveDecoder.DecodeToArray(
       archive,
       out SevenZipDecodedFile[] files,
@@ -43,7 +43,7 @@ public sealed class SevenZipReal7zBcj2NotSupportedTests
 
   private static bool IsBcj2(byte[] methodId)
   {
-    // BCJ2 обычно идёт как 4 байта 03 03 01 1B. :contentReference[oaicite:3]{index=3}
+    // BCJ2 обычно идёт как 4 байта 03 03 01 1B.
     // На всякий случай допускаем и короткий 1B.
     return
       methodId.Length == 1 && methodId[0] == 0x1B ||
