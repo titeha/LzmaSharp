@@ -51,12 +51,25 @@ public sealed class SevenZipArchiveReader
     }
 
     var res = _nextHeaderReader.Read(input, out bytesConsumed);
+
     if (res == SevenZipNextHeaderReadResult.NeedMoreInput)
       return SevenZipArchiveReadResult.NeedMoreInput;
 
     if (res == SevenZipNextHeaderReadResult.InvalidData)
     {
       MakeTerminal(SevenZipArchiveReadResult.InvalidData);
+      return _terminalResult;
+    }
+
+    if (res == SevenZipNextHeaderReadResult.NotSupported)
+    {
+      if (_nextHeaderReader.HasSignatureHeader)
+        SignatureHeader ??= _nextHeaderReader.SignatureHeader;
+
+      PackedStreams = _nextHeaderReader.PackedStreams;
+      NextHeaderBytes = _nextHeaderReader.NextHeader;
+
+      MakeTerminal(SevenZipArchiveReadResult.NotSupported);
       return _terminalResult;
     }
 
@@ -69,7 +82,6 @@ public sealed class SevenZipArchiveReader
     var kindDetectRes = SevenZipNextHeaderKindDetector.TryDetect(NextHeaderBytes.Span, out var kind);
     if (kindDetectRes == SevenZipNextHeaderKindDetectResult.NeedMoreInput)
       return SevenZipArchiveReadResult.NeedMoreInput;
-
     if (kindDetectRes == SevenZipNextHeaderKindDetectResult.InvalidData)
     {
       MakeTerminal(SevenZipArchiveReadResult.InvalidData);
@@ -115,7 +127,6 @@ public sealed class SevenZipArchiveReader
 
     DecodedHeaderBytes = decodedHeaderBytes;
     Header = decodedHeader;
-
     MakeTerminal(SevenZipArchiveReadResult.Ok);
     return _terminalResult;
   }
