@@ -705,6 +705,41 @@ public static class SevenZipArchiveDecoder
         }
       }
 
+      // Дополнительно заранее валидируем конфликты с уже существующей ФС,
+      // чтобы не получить частичное извлечение после записи ранних файлов.
+      for (int i = 0; i < entries.Length; i++)
+      {
+        string fullPath = fullPaths[i];
+        if (fullPath.Length == 0)
+          return SevenZipArchiveDecodeResult.InvalidData;
+
+        if (entries[i].IsDirectory)
+        {
+          // Каталог нельзя создавать, если он сам
+          // или любой его родитель уже существует как файл.
+          if (HasFileOnPath(root, fullPath, includeSelf: true, cmp))
+            return SevenZipArchiveDecodeResult.InvalidData;
+
+          continue;
+        }
+
+        string? dir = Path.GetDirectoryName(fullPath);
+        if (dir is null)
+          return SevenZipArchiveDecodeResult.InvalidData;
+
+        // Родительские каталоги файла не должны конфликтовать с существующими файлами.
+        if (HasFileOnPath(root, fullPath, includeSelf: false, cmp))
+          return SevenZipArchiveDecodeResult.InvalidData;
+
+        // Если на месте файла уже есть каталог — это конфликт.
+        if (Directory.Exists(fullPath))
+          return SevenZipArchiveDecodeResult.InvalidData;
+
+        // Если файл уже существует и overwrite=false — это тоже конфликт.
+        if (File.Exists(fullPath) && !overwrite)
+          return SevenZipArchiveDecodeResult.InvalidData;
+      }
+
       // Только после этого реально создаём каталоги и пишем файлы.
       for (int i = 0; i < entries.Length; i++)
       {
