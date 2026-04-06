@@ -51,7 +51,6 @@ public sealed class SevenZipArchiveReader
     }
 
     var res = _nextHeaderReader.Read(input, out bytesConsumed);
-
     if (res == SevenZipNextHeaderReadResult.NeedMoreInput)
       return SevenZipArchiveReadResult.NeedMoreInput;
 
@@ -81,7 +80,13 @@ public sealed class SevenZipArchiveReader
     // Определяем тип NextHeader.
     var kindDetectRes = SevenZipNextHeaderKindDetector.TryDetect(NextHeaderBytes.Span, out var kind);
     if (kindDetectRes == SevenZipNextHeaderKindDetectResult.NeedMoreInput)
-      return SevenZipArchiveReadResult.NeedMoreInput;
+    {
+      // NextHeaderReader уже вернул Ok и отдал все байты NextHeader.
+      // Если даже для определения вида заголовка данных не хватает, архив повреждён.
+      MakeTerminal(SevenZipArchiveReadResult.InvalidData);
+      return _terminalResult;
+    }
+
     if (kindDetectRes == SevenZipNextHeaderKindDetectResult.InvalidData)
     {
       MakeTerminal(SevenZipArchiveReadResult.InvalidData);
@@ -99,7 +104,10 @@ public sealed class SevenZipArchiveReader
           MakeTerminal(SevenZipArchiveReadResult.Ok);
           return _terminalResult;
         case SevenZipHeaderReadResult.NeedMoreInput:
-          return SevenZipArchiveReadResult.NeedMoreInput;
+          // NextHeaderReader уже полностью прочитал NextHeader по размеру из signature header.
+          // Если парсер Header просит ещё байты, значит заголовок усечён/повреждён.
+          MakeTerminal(SevenZipArchiveReadResult.InvalidData);
+          return _terminalResult;
         case SevenZipHeaderReadResult.NotSupported:
           MakeTerminal(SevenZipArchiveReadResult.NotSupported);
           return _terminalResult;
@@ -127,6 +135,7 @@ public sealed class SevenZipArchiveReader
 
     DecodedHeaderBytes = decodedHeaderBytes;
     Header = decodedHeader;
+
     MakeTerminal(SevenZipArchiveReadResult.Ok);
     return _terminalResult;
   }
