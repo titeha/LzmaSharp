@@ -628,6 +628,20 @@ public static class SevenZipArchiveDecoder
     if (aTime is not null && aTime.Length != fileCount)
       return SevenZipArchiveDecodeResult.InvalidData;
 
+    // Валидируем FILETIME до начала записи на диск, чтобы не оставлять
+    // частично извлечённые файлы при битых metadata.
+    for (int i = 0; i < fileCount; i++)
+    {
+      if (cTimeDefined?[i] == true && !IsValidFileTime(cTime![i]))
+        return SevenZipArchiveDecodeResult.InvalidData;
+
+      if (aTimeDefined?[i] == true && !IsValidFileTime(aTime![i]))
+        return SevenZipArchiveDecodeResult.InvalidData;
+
+      if (mTimeDefined?[i] == true && !IsValidFileTime(mTime![i]))
+        return SevenZipArchiveDecodeResult.InvalidData;
+    }
+
     try
     {
       string root = Path.GetFullPath(destinationDirectory);
@@ -915,6 +929,22 @@ public static class SevenZipArchiveDecoder
     catch (NotSupportedException)
     {
       return SevenZipArchiveDecodeResult.InvalidData;
+    }
+  }
+
+  private static bool IsValidFileTime(ulong raw)
+  {
+    if (raw > long.MaxValue)
+      return false;
+
+    try
+    {
+      _ = DateTime.FromFileTimeUtc((long)raw);
+      return true;
+    }
+    catch (ArgumentOutOfRangeException)
+    {
+      return false;
     }
   }
 
