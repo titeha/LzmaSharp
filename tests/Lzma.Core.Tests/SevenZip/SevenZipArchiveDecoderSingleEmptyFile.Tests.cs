@@ -55,6 +55,12 @@ public sealed class SevenZipArchiveDecoderSingleEmptyFileTests
     WriteU64(h, 1);
     h.Add(0x80);
 
+    // kEmptyFile: [true] => единственный EmptyStream является пустым файлом,
+    // а не каталогом.
+    h.Add(SevenZipNid.EmptyFile);
+    WriteU64(h, 1);
+    h.Add(0x80);
+
     // kName
     h.Add(SevenZipNid.Name);
     byte[] nameBytes = Encoding.Unicode.GetBytes(name + "\0");
@@ -86,10 +92,16 @@ public sealed class SevenZipArchiveDecoderSingleEmptyFileTests
       SevenZipNid.Header,
       SevenZipNid.FilesInfo
     };
+
     WriteU64(h, 1); // NumFiles
 
     // kEmptyStream: [true] => 0x80
     h.Add(SevenZipNid.EmptyStream);
+    WriteU64(h, 1);
+    h.Add(0x80);
+
+    // kEmptyFile: [true] => единственный EmptyStream является файлом, а не каталогом
+    h.Add(SevenZipNid.EmptyFile);
     WriteU64(h, 1);
     h.Add(0x80);
 
