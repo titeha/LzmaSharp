@@ -19,7 +19,10 @@ public static class SevenZipArchiveDecoder
   /// </summary>
   public static SevenZipArchiveDecodeResult DecodeSingleFileToArray(ReadOnlySpan<byte> archiveBytes, out byte[] fileBytes, out string fileName)
   {
-    SevenZipArchiveDecodeResult r = DecodeToArray(archiveBytes, out SevenZipDecodedFile[] decodedFiles);
+    SevenZipArchiveDecodeResult r = DecodeToEntries(
+      archiveBytes,
+      out SevenZipDecodedEntry[] decodedEntries);
+
     if (r != SevenZipArchiveDecodeResult.Ok)
     {
       fileBytes = [];
@@ -27,15 +30,15 @@ public static class SevenZipArchiveDecoder
       return r;
     }
 
-    if (decodedFiles.Length != 1)
+    if (decodedEntries.Length != 1 || decodedEntries[0].IsDirectory)
     {
       fileBytes = [];
       fileName = string.Empty;
       return SevenZipArchiveDecodeResult.NotSupported;
     }
 
-    fileBytes = decodedFiles[0].Bytes;
-    fileName = decodedFiles[0].Name;
+    fileBytes = decodedEntries[0].Bytes;
+    fileName = decodedEntries[0].Name;
     return SevenZipArchiveDecodeResult.Ok;
   }
 
@@ -46,13 +49,9 @@ public static class SevenZipArchiveDecoder
   /// Этот перегруженный метод оставлен для совместимости с тестами/внешним кодом,
   /// которому важно знать, сколько байт входа было обработано.
   /// </remarks>
-  public static SevenZipArchiveDecodeResult DecodeSingleFileToArray(
-    ReadOnlySpan<byte> archiveBytes,
-    out byte[] fileBytes,
-    out string fileName,
-    out int bytesConsumed)
+  public static SevenZipArchiveDecodeResult DecodeSingleFileToArray(ReadOnlySpan<byte> archiveBytes, out byte[] fileBytes, out string fileName, out int bytesConsumed)
   {
-    SevenZipArchiveDecodeResult r = DecodeToArray(archiveBytes, out SevenZipDecodedFile[] decodedFiles, out bytesConsumed);
+    SevenZipArchiveDecodeResult r = DecodeToEntries(archiveBytes, out SevenZipDecodedEntry[] decodedEntries, out bytesConsumed);
 
     if (r != SevenZipArchiveDecodeResult.Ok)
     {
@@ -61,15 +60,15 @@ public static class SevenZipArchiveDecoder
       return r;
     }
 
-    if (decodedFiles.Length != 1)
+    if (decodedEntries.Length != 1 || decodedEntries[0].IsDirectory)
     {
       fileBytes = [];
       fileName = string.Empty;
       return SevenZipArchiveDecodeResult.NotSupported;
     }
 
-    fileBytes = decodedFiles[0].Bytes;
-    fileName = decodedFiles[0].Name;
+    fileBytes = decodedEntries[0].Bytes;
+    fileName = decodedEntries[0].Name;
     return SevenZipArchiveDecodeResult.Ok;
   }
 
