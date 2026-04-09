@@ -118,6 +118,8 @@ public sealed class SevenZipArchiveDecoderExtractInvalidFileTimeTests
 
       Assert.Equal(SevenZipArchiveDecodeResult.InvalidData, r2);
       Assert.Equal(archive.Length, consumed2);
+      Assert.False(File.Exists(Path.Combine(root, "file.bin")));
+      Assert.False(Directory.Exists(root));
     }
     finally
     {
