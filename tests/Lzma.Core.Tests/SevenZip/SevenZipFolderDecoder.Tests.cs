@@ -507,6 +507,69 @@ public class SevenZipFolderDecoderTests
   }
 
   [Fact]
+  public void DecodeFolderToArray_Swap2_НесовпадениеРазмера_ВозвращаетInvalidData()
+  {
+    byte[] packed = [0x10, 0x20, 0x30, 0x40];
+
+    var coder = new SevenZipCoderInfo(
+        methodId: [0x02, 0x03, 0x02],
+        properties: [],
+        numInStreams: 1,
+        numOutStreams: 1);
+
+    SevenZipFolderDecodeResult result = DecodeSingleCoderFolderToArray(
+        coder: coder,
+        packed: packed,
+        expectedUnpackSize: packed.Length - 1,
+        output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.InvalidData, result);
+    Assert.Empty(output);
+  }
+
+  [Fact]
+  public void DecodeFolderToArray_Swap4_НесовпадениеРазмера_ВозвращаетInvalidData()
+  {
+    byte[] packed = [0x10, 0x20, 0x30, 0x40, 0xAA, 0xBB, 0xCC, 0xDD];
+
+    var coder = new SevenZipCoderInfo(
+        methodId: [0x02, 0x03, 0x04],
+        properties: [],
+        numInStreams: 1,
+        numOutStreams: 1);
+
+    SevenZipFolderDecodeResult result = DecodeSingleCoderFolderToArray(
+        coder: coder,
+        packed: packed,
+        expectedUnpackSize: packed.Length - 1,
+        output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.InvalidData, result);
+    Assert.Empty(output);
+  }
+
+  [Fact]
+  public void DecodeFolderToArray_Delta_НесовпадениеРазмера_ВозвращаетInvalidData()
+  {
+    byte[] packed = [0x10, 0x10, 0x10, 0x10];
+
+    var coder = new SevenZipCoderInfo(
+        methodId: [0x03],
+        properties: [],
+        numInStreams: 1,
+        numOutStreams: 1);
+
+    SevenZipFolderDecodeResult result = DecodeSingleCoderFolderToArray(
+        coder: coder,
+        packed: packed,
+        expectedUnpackSize: packed.Length - 1,
+        output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.InvalidData, result);
+    Assert.Empty(output);
+  }
+
+  [Fact]
   public void DecodeFolderToArray_BcjArm64_WithStartOffset_UsesOffsetInProgramCounter()
   {
     // Та же BL-инструкция, что и в тесте без props,
