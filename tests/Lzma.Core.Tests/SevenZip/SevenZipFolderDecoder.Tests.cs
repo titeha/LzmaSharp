@@ -279,6 +279,42 @@ public class SevenZipFolderDecoderTests
   }
 
   [Fact]
+  public void DecodeFolderToArray_Bcj_LengthMismatch_ReturnsInvalidData()
+  {
+    // Для всех BCJ-фильтров размер не должен изменяться.
+    byte[] packed = [0x00, 0x00, 0x00, 0x00];
+
+    byte[][] methodIds =
+    [
+      [0x04], // x86
+    [0x07], // ARM
+    [0x08], // ARMT
+    [0x05], // PPC
+    [0x09], // SPARC
+    [0x06], // IA64
+    [0x0A], // ARM64
+  ];
+
+    foreach (byte[] methodId in methodIds)
+    {
+      var coder = new SevenZipCoderInfo(
+          methodId: methodId,
+          properties: [],
+          numInStreams: 1,
+          numOutStreams: 1);
+
+      SevenZipFolderDecodeResult result = DecodeSingleCoderFolderToArray(
+          coder: coder,
+          packed: packed,
+          expectedUnpackSize: packed.Length - 1,
+          output: out byte[] output);
+
+      Assert.Equal(SevenZipFolderDecodeResult.InvalidData, result);
+      Assert.Empty(output);
+    }
+  }
+
+  [Fact]
   public void DecodeFolderToArray_Swap2_ReturnsSwappedPairs()
   {
     byte[] packed = [0x10, 0x20, 0x30, 0x40];
