@@ -97,6 +97,45 @@ public class SevenZipFolderDecoderTests
   }
 
   [Fact]
+  public void DecodeFolderToArray_Lzma2_EmptyProperties_ReturnsInvalidData()
+  {
+    var coder = new SevenZipCoderInfo(
+        methodId: [0x21], // LZMA2
+        properties: [],
+        numInStreams: 1,
+        numOutStreams: 1);
+
+    SevenZipFolderDecodeResult result = DecodeSingleCoderFolderToArray(
+        coder: coder,
+        packed: [],
+        expectedUnpackSize: 0,
+        output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.InvalidData, result);
+    Assert.Empty(output);
+  }
+
+  [Fact]
+  public void DecodeFolderToArray_Lzma2_DictionaryGreaterThanIntMaxValue_ReturnsNotSupported()
+  {
+    // p == 40 => dictionarySize = 0xFFFFFFFF, то есть больше Int32.MaxValue.
+    var coder = new SevenZipCoderInfo(
+        methodId: [0x21], // LZMA2
+        properties: [40],
+        numInStreams: 1,
+        numOutStreams: 1);
+
+    SevenZipFolderDecodeResult result = DecodeSingleCoderFolderToArray(
+        coder: coder,
+        packed: [],
+        expectedUnpackSize: 0,
+        output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.NotSupported, result);
+    Assert.Empty(output);
+  }
+
+  [Fact]
   public void DecodeFolder_SingleFolder_Lzma2LzmaChunkedLiteralOnly_Returns_OriginalBytes()
   {
     // Важно: вход больше maxUnpackChunkSize, чтобы гарантировать несколько LZMA-чанков.
