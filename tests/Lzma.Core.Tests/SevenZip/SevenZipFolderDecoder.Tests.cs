@@ -265,6 +265,48 @@ public class SevenZipFolderDecoderTests
   }
 
   [Fact]
+  public void DecodeFolderToArray_Lzma_InvalidPropertiesLength_ReturnsInvalidData()
+  {
+    var coder = new SevenZipCoderInfo(
+        methodId: [0x03, 0x01, 0x01], // LZMA
+        properties: [0x5D, 0x00, 0x00, 0x10], // 4 байта вместо обязательных 5
+        numInStreams: 1,
+        numOutStreams: 1);
+
+    SevenZipFolderDecodeResult result = DecodeSingleCoderFolderToArray(
+        coder: coder,
+        packed: [],
+        expectedUnpackSize: 0,
+        output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.InvalidData, result);
+    Assert.Empty(output);
+  }
+
+  [Fact]
+  public void DecodeFolderToArray_Lzma_InvalidPropertiesByte_ReturnsInvalidData()
+  {
+    byte[] coderProps = new byte[5];
+    coderProps[0] = 0xE1; // 225 > 224, недопустимый байт свойств LZMA
+    BinaryPrimitives.WriteUInt32LittleEndian(coderProps.AsSpan(1, 4), 4u);
+
+    var coder = new SevenZipCoderInfo(
+        methodId: [0x03, 0x01, 0x01], // LZMA
+        properties: coderProps,
+        numInStreams: 1,
+        numOutStreams: 1);
+
+    SevenZipFolderDecodeResult result = DecodeSingleCoderFolderToArray(
+        coder: coder,
+        packed: [],
+        expectedUnpackSize: 0,
+        output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.InvalidData, result);
+    Assert.Empty(output);
+  }
+
+  [Fact]
   public void DecodeFolderToArray_BcjArm64_BlInstruction_IsDecoded()
   {
     // Делаем буфер: 64 байта мусора + 1 инструкция BL (4 байта).
