@@ -64,6 +64,29 @@ public sealed class SevenZipFolderDecoderBcj2SizeLimitsTests
     Assert.Empty(decoded);
   }
 
+  [Fact]
+  public void TryDecodeBcj2InputStreamsToArrays_КоличествоUnpackSizesНеСовпадаетСNumOutStreams_ВозвращаетInvalidData()
+  {
+    SevenZipStreamsInfo streamsInfo = CreateStreamsInfo(
+        numInStreams: 7UL,
+        numOutStreams: 4UL,
+        folderUnpackSizes:
+        [
+          1UL,
+        123UL,
+        4UL,
+        ]);
+
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.TryDecodeBcj2InputStreamsToArrays(
+        streamsInfo: streamsInfo,
+        packedStreams: CreatePackedStreams(),
+        folderIndex: 0,
+        decodedInputStreams: out byte[][] decoded);
+
+    Assert.Equal(SevenZipFolderDecodeResult.InvalidData, result);
+    Assert.Empty(decoded);
+  }
+
   private static byte[] CreatePackedStreams()
   {
     return
