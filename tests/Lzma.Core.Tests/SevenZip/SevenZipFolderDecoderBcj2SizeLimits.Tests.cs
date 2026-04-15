@@ -169,6 +169,76 @@ public sealed class SevenZipFolderDecoderBcj2SizeLimitsTests
     Assert.Empty(decoded);
   }
 
+  [Fact]
+  public void TryDecodeBcj2InputStreamsToArrays_СуммаNumInStreamsУCoderМеньшеNumInStreamsПапки_ВозвращаетInvalidData()
+  {
+    var folder = new SevenZipFolder(
+        Coders:
+        [
+          CreateCopyCoder(), // coder 0 = CopyB
+        CreateBcj2Coder(), // coder 1 = BCJ2
+        CreateCopyCoder(), // coder 2 = CopyA
+        CreateCopyCoder(), // coder 3 = CopyC
+        ],
+        BindPairs:
+        [
+          new SevenZipBindPair(InIndex: 1, OutIndex: 2),
+        new SevenZipBindPair(InIndex: 3, OutIndex: 3),
+        new SevenZipBindPair(InIndex: 4, OutIndex: 0),
+        ],
+        PackedStreamIndices: [6UL, 2UL, 0UL, 5UL],
+        NumInStreams: 8UL, // сумма по coder'ам = 7, здесь намеренно больше
+        NumOutStreams: 4UL);
+
+    SevenZipStreamsInfo streamsInfo = CreateStreamsInfoForCustomFolder(
+        folder: folder,
+        folderUnpackSizes: [1UL, 123UL, 4UL, 3UL]);
+
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.TryDecodeBcj2InputStreamsToArrays(
+        streamsInfo: streamsInfo,
+        packedStreams: CreatePackedStreams(),
+        folderIndex: 0,
+        decodedInputStreams: out byte[][] decoded);
+
+    Assert.Equal(SevenZipFolderDecodeResult.InvalidData, result);
+    Assert.Empty(decoded);
+  }
+
+  [Fact]
+  public void TryDecodeBcj2InputStreamsToArrays_СуммаNumOutStreamsУCoderМеньшеNumOutStreamsПапки_ВозвращаетInvalidData()
+  {
+    var folder = new SevenZipFolder(
+        Coders:
+        [
+          CreateCopyCoder(), // coder 0 = CopyB
+        CreateBcj2Coder(), // coder 1 = BCJ2
+        CreateCopyCoder(), // coder 2 = CopyA
+        CreateCopyCoder(), // coder 3 = CopyC
+        ],
+        BindPairs:
+        [
+          new SevenZipBindPair(InIndex: 1, OutIndex: 2),
+        new SevenZipBindPair(InIndex: 3, OutIndex: 3),
+        new SevenZipBindPair(InIndex: 4, OutIndex: 0),
+        ],
+        PackedStreamIndices: [6UL, 2UL, 0UL, 5UL],
+        NumInStreams: 7UL,
+        NumOutStreams: 5UL); // сумма по coder'ам = 4, здесь намеренно больше
+
+    SevenZipStreamsInfo streamsInfo = CreateStreamsInfoForCustomFolder(
+        folder: folder,
+        folderUnpackSizes: [1UL, 123UL, 4UL, 3UL, 1UL]);
+
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.TryDecodeBcj2InputStreamsToArrays(
+        streamsInfo: streamsInfo,
+        packedStreams: CreatePackedStreams(),
+        folderIndex: 0,
+        decodedInputStreams: out byte[][] decoded);
+
+    Assert.Equal(SevenZipFolderDecodeResult.InvalidData, result);
+    Assert.Empty(decoded);
+  }
+
   private static SevenZipStreamsInfo CreateStreamsInfoForCustomFolder(
       SevenZipFolder folder,
       ulong[] folderUnpackSizes)
