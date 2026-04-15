@@ -136,6 +136,67 @@ public class SevenZipFolderDecoderTests
   }
 
   [Fact]
+  public void DecodeFolderToArray_Lzma2_НулевойХвостPackedStream_ВозвращаетOk()
+  {
+    // Здесь нам важно не то, какой именно вид LZMA2-чанка использован,
+    // а то, что после корректного конца потока останется хвост,
+    // который SevenZipFolderDecoder отдельно провалидирует.
+    byte[] plain = [0x41, 0x42, 0x00, 0xFF, 0x10, 0x20];
+
+    const int dictionarySize = 1 << 20;
+    byte[] packedCore = Lzma2CopyEncoder.Encode(
+        plain,
+        dictionarySize,
+        out byte lzma2PropertiesByte);
+
+    byte[] packed = [.. packedCore, 0x00, 0x00, 0x00];
+
+    var coder = new SevenZipCoderInfo(
+        methodId: [0x21], // LZMA2
+        properties: [lzma2PropertiesByte],
+        numInStreams: 1,
+        numOutStreams: 1);
+
+    SevenZipFolderDecodeResult result = DecodeSingleCoderFolderToArray(
+        coder: coder,
+        packed: packed,
+        expectedUnpackSize: plain.Length,
+        output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.Ok, result);
+    Assert.Equal(plain, output);
+  }
+
+  [Fact]
+  public void DecodeFolderToArray_Lzma2_НенулевойХвостPackedStream_ВозвращаетInvalidData()
+  {
+    byte[] plain = [0x41, 0x42, 0x00, 0xFF, 0x10, 0x20];
+
+    const int dictionarySize = 1 << 20;
+    byte[] packedCore = Lzma2CopyEncoder.Encode(
+        plain,
+        dictionarySize,
+        out byte lzma2PropertiesByte);
+
+    byte[] packed = [.. packedCore, 0x00, 0x01];
+
+    var coder = new SevenZipCoderInfo(
+        methodId: [0x21], // LZMA2
+        properties: [lzma2PropertiesByte],
+        numInStreams: 1,
+        numOutStreams: 1);
+
+    SevenZipFolderDecodeResult result = DecodeSingleCoderFolderToArray(
+        coder: coder,
+        packed: packed,
+        expectedUnpackSize: plain.Length,
+        output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.InvalidData, result);
+    Assert.Empty(output);
+  }
+
+  [Fact]
   public void DecodeFolder_SingleFolder_Lzma2LzmaChunkedLiteralOnly_Returns_OriginalBytes()
   {
     // Важно: вход больше maxUnpackChunkSize, чтобы гарантировать несколько LZMA-чанков.
