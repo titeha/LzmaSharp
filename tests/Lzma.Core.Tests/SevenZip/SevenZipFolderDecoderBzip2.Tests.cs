@@ -56,6 +56,31 @@ public sealed class SevenZipFolderDecoderBzip2Tests
     Assert.Empty(output);
   }
 
+  [Fact]
+  public void DecodeFolderToArray_Bzip2_ОжидаемыйРазмерБольшеРеального_ВозвращаетInvalidData()
+  {
+    byte[] plain = new byte[513];
+    for (int i = 0; i < plain.Length; i++)
+      plain[i] = (byte)(i * 13 + 9);
+
+    byte[] packed = EncodeBzip2(plain);
+
+    var coder = new SevenZipCoderInfo(
+        methodId: [0x04, 0x02, 0x02],
+        properties: [],
+        numInStreams: 1,
+        numOutStreams: 1);
+
+    SevenZipFolderDecodeResult result = DecodeSingleCoderFolderToArray(
+        coder: coder,
+        packed: packed,
+        expectedUnpackSize: plain.Length + 1,
+        output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.InvalidData, result);
+    Assert.Empty(output);
+  }
+
   private static byte[] EncodeBzip2(byte[] plain)
   {
     using var ms = new MemoryStream();
