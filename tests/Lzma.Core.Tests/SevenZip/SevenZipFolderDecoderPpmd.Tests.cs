@@ -97,6 +97,55 @@ public sealed class SevenZipFolderDecoderPpmdTests
     Assert.Empty(output);
   }
 
+  [Fact]
+  public void DecodeFolderToArray_Ppmd_РеальныйАрхив_ПриМеньшемUnpackSize_ВозвращаетOkИПрефикс()
+  {
+    byte[] archive = ReadTestDataBytes("TestData/Real/ppmd_singlefile_mhc.7z");
+
+    var reader = new SevenZipArchiveReader();
+    Assert.Equal(SevenZipArchiveReadResult.Ok, reader.Read(archive, out int readConsumed));
+    Assert.Equal(archive.Length, readConsumed);
+    Assert.True(reader.Header.HasValue);
+
+    SevenZipHeader header = reader.Header.Value;
+    SevenZipStreamsInfo originalStreamsInfo = header.StreamsInfo;
+    SevenZipUnpackInfo originalUnpackInfo = originalStreamsInfo.UnpackInfo!;
+
+    Assert.Single(originalUnpackInfo.Folders);
+    Assert.Single(originalUnpackInfo.FolderUnpackSizes);
+    Assert.Single(originalUnpackInfo.FolderUnpackSizes[0]);
+
+    SevenZipFolder folder = originalUnpackInfo.Folders[0];
+    Assert.Single(folder.Coders);
+    Assert.True(IsPpmdMethodId(folder.Coders[0].MethodId));
+
+    ulong originalUnpackSize = originalUnpackInfo.FolderUnpackSizes[0][0];
+    Assert.True(originalUnpackSize > 0);
+    Assert.True(originalUnpackSize <= int.MaxValue);
+
+    int smallerUnpackSize = checked((int)originalUnpackSize - 1);
+
+    var mutatedUnpackInfo = new SevenZipUnpackInfo(
+        folders: [folder],
+        folderUnpackSizes: [[(ulong)smallerUnpackSize]]);
+
+    var mutatedStreamsInfo = new SevenZipStreamsInfo(
+        packInfo: originalStreamsInfo.PackInfo,
+        unpackInfo: mutatedUnpackInfo,
+        subStreamsInfo: originalStreamsInfo.SubStreamsInfo);
+
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.DecodeFolderToArray(
+        streamsInfo: mutatedStreamsInfo,
+        packedStreams: reader.PackedStreams.Span,
+        folderIndex: 0,
+        output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.Ok, result);
+
+    byte[] expected = CreatePpmdTextBytes();
+    Assert.Equal(expected.AsSpan(0, smallerUnpackSize).ToArray(), output);
+  }
+
   private static bool IsPpmdMethodId(byte[] methodId)
   {
     return methodId.Length == 3
