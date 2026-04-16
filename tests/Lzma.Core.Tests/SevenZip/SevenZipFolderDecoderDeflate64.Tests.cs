@@ -1,4 +1,3 @@
-using System.IO;
 using System.Runtime.CompilerServices;
 
 using Lzma.Core.SevenZip;
@@ -68,6 +67,50 @@ public sealed class SevenZipFolderDecoderDeflate64Tests
     var mutatedUnpackInfo = new SevenZipUnpackInfo(
         folders: [folder],
         folderUnpackSizes: [[originalUnpackSize - 1]]);
+
+    var mutatedStreamsInfo = new SevenZipStreamsInfo(
+        packInfo: originalStreamsInfo.PackInfo,
+        unpackInfo: mutatedUnpackInfo,
+        subStreamsInfo: null);
+
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.DecodeFolderToArray(
+        streamsInfo: mutatedStreamsInfo,
+        packedStreams: reader.PackedStreams.Span,
+        folderIndex: 0,
+        output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.InvalidData, result);
+    Assert.Empty(output);
+  }
+
+  [Fact]
+  public void DecodeFolderToArray_Deflate64_РеальныйАрхив_ПриБольшемUnpackSize_ВозвращаетInvalidData()
+  {
+    byte[] archive = ReadTestDataBytes("TestData/Real/deflate64_singlefile_mhc.7z");
+
+    var reader = new SevenZipArchiveReader();
+    Assert.Equal(SevenZipArchiveReadResult.Ok, reader.Read(archive, out int readConsumed));
+    Assert.Equal(archive.Length, readConsumed);
+    Assert.True(reader.Header.HasValue);
+
+    SevenZipHeader header = reader.Header.Value;
+    SevenZipStreamsInfo originalStreamsInfo = header.StreamsInfo;
+    SevenZipUnpackInfo originalUnpackInfo = originalStreamsInfo.UnpackInfo!;
+
+    Assert.Single(originalUnpackInfo.Folders);
+    Assert.Single(originalUnpackInfo.FolderUnpackSizes);
+    Assert.Single(originalUnpackInfo.FolderUnpackSizes[0]);
+
+    SevenZipFolder folder = originalUnpackInfo.Folders[0];
+    Assert.Single(folder.Coders);
+    Assert.True(IsDeflate64(folder.Coders[0].MethodId));
+
+    ulong originalUnpackSize = originalUnpackInfo.FolderUnpackSizes[0][0];
+    Assert.True(originalUnpackSize < int.MaxValue);
+
+    var mutatedUnpackInfo = new SevenZipUnpackInfo(
+        folders: [folder],
+        folderUnpackSizes: [[originalUnpackSize + 1]]);
 
     var mutatedStreamsInfo = new SevenZipStreamsInfo(
         packInfo: originalStreamsInfo.PackInfo,
