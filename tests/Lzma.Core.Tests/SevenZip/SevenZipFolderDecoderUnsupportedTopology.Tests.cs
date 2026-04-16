@@ -215,4 +215,52 @@ public sealed class SevenZipFolderDecoderUnsupportedTopologyTests
     Assert.Equal(SevenZipFolderDecodeResult.NotSupported, r);
     Assert.Empty(output);
   }
+
+  [Fact]
+  public void DecodeFolderToArray_СтартовыйCoderНеПокрываетОтдельныйЦикл_ВозвращаетNotSupported()
+  {
+    var folder = new SevenZipFolder(
+        Coders:
+        [
+          new SevenZipCoderInfo([0x00], [], 1, 1),
+        new SevenZipCoderInfo([0x00], [], 1, 1),
+        new SevenZipCoderInfo([0x00], [], 1, 1),
+        ],
+        BindPairs:
+        [
+          // Отдельный цикл: 1 -> 0 и 0 -> 1.
+          new SevenZipBindPair(InIndex: 0, OutIndex: 1),
+        new SevenZipBindPair(InIndex: 1, OutIndex: 0),
+        ],
+        PackedStreamIndices: [0],
+        NumInStreams: 3,
+        NumOutStreams: 3);
+
+    var unpackInfo = new SevenZipUnpackInfo(
+        folders: [folder],
+        folderUnpackSizes:
+        [
+          [3, 3, 3],
+        ]);
+
+    var packInfo = new SevenZipPackInfo(
+        packPos: 0,
+        packSizes: [3]);
+
+    var streamsInfo = new SevenZipStreamsInfo(
+        packInfo: packInfo,
+        unpackInfo: unpackInfo,
+        subStreamsInfo: null);
+
+    byte[] packedStreams = [1, 2, 3];
+
+    SevenZipFolderDecodeResult r = SevenZipFolderDecoder.DecodeFolderToArray(
+        streamsInfo,
+        packedStreams,
+        folderIndex: 0,
+        out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.NotSupported, r);
+    Assert.Empty(output);
+  }
 }
