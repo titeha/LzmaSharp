@@ -108,4 +108,25 @@ public sealed class SevenZipFolderDecoderBcj2ToArrayTests
     Assert.Equal(SevenZipFolderDecodeResult.Ok, result);
     Assert.Empty(output);
   }
+
+  [Fact]
+  public void TryDecodeBcj2ToArray_E8ПриBit0_ОставляетDisp32ВBuf0()
+  {
+    byte[] buf0 = [0xE8, 0x11, 0x22, 0x33, 0x44];
+
+    // Пять нулей => code = 0 после инициализации range decoder,
+    // поэтому первая вероятностная развилка идёт в BIT=0.
+    // В этом режиме disp32 должен остаться в buf0,
+    // а вспомогательные buf1/buf2 не должны использоваться.
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.TryDecodeBcj2ToArray(
+        buf0: buf0,
+        buf1: [0xAA, 0xBB, 0xCC, 0xDD],
+        buf2: [0xEE, 0xFF, 0x00, 0x11],
+        buf3: [0x00, 0x00, 0x00, 0x00, 0x00],
+        outSize: buf0.Length,
+        output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.Ok, result);
+    Assert.Equal(buf0, output);
+  }
 }
