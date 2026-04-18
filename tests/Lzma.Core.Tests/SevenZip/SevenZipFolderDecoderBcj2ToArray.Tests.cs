@@ -409,4 +409,31 @@ public sealed class SevenZipFolderDecoderBcj2ToArrayTests
     Assert.Equal(SevenZipFolderDecodeResult.InvalidData, result);
     Assert.Empty(output);
   }
+
+  [Fact]
+  public void TryDecodeBcj2ToArray_JccПриBit0ИНедостаткеBuf0_ВозвращаетInvalidData()
+  {
+    byte[] buf0 = [0x0F, 0x80];
+
+    // Пять нулей => code = 0 после инициализации range decoder,
+    // поэтому вероятностная развилка идёт в BIT=0.
+    //
+    // 0F 80 распознаётся как Jcc.
+    // При BIT=0 helper не берёт disp32 из buf2:
+    // displacement должен остаться в buf0.
+    //
+    // Но в buf0 есть только двухбайтовый opcode, а outSize требует
+    // opcode + 4 байта disp32. Поэтому helper должен вернуть InvalidData
+    // из финальной проверки outPos != outSize.
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.TryDecodeBcj2ToArray(
+        buf0: buf0,
+        buf1: [0xAA, 0xBB, 0xCC, 0xDD],
+        buf2: [0xEE, 0xFF, 0x00, 0x11],
+        buf3: [0x00, 0x00, 0x00, 0x00, 0x00],
+        outSize: 6,
+        output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.InvalidData, result);
+    Assert.Empty(output);
+  }
 }
