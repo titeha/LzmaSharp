@@ -264,4 +264,37 @@ public sealed class SevenZipFolderDecoderBcj2ToArrayTests
     Assert.Equal(SevenZipFolderDecodeResult.Ok, result);
     Assert.Equal(new byte[] { 0xE8, 0x04, 0x00 }, output);
   }
+
+  [Fact]
+  public void TryDecodeBcj2ToArray_JccПриBit1ИУсеченномRel32_ВозвращаетOkСУсеченнымВыходом()
+  {
+    byte[] buf0 = [0x0F, 0x80];
+
+    // Пять 0xFF дают code >= bound после инициализации range decoder,
+    // поэтому первая вероятностная развилка идёт в BIT=1.
+    //
+    // Для Jcc helper берёт ABS disp32 из buf2.
+    // На момент пересчёта outPos уже равен 2:
+    //
+    //   rel32 = abs - (outPos + 4) = 10 - 6 = 4
+    //
+    // Полный результат был бы:
+    //   0F 80 04 00 00 00
+    //
+    // Но outSize = 4, поэтому helper должен вернуть только:
+    //   0F 80 04 00
+    //
+    // Это фиксирует текущий контракт: outSize контейнера ограничивает
+    // итоговый output даже внутри четырёхбайтового rel32.
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.TryDecodeBcj2ToArray(
+        buf0: buf0,
+        buf1: [0xAA, 0xBB, 0xCC, 0xDD],
+        buf2: [0x00, 0x00, 0x00, 0x0A],
+        buf3: [0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
+        outSize: 4,
+        output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.Ok, result);
+    Assert.Equal(new byte[] { 0x0F, 0x80, 0x04, 0x00 }, output);
+  }
 }
