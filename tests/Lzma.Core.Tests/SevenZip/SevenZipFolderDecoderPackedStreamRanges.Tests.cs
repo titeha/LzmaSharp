@@ -233,6 +233,124 @@ public sealed class SevenZipFolderDecoderPackedStreamRangesTests
     Assert.Empty(ranges);
   }
 
+  [Fact]
+  public void TryGetFolderPackedStreamRanges_PackSizesМеньшеЧемPackedStreamIndicesFolder_ВозвращаетInvalidData()
+  {
+    var packInfo = new SevenZipPackInfo(
+        packPos: 0,
+        packSizes: [1UL]);
+
+    var folder = new SevenZipFolder(
+        Coders: [CreateCopyCoder(), CreateCopyCoder()],
+        BindPairs: [],
+        PackedStreamIndices: [0UL, 1UL],
+        NumInStreams: 2,
+        NumOutStreams: 2);
+
+    var unpackInfo = new SevenZipUnpackInfo(
+        folders: [folder],
+        folderUnpackSizes:
+        [
+          [1UL, 1UL],
+        ]);
+
+    var streamsInfo = new SevenZipStreamsInfo(
+        packInfo: packInfo,
+        unpackInfo: unpackInfo,
+        subStreamsInfo: null);
+
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.TryGetFolderPackedStreamRanges(
+        streamsInfo: streamsInfo,
+        packedStreams: [0x10],
+        folderIndex: 0,
+        out SevenZipFolderPackedStreamRange[] ranges);
+
+    Assert.Equal(SevenZipFolderDecodeResult.InvalidData, result);
+    Assert.Empty(ranges);
+  }
+
+  [Fact]
+  public void TryGetFolderPackedStreamRanges_PackPosВыходитЗаГраницыPackedStreams_ВозвращаетInvalidData()
+  {
+    var packInfo = new SevenZipPackInfo(
+        packPos: 2,
+        packSizes: [0UL]);
+
+    var folder = new SevenZipFolder(
+        Coders: [CreateCopyCoder()],
+        BindPairs: [],
+        PackedStreamIndices: [0UL],
+        NumInStreams: 1,
+        NumOutStreams: 1);
+
+    var unpackInfo = new SevenZipUnpackInfo(
+        folders: [folder],
+        folderUnpackSizes:
+        [
+          [0UL],
+        ]);
+
+    var streamsInfo = new SevenZipStreamsInfo(
+        packInfo: packInfo,
+        unpackInfo: unpackInfo,
+        subStreamsInfo: null);
+
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.TryGetFolderPackedStreamRanges(
+        streamsInfo: streamsInfo,
+        packedStreams: [0x10],
+        folderIndex: 0,
+        out SevenZipFolderPackedStreamRange[] ranges);
+
+    Assert.Equal(SevenZipFolderDecodeResult.InvalidData, result);
+    Assert.Empty(ranges);
+  }
+
+  [Fact]
+  public void TryGetFolderPackedStreamRanges_РазмерПредыдущегоPackStreamСдвигаетStartЗаБуфер_ВозвращаетInvalidData()
+  {
+    var packInfo = new SevenZipPackInfo(
+        packPos: 0,
+        packSizes: [3UL, 1UL]);
+
+    var folder0 = new SevenZipFolder(
+        Coders: [CreateCopyCoder()],
+        BindPairs: [],
+        PackedStreamIndices: [0UL],
+        NumInStreams: 1,
+        NumOutStreams: 1);
+
+    var folder1 = new SevenZipFolder(
+        Coders: [CreateCopyCoder()],
+        BindPairs: [],
+        PackedStreamIndices: [0UL],
+        NumInStreams: 1,
+        NumOutStreams: 1);
+
+    var unpackInfo = new SevenZipUnpackInfo(
+        folders: [folder0, folder1],
+        folderUnpackSizes:
+        [
+          [3UL],
+        [1UL],
+        ]);
+
+    var streamsInfo = new SevenZipStreamsInfo(
+        packInfo: packInfo,
+        unpackInfo: unpackInfo,
+        subStreamsInfo: null);
+
+    // Для folderIndex=1 старт считается как PackPos + PackSizes[0] = 3,
+    // а packedStreams содержит только 2 байта.
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.TryGetFolderPackedStreamRanges(
+        streamsInfo: streamsInfo,
+        packedStreams: [0x10, 0x20],
+        folderIndex: 1,
+        out SevenZipFolderPackedStreamRange[] ranges);
+
+    Assert.Equal(SevenZipFolderDecodeResult.InvalidData, result);
+    Assert.Empty(ranges);
+  }
+
   private static SevenZipCoderInfo CreateCopyCoder()
   {
     return new SevenZipCoderInfo(
