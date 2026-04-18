@@ -110,6 +110,31 @@ public class SevenZipFolderDecoderDeflateTests
     Assert.Empty(output);
   }
 
+  [Fact]
+  public void DecodeFolderToArray_Deflate_ОжидаемыйРазмерБольшеРеального_ВозвращаетInvalidData()
+  {
+    byte[] plain = new byte[257];
+    for (int i = 0; i < plain.Length; i++)
+      plain[i] = (byte)(i * 13 + 11);
+
+    byte[] packed = EncodeDeflate(plain);
+
+    var coder = new SevenZipCoderInfo(
+        methodId: [0x04, 0x01, 0x08],
+        properties: [],
+        numInStreams: 1,
+        numOutStreams: 1);
+
+    SevenZipFolderDecodeResult result = DecodeSingleCoderFolderToArray(
+        coder: coder,
+        packed: packed,
+        expectedUnpackSize: plain.Length + 1,
+        output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.InvalidData, result);
+    Assert.Empty(output);
+  }
+
   private static byte[] EncodeDeflate(ReadOnlySpan<byte> plain)
   {
     using var ms = new MemoryStream();
