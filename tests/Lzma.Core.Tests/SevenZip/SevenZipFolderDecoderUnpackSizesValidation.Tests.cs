@@ -84,6 +84,25 @@ public sealed class SevenZipFolderDecoderUnpackSizesValidationTests
     return sizes;
   }
 
+  [Fact]
+  public void DecodeFolderToArray_UnpackSizeБольшеIntMaxValue_ВозвращаетNotSupported()
+  {
+    SevenZipStreamsInfo streamsInfo = CreateStreamsInfo(
+        folderUnpackSizes:
+        [
+          [((ulong)int.MaxValue) + 1UL],
+        ]);
+
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.DecodeFolderToArray(
+        streamsInfo: streamsInfo,
+        packedStreams: [0x10],
+        folderIndex: 0,
+        output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.NotSupported, result);
+    Assert.Empty(output);
+  }
+
   private static SevenZipStreamsInfo CreateTwoCoderStreamsInfo(ulong[] folderUnpackSizes)
   {
     var folder = new SevenZipFolder(
