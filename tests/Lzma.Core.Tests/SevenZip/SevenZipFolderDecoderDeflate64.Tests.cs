@@ -127,6 +127,54 @@ public sealed class SevenZipFolderDecoderDeflate64Tests
     Assert.Empty(output);
   }
 
+  [Fact]
+  public void DecodeFolderToArray_Deflate64_РеальныйАрхив_ПриОбрезанномPackedStream_ВозвращаетInvalidData()
+  {
+    byte[] archive = ReadTestDataBytes("TestData/Real/deflate64_singlefile_mhc.7z");
+
+    var reader = new SevenZipArchiveReader();
+    Assert.Equal(SevenZipArchiveReadResult.Ok, reader.Read(archive, out int readConsumed));
+    Assert.Equal(archive.Length, readConsumed);
+    Assert.True(reader.Header.HasValue);
+
+    SevenZipHeader header = reader.Header.Value;
+    SevenZipStreamsInfo originalStreamsInfo = header.StreamsInfo;
+
+    Assert.NotNull(originalStreamsInfo.PackInfo);
+    Assert.NotNull(originalStreamsInfo.UnpackInfo);
+
+    SevenZipPackInfo originalPackInfo = originalStreamsInfo.PackInfo.Value;
+    SevenZipUnpackInfo originalUnpackInfo = originalStreamsInfo.UnpackInfo!;
+
+    Assert.Single(originalPackInfo.PackSizes);
+    Assert.Single(originalUnpackInfo.Folders);
+
+    SevenZipFolder folder = originalUnpackInfo.Folders[0];
+    Assert.Single(folder.Coders);
+    Assert.True(IsDeflate64(folder.Coders[0].MethodId));
+
+    ulong originalPackSize = originalPackInfo.PackSizes[0];
+    Assert.True(originalPackSize > 4);
+
+    var mutatedPackInfo = new SevenZipPackInfo(
+        packPos: originalPackInfo.PackPos,
+        packSizes: [originalPackSize - 4]);
+
+    var mutatedStreamsInfo = new SevenZipStreamsInfo(
+        packInfo: mutatedPackInfo,
+        unpackInfo: originalStreamsInfo.UnpackInfo,
+        subStreamsInfo: originalStreamsInfo.SubStreamsInfo);
+
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.DecodeFolderToArray(
+        streamsInfo: mutatedStreamsInfo,
+        packedStreams: reader.PackedStreams.Span,
+        folderIndex: 0,
+        output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.InvalidData, result);
+    Assert.Empty(output);
+  }
+
   private static bool IsDeflate64(byte[] methodId)
   {
     return methodId.Length == 3
