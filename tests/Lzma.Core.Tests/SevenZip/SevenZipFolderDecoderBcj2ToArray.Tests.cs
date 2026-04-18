@@ -76,4 +76,36 @@ public sealed class SevenZipFolderDecoderBcj2ToArrayTests
     Assert.Equal(SevenZipFolderDecodeResult.InvalidData, result);
     Assert.Empty(output);
   }
+
+  [Fact]
+  public void TryDecodeBcj2ToArray_ОтрицательныйРазмерВыхода_ВозвращаетInvalidData()
+  {
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.TryDecodeBcj2ToArray(
+        buf0: [0x10],
+        buf1: [0x20],
+        buf2: [0x30],
+        buf3: [0x40],
+        outSize: -1,
+        output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.InvalidData, result);
+    Assert.Empty(output);
+  }
+
+  [Fact]
+  public void TryDecodeBcj2ToArray_НулевойРазмерВыхода_ВозвращаетOkСПустымМассивом()
+  {
+    // Намеренно даём buf3 короче 5 байт, чтобы проверить ранний выход
+    // до инициализации range decoder.
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.TryDecodeBcj2ToArray(
+        buf0: [0x10],
+        buf1: [0x20],
+        buf2: [0x30],
+        buf3: [0x40],
+        outSize: 0,
+        output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.Ok, result);
+    Assert.Empty(output);
+  }
 }
