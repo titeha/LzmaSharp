@@ -436,4 +436,49 @@ public sealed class SevenZipFolderDecoderBcj2ToArrayTests
     Assert.Equal(SevenZipFolderDecodeResult.InvalidData, result);
     Assert.Empty(output);
   }
+
+  [Fact]
+  public void TryDecodeBcj2ToArray_E8ПриBit1ИЧастичномDisp32ВBuf1_ВозвращаетInvalidData()
+  {
+    byte[] buf0 = [0xE8];
+
+    // Пять 0xFF дают code >= bound после инициализации range decoder,
+    // поэтому первая вероятностная развилка идёт в BIT=1.
+    //
+    // Для E8 helper должен взять полный 4-байтовый ABS disp32 из buf1.
+    // Здесь доступно только 3 байта, поэтому это InvalidData.
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.TryDecodeBcj2ToArray(
+        buf0: buf0,
+        buf1: [0x00, 0x00, 0x09],
+        buf2: [0xAA, 0xBB, 0xCC, 0xDD],
+        buf3: [0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
+        outSize: 5,
+        output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.InvalidData, result);
+    Assert.Empty(output);
+  }
+
+  [Theory]
+  [InlineData(new byte[] { 0xE9 })]
+  [InlineData(new byte[] { 0x0F, 0x80 })]
+  public void TryDecodeBcj2ToArray_E9ИлиJccПриBit1ИЧастичномDisp32ВBuf2_ВозвращаетInvalidData(
+      byte[] buf0)
+  {
+    // Пять 0xFF дают code >= bound после инициализации range decoder,
+    // поэтому первая вероятностная развилка идёт в BIT=1.
+    //
+    // Для E9 и Jcc helper должен взять полный 4-байтовый ABS disp32 из buf2.
+    // Здесь доступно только 3 байта, поэтому это InvalidData.
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.TryDecodeBcj2ToArray(
+        buf0: buf0,
+        buf1: [0xAA, 0xBB, 0xCC, 0xDD],
+        buf2: [0x00, 0x00, 0x09],
+        buf3: [0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
+        outSize: buf0.Length + 4,
+        output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.InvalidData, result);
+    Assert.Empty(output);
+  }
 }
