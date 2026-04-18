@@ -361,4 +361,25 @@ public sealed class SevenZipFolderDecoderBcj2ToArrayTests
     Assert.Equal(SevenZipFolderDecodeResult.Ok, result);
     Assert.Equal(new byte[] { 0x0F }, output);
   }
+
+  [Fact]
+  public void TryDecodeBcj2ToArray_Одиночный0FВКонцеBuf0ИНедоборOutSize_ВозвращаетInvalidData()
+  {
+    byte[] buf0 = [0x0F];
+
+    // 0F сам по себе ещё не Jcc.
+    // Helper должен скопировать его как обычный байт,
+    // но затем увидеть, что outSize больше фактически полученного output,
+    // и вернуть InvalidData из финальной проверки outPos != outSize.
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.TryDecodeBcj2ToArray(
+        buf0: buf0,
+        buf1: [0xAA, 0xBB, 0xCC, 0xDD],
+        buf2: [0xEE, 0xFF, 0x00, 0x11],
+        buf3: [0x00, 0x00, 0x00, 0x00, 0x00],
+        outSize: 2,
+        output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.InvalidData, result);
+    Assert.Empty(output);
+  }
 }
