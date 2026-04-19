@@ -451,4 +451,89 @@ public sealed class SevenZipFolderDecoderUnsupportedTopologyTests
     Assert.Equal(SevenZipFolderDecodeResult.InvalidData, r);
     Assert.Empty(output);
   }
+
+  [Fact]
+  public void DecodeFolderToArray_ПустыеPackedStreamIndices_ВозвращаетNotSupported()
+  {
+    var folder = new SevenZipFolder(
+        Coders:
+        [
+          new SevenZipCoderInfo([0x00], [], 1, 1),
+        ],
+        BindPairs: [],
+        PackedStreamIndices: [],
+        NumInStreams: 1,
+        NumOutStreams: 1);
+
+    var unpackInfo = new SevenZipUnpackInfo(
+        folders: [folder],
+        folderUnpackSizes:
+        [
+          [0],
+        ]);
+
+    var packInfo = new SevenZipPackInfo(
+        packPos: 0,
+        packSizes: []);
+
+    var streamsInfo = new SevenZipStreamsInfo(
+        packInfo: packInfo,
+        unpackInfo: unpackInfo,
+        subStreamsInfo: null);
+
+    SevenZipFolderDecodeResult r = SevenZipFolderDecoder.DecodeFolderToArray(
+        streamsInfo,
+        packedStreams: [],
+        folderIndex: 0,
+        out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.NotSupported, r);
+    Assert.Empty(output);
+  }
+
+  [Fact]
+  public void DecodeFolderToArray_СлишкомМногоBindPairsДляЛинейнойПапки_ВозвращаетNotSupported()
+  {
+    var folder = new SevenZipFolder(
+        Coders:
+        [
+          new SevenZipCoderInfo([0x00], [], 1, 1),
+        new SevenZipCoderInfo([0x00], [], 1, 1),
+        ],
+        BindPairs:
+        [
+          new SevenZipBindPair(InIndex: 1, OutIndex: 0),
+        new SevenZipBindPair(InIndex: 0, OutIndex: 1),
+        ],
+        PackedStreamIndices: [0],
+        NumInStreams: 2,
+        NumOutStreams: 2);
+
+    var unpackInfo = new SevenZipUnpackInfo(
+        folders: [folder],
+        folderUnpackSizes:
+        [
+          [3, 3],
+        ]);
+
+    var packInfo = new SevenZipPackInfo(
+        packPos: 0,
+        packSizes: [3]);
+
+    var streamsInfo = new SevenZipStreamsInfo(
+        packInfo: packInfo,
+        unpackInfo: unpackInfo,
+        subStreamsInfo: null);
+
+    byte[] packedStreams = [1, 2, 3];
+
+    SevenZipFolderDecodeResult r = SevenZipFolderDecoder.DecodeFolderToArray(
+        streamsInfo,
+        packedStreams,
+        folderIndex: 0,
+        out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.NotSupported, r);
+    Assert.Empty(output);
+  }
 }
