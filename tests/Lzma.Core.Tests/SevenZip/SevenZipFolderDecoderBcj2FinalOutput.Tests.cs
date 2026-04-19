@@ -127,6 +127,93 @@ public sealed class SevenZipFolderDecoderBcj2FinalOutputTests
     Assert.Empty(output);
   }
 
+  [Fact]
+  public void DecodeFolderToArray_Bcj2_BindPairOutIndexВыходитЗаДиапазонFinalScan_ВозвращаетInvalidData()
+  {
+    byte[] packedStreams =
+    [
+      0xC0, 0xC1, 0xC2,             // ord0 -> CopyC.in (global in=6)
+    0xD0, 0xD1,                   // ord1 -> raw BCJ2 slot1 (global in=2)
+    0xB0,                         // ord2 -> CopyB.in (global in=0)
+    0xA0, 0xA1, 0xA2, 0xA3,       // ord3 -> CopyA.in (global in=5)
+  ];
+
+    // Первые три BindPair нужны, чтобы успешно собрать четыре входа BCJ2.
+    // Последний BindPair намеренно не относится к входам BCJ2,
+    // поэтому TryDecodeBcj2InputStreamsToArrays его не использует.
+    //
+    // Но верхний final-output scan в DecodeFolderToArray обязан проверить
+    // все BindPair.OutIndex и вернуть InvalidData, если OutIndex >= totalOut.
+    SevenZipStreamsInfo streamsInfo = CreateStreamsInfo(
+        packedStreamIndices: [6UL, 2UL, 0UL, 5UL],
+        bindPairs:
+        [
+          // BCJ2 slot0 (consumerIn=1) <- CopyA.out2
+          new SevenZipBindPair(InIndex: 1, OutIndex: 2),
+
+        // BCJ2 slot2 (consumerIn=3) <- CopyC.out3
+        new SevenZipBindPair(InIndex: 3, OutIndex: 3),
+
+        // BCJ2 slot3 (consumerIn=4) <- CopyB.out0
+        new SevenZipBindPair(InIndex: 4, OutIndex: 0),
+
+        // OutIndex == totalOut, то есть выходит за диапазон out stream'ов.
+        new SevenZipBindPair(InIndex: 5, OutIndex: 4),
+        ],
+        folderUnpackSizes: [1UL, 123UL, 4UL, 3UL]);
+
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.DecodeFolderToArray(
+        streamsInfo: streamsInfo,
+        packedStreams: packedStreams,
+        folderIndex: 0,
+        output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.InvalidData, result);
+    Assert.Empty(output);
+  }
+
+  [Fact]
+  public void DecodeFolderToArray_Bcj2_BindPairOutIndexБольшеIntMaxValueFinalScan_ВозвращаетNotSupported()
+  {
+    byte[] packedStreams =
+    [
+      0xC0, 0xC1, 0xC2,             // ord0 -> CopyC.in (global in=6)
+    0xD0, 0xD1,                   // ord1 -> raw BCJ2 slot1 (global in=2)
+    0xB0,                         // ord2 -> CopyB.in (global in=0)
+    0xA0, 0xA1, 0xA2, 0xA3,       // ord3 -> CopyA.in (global in=5)
+  ];
+
+    // Как и в предыдущем тесте, последний BindPair не участвует
+    // в сборке входных потоков BCJ2, но должен быть проверен
+    // верхним final-output scan в DecodeFolderToArray.
+    SevenZipStreamsInfo streamsInfo = CreateStreamsInfo(
+        packedStreamIndices: [6UL, 2UL, 0UL, 5UL],
+        bindPairs:
+        [
+          // BCJ2 slot0 (consumerIn=1) <- CopyA.out2
+          new SevenZipBindPair(InIndex: 1, OutIndex: 2),
+
+        // BCJ2 slot2 (consumerIn=3) <- CopyC.out3
+        new SevenZipBindPair(InIndex: 3, OutIndex: 3),
+
+        // BCJ2 slot3 (consumerIn=4) <- CopyB.out0
+        new SevenZipBindPair(InIndex: 4, OutIndex: 0),
+
+        // Значение не помещается в int, поэтому ожидаем NotSupported.
+        new SevenZipBindPair(InIndex: 5, OutIndex: ((ulong)int.MaxValue) + 1UL),
+        ],
+        folderUnpackSizes: [1UL, 123UL, 4UL, 3UL]);
+
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.DecodeFolderToArray(
+        streamsInfo: streamsInfo,
+        packedStreams: packedStreams,
+        folderIndex: 0,
+        output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.NotSupported, result);
+    Assert.Empty(output);
+  }
+
   private static SevenZipStreamsInfo CreateStreamsInfo(
       ulong[] packedStreamIndices,
       SevenZipBindPair[] bindPairs,
