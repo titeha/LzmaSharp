@@ -171,6 +171,58 @@ public sealed class SevenZipFolderDecoderBcj2InputStreamsTopLevelValidationTests
     Assert.Empty(decoded);
   }
 
+  [Fact]
+  public void TryDecodeBcj2InputStreamsToArrays_PackSizesМеньшеЧемЧетыреPackedStream_ВозвращаетInvalidData()
+  {
+    var streamsInfo = new SevenZipStreamsInfo(
+        packInfo: new SevenZipPackInfo(
+            packPos: 0,
+            packSizes: [1UL, 1UL, 1UL]),
+        unpackInfo: CreateUnpackInfo(
+            folders: [CreateBcj2Folder()],
+            folderUnpackSizes:
+            [
+              [1UL],
+            ]),
+        subStreamsInfo: null);
+
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.TryDecodeBcj2InputStreamsToArrays(
+        streamsInfo: streamsInfo,
+        packedStreams: [0x10, 0x11, 0x12],
+        folderIndex: 0,
+        decodedInputStreams: out byte[][] decoded);
+
+    Assert.Equal(SevenZipFolderDecodeResult.InvalidData, result);
+    Assert.Empty(decoded);
+  }
+
+  [Fact]
+  public void TryDecodeBcj2InputStreamsToArrays_PackedStreamВыходитЗаГраницыБуфера_ВозвращаетInvalidData()
+  {
+    var streamsInfo = new SevenZipStreamsInfo(
+        packInfo: new SevenZipPackInfo(
+            packPos: 0,
+            packSizes: [1UL, 1UL, 1UL, 2UL]),
+        unpackInfo: CreateUnpackInfo(
+            folders: [CreateBcj2Folder()],
+            folderUnpackSizes:
+            [
+              [1UL],
+            ]),
+        subStreamsInfo: null);
+
+    // Суммарный размер по PackSizes = 5,
+    // а реально packedStreams содержит только 4 байта.
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.TryDecodeBcj2InputStreamsToArrays(
+        streamsInfo: streamsInfo,
+        packedStreams: [0x10, 0x11, 0x12, 0x13],
+        folderIndex: 0,
+        decodedInputStreams: out byte[][] decoded);
+
+    Assert.Equal(SevenZipFolderDecodeResult.InvalidData, result);
+    Assert.Empty(decoded);
+  }
+
   private static SevenZipPackInfo CreatePackInfo()
   {
     return new SevenZipPackInfo(
