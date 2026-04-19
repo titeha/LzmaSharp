@@ -79,6 +79,54 @@ public sealed class SevenZipFolderDecoderBcj2FinalOutputTests
     Assert.Empty(output);
   }
 
+  [Fact]
+  public void DecodeFolderToArray_Bcj2_НетФинальногоВыхода_ВозвращаетNotSupported()
+  {
+    byte[] packedStreams =
+    [
+      0xC0, 0xC1, 0xC2,             // ord0 -> CopyC.in (global in=6)
+    0xD0, 0xD1,                   // ord1 -> raw BCJ2 slot1 (global in=2)
+    0xB0,                         // ord2 -> CopyB.in (global in=0)
+    0xA0, 0xA1, 0xA2, 0xA3,       // ord3 -> CopyA.in (global in=5)
+  ];
+
+    // Первые три BindPair нужны, чтобы успешно собрать четыре входа BCJ2:
+    //   slot0 <- CopyA.out2
+    //   slot1 <- raw packed stream
+    //   slot2 <- CopyC.out3
+    //   slot3 <- CopyB.out0
+    //
+    // Последний BindPair синтетически помечает out1 самого BCJ2 как использованный.
+    // В итоге использованы все out stream'ы folder'а: 0, 1, 2, 3.
+    // Значит, финального output stream'а не остаётся.
+    SevenZipStreamsInfo streamsInfo = CreateStreamsInfo(
+        packedStreamIndices: [6UL, 2UL, 0UL, 5UL],
+        bindPairs:
+        [
+          // BCJ2 slot0 (consumerIn=1) <- CopyA.out2
+          new SevenZipBindPair(InIndex: 1, OutIndex: 2),
+
+        // BCJ2 slot2 (consumerIn=3) <- CopyC.out3
+        new SevenZipBindPair(InIndex: 3, OutIndex: 3),
+
+        // BCJ2 slot3 (consumerIn=4) <- CopyB.out0
+        new SevenZipBindPair(InIndex: 4, OutIndex: 0),
+
+        // Помечаем out1 BCJ2 как использованный producer'ом.
+        new SevenZipBindPair(InIndex: 5, OutIndex: 1),
+        ],
+        folderUnpackSizes: [1UL, 123UL, 4UL, 3UL]);
+
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.DecodeFolderToArray(
+        streamsInfo: streamsInfo,
+        packedStreams: packedStreams,
+        folderIndex: 0,
+        output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.NotSupported, result);
+    Assert.Empty(output);
+  }
+
   private static SevenZipStreamsInfo CreateStreamsInfo(
       ulong[] packedStreamIndices,
       SevenZipBindPair[] bindPairs,
