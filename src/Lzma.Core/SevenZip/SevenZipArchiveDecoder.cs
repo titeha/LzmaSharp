@@ -2,44 +2,48 @@ using Lzma.Core.Checksums;
 
 namespace Lzma.Core.SevenZip;
 
+/// <summary>
+/// <para>Декодирует 7z-архив (в памяти) и возвращает все файлы в виде массива (имя + байты).</para>
+/// <para>
+/// Текущая реализация рассчитана на «простой» 7z, который генерируют наши тесты:
+/// - Только 1 входной поток на folder (NumInStreams = 1)
+/// - Только 1 выходной поток на coder (NumOutStreams = 1)
+/// - LZMA2 (включая COPY-режим)
+/// </para>
+/// </summary>
 public static class SevenZipArchiveDecoder
 {
   /// <summary>
-  /// <para>Декодирует 7z-архив (в памяти) и возвращает все файлы в виде массива (имя + байты).</para>
-  /// <para>
-  /// Текущая реализация рассчитана на «простой» 7z, который генерируют наши тесты:
-  /// - Только 1 входной поток на folder (NumInStreams = 1)
-  /// - Только 1 выходной поток на coder (NumOutStreams = 1)
-  /// - LZMA2 (включая COPY-режим)
-  /// </para>
+  /// Декодирует 7z-архив, содержащий ровно один файл.
   /// </summary>
+  public static SevenZipArchiveDecodeResult DecodeSingleFileToArray(
+      ReadOnlySpan<byte> archiveBytes,
+      out byte[] fileBytes,
+      out string fileName)
+  {
+    return DecodeSingleFileToArray(
+        archiveBytes: archiveBytes,
+        options: SevenZipDecodeOptions.Default,
+        fileBytes: out fileBytes,
+        fileName: out fileName,
+        bytesConsumed: out _);
+  }
 
   /// <summary>
   /// Декодирует 7z-архив, содержащий ровно один файл.
   /// </summary>
-  public static SevenZipArchiveDecodeResult DecodeSingleFileToArray(ReadOnlySpan<byte> archiveBytes, out byte[] fileBytes, out string fileName)
+  public static SevenZipArchiveDecodeResult DecodeSingleFileToArray(
+      ReadOnlySpan<byte> archiveBytes,
+      SevenZipDecodeOptions options,
+      out byte[] fileBytes,
+      out string fileName)
   {
-    SevenZipArchiveDecodeResult r = DecodeToEntries(
-      archiveBytes,
-      out SevenZipDecodedEntry[] decodedEntries);
-
-    if (r != SevenZipArchiveDecodeResult.Ok)
-    {
-      fileBytes = [];
-      fileName = string.Empty;
-      return r;
-    }
-
-    if (decodedEntries.Length != 1 || decodedEntries[0].IsDirectory)
-    {
-      fileBytes = [];
-      fileName = string.Empty;
-      return SevenZipArchiveDecodeResult.NotSupported;
-    }
-
-    fileBytes = decodedEntries[0].Bytes;
-    fileName = decodedEntries[0].Name;
-    return SevenZipArchiveDecodeResult.Ok;
+    return DecodeSingleFileToArray(
+        archiveBytes: archiveBytes,
+        options: options,
+        fileBytes: out fileBytes,
+        fileName: out fileName,
+        bytesConsumed: out _);
   }
 
   /// <summary>
@@ -49,9 +53,41 @@ public static class SevenZipArchiveDecoder
   /// Этот перегруженный метод оставлен для совместимости с тестами/внешним кодом,
   /// которому важно знать, сколько байт входа было обработано.
   /// </remarks>
-  public static SevenZipArchiveDecodeResult DecodeSingleFileToArray(ReadOnlySpan<byte> archiveBytes, out byte[] fileBytes, out string fileName, out int bytesConsumed)
+  public static SevenZipArchiveDecodeResult DecodeSingleFileToArray(
+      ReadOnlySpan<byte> archiveBytes,
+      out byte[] fileBytes,
+      out string fileName,
+      out int bytesConsumed)
   {
-    SevenZipArchiveDecodeResult r = DecodeToEntries(archiveBytes, out SevenZipDecodedEntry[] decodedEntries, out bytesConsumed);
+    return DecodeSingleFileToArray(
+        archiveBytes: archiveBytes,
+        options: SevenZipDecodeOptions.Default,
+        fileBytes: out fileBytes,
+        fileName: out fileName,
+        bytesConsumed: out bytesConsumed);
+  }
+
+  /// <summary>
+  /// Декодирует 7z-архив, содержащий ровно один файл.
+  /// </summary>
+  /// <remarks>
+  /// Этот перегруженный метод оставлен для совместимости с тестами/внешним кодом,
+  /// которому важно знать, сколько байт входа было обработано.
+  /// </remarks>
+  public static SevenZipArchiveDecodeResult DecodeSingleFileToArray(
+      ReadOnlySpan<byte> archiveBytes,
+      SevenZipDecodeOptions options,
+      out byte[] fileBytes,
+      out string fileName,
+      out int bytesConsumed)
+  {
+    ArgumentNullException.ThrowIfNull(options);
+
+    SevenZipArchiveDecodeResult r = DecodeToEntries(
+        archive: archiveBytes,
+        options: options,
+        entries: out SevenZipDecodedEntry[] decodedEntries,
+        bytesConsumed: out bytesConsumed);
 
     if (r != SevenZipArchiveDecodeResult.Ok)
     {
