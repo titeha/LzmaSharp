@@ -191,6 +191,30 @@ public static class SevenZipFolderDecoder
     {
       decoded = [];
 
+      if (SevenZipAesCoder.IsAesMethodId(coder.MethodId))
+      {
+        ReadOnlySpan<byte> aesProperties = coder.Properties ?? [];
+
+        if (!SevenZipAesCoder.TryParseProperties(
+            aesProperties,
+            out SevenZipAesProperties? parsedAesProperties))
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.InvalidData;
+        }
+
+        if (!SevenZipAesCoder.IsSupportedNumCyclesPower(parsedAesProperties!.NumCyclesPower))
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.NotSupported;
+        }
+
+        // AES уже распознан и properties корректны,
+        // но фактическая расшифровка будет добавлена отдельными шагами.
+        decoded = [];
+        return SevenZipFolderDecodeResult.NotSupported;
+      }
+
       if (IsSingleByteMethodId(coder.MethodId, _methodIdCopy))
       {
         decoded = input.ToArray();
