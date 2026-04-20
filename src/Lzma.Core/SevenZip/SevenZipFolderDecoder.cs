@@ -232,10 +232,37 @@ public static class SevenZipFolderDecoder
           return SevenZipFolderDecodeResult.NotSupported;
         }
 
-        // AES уже распознан и properties корректны,
-        // но фактическая расшифровка будет добавлена отдельными шагами.
-        decoded = [];
-        return SevenZipFolderDecodeResult.NotSupported;
+        if (options.Password is null)
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.NotSupported;
+        }
+
+        SevenZipAesDecryptResult decryptResult = SevenZipAesPackedStreamDecryptor.TryDecrypt(
+            properties: parsedAesProperties,
+            password: options.Password,
+            ciphertext: input,
+            plaintext: out decoded);
+
+        if (decryptResult == SevenZipAesDecryptResult.NotSupported)
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.NotSupported;
+        }
+
+        if (decryptResult == SevenZipAesDecryptResult.InvalidData)
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.InvalidData;
+        }
+
+        if (decoded.Length != expectedUnpackSize)
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.InvalidData;
+        }
+
+        return SevenZipFolderDecodeResult.Ok;
       }
 
       if (IsSingleByteMethodId(coder.MethodId, _methodIdCopy))

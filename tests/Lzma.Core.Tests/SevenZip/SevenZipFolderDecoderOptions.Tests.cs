@@ -83,19 +83,16 @@ public sealed class SevenZipFolderDecoderOptionsTests
   }
 
   [Fact]
-  public void DecodeFolderToArray_AesСПаролем_ПокаВозвращаетNotSupported()
+  public void DecodeFolderToArray_AesБезПароля_ВозвращаетNotSupported()
   {
     SevenZipStreamsInfo streamsInfo = CreateSingleAesCoderStreamsInfo(
         aesProperties: []);
-
-    using SevenZipPassword password = SevenZipPassword.FromString("secret");
-    SevenZipDecodeOptions options = SevenZipDecodeOptions.WithPassword(password);
 
     SevenZipFolderDecodeResult result = SevenZipFolderDecoder.DecodeFolderToArray(
         streamsInfo: streamsInfo,
         packedStreams: [0x10, 0x20, 0x30],
         folderIndex: 0,
-        options: options,
+        options: SevenZipDecodeOptions.Default,
         output: out byte[] output);
 
     Assert.Equal(SevenZipFolderDecodeResult.NotSupported, result);
