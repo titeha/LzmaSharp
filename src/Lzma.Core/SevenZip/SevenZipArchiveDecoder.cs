@@ -642,23 +642,60 @@ public static class SevenZipArchiveDecoder
   }
 
   public static SevenZipArchiveDecodeResult ExtractToDirectory(
-  ReadOnlySpan<byte> archive,
-  string destinationDirectory,
-  bool overwrite = false)
-  => ExtractToDirectory(archive, destinationDirectory, overwrite, out _);
-
-  public static SevenZipArchiveDecodeResult ExtractToDirectory(
     ReadOnlySpan<byte> archive,
     string destinationDirectory,
-    bool overwrite,
-    out int bytesConsumed)
+    bool overwrite = false)
   {
+    return ExtractToDirectory(
+        archive: archive,
+        options: SevenZipDecodeOptions.Default,
+        destinationDirectory: destinationDirectory,
+        overwrite: overwrite,
+        bytesConsumed: out _);
+  }
+
+  public static SevenZipArchiveDecodeResult ExtractToDirectory(
+      ReadOnlySpan<byte> archive,
+      SevenZipDecodeOptions options,
+      string destinationDirectory,
+      bool overwrite = false)
+  {
+    return ExtractToDirectory(
+        archive: archive,
+        options: options,
+        destinationDirectory: destinationDirectory,
+        overwrite: overwrite,
+        bytesConsumed: out _);
+  }
+
+  public static SevenZipArchiveDecodeResult ExtractToDirectory(
+      ReadOnlySpan<byte> archive,
+      string destinationDirectory,
+      bool overwrite,
+      out int bytesConsumed)
+  {
+    return ExtractToDirectory(
+        archive: archive,
+        options: SevenZipDecodeOptions.Default,
+        destinationDirectory: destinationDirectory,
+        overwrite: overwrite,
+        bytesConsumed: out bytesConsumed);
+  }
+
+  public static SevenZipArchiveDecodeResult ExtractToDirectory(
+      ReadOnlySpan<byte> archive,
+      SevenZipDecodeOptions options,
+      string destinationDirectory,
+      bool overwrite,
+      out int bytesConsumed)
+  {
+    ArgumentNullException.ThrowIfNull(options);
     bytesConsumed = 0;
 
     if (destinationDirectory is null)
       return SevenZipArchiveDecodeResult.InvalidData;
 
-    SevenZipArchiveDecodeResult r = DecodeToEntries(archive, out SevenZipDecodedEntry[] entries, out bytesConsumed);
+    SevenZipArchiveDecodeResult r = DecodeToEntries(archive, options, out SevenZipDecodedEntry[] entries, out bytesConsumed);
     if (r != SevenZipArchiveDecodeResult.Ok)
       return r;
 
