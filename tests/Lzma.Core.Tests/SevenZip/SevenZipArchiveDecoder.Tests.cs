@@ -73,6 +73,18 @@ public class SevenZipArchiveDecoderTests
     Assert.Equal(SevenZipArchiveDecodeResult.InvalidData, r);
   }
 
+  [Fact]
+  public void DecodeToArray_НоваяПерегрузкаБезBytesConsumedСNullOptions_БросаетArgumentNullException()
+  {
+    byte[] archive = [];
+
+    Assert.Throws<ArgumentNullException>(
+        () => SevenZipArchiveDecoder.DecodeToArray(
+            archive: archive,
+            options: null!,
+            files: out _));
+  }
+
   private static byte[] Build7zArchive_SingleFile_SingleFolder_Lzma2Copy(byte[] fileBytes, string fileName, uint? folderCrc = null)
   {
     const int dictionarySize = 1 << 20;

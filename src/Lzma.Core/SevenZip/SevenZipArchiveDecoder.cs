@@ -78,18 +78,42 @@ public static class SevenZipArchiveDecoder
   public static SevenZipArchiveDecodeResult DecodeAllFilesToArray(ReadOnlySpan<byte> archiveBytes, out SevenZipDecodedFile[] files)
     => DecodeToArray(archiveBytes, out files);
 
-  public static SevenZipArchiveDecodeResult DecodeToArray(ReadOnlySpan<byte> archive, out SevenZipDecodedFile[] files)
-      => DecodeToArray(archive, out files, out _);
-
-  /// <summary>
-  /// То же самое, но дополнительно возвращает количество байт, потреблённых парсером заголовка 7z.
-  /// </summary>
   public static SevenZipArchiveDecodeResult DecodeToArray(
     ReadOnlySpan<byte> archive,
-    out SevenZipDecodedFile[] files,
-    out int bytesConsumed)
+    out SevenZipDecodedFile[] files) => DecodeToArray(
+        archive: archive,
+        options: SevenZipDecodeOptions.Default,
+        files: out files,
+        bytesConsumed: out _);
+
+  public static SevenZipArchiveDecodeResult DecodeToArray(
+      ReadOnlySpan<byte> archive,
+      SevenZipDecodeOptions options,
+      out SevenZipDecodedFile[] files) => DecodeToArray(
+        archive: archive,
+        options: options,
+        files: out files,
+        bytesConsumed: out _);
+
+  public static SevenZipArchiveDecodeResult DecodeToArray(
+      ReadOnlySpan<byte> archive,
+      out SevenZipDecodedFile[] files,
+      out int bytesConsumed) => DecodeToArray(
+        archive: archive,
+        options: SevenZipDecodeOptions.Default,
+        files: out files,
+        bytesConsumed: out bytesConsumed);
+
+  public static SevenZipArchiveDecodeResult DecodeToArray(
+      ReadOnlySpan<byte> archive,
+      SevenZipDecodeOptions options,
+      out SevenZipDecodedFile[] files,
+      out int bytesConsumed)
   {
+    ArgumentNullException.ThrowIfNull(options);
+
     files = [];
+    bytesConsumed = 0;
 
     SevenZipArchiveReader reader = new();
     SevenZipArchiveReadResult read = reader.Read(archive, out bytesConsumed);
@@ -358,10 +382,11 @@ public static class SevenZipArchiveDecoder
     for (int folderIndex = 0; folderIndex < folderCount; folderIndex++)
     {
       SevenZipFolderDecodeResult folderRes = SevenZipFolderDecoder.DecodeFolderToArray(
-        streamsInfo,
-        packed,
-        folderIndex,
-        out byte[] folderUnpacked);
+        streamsInfo: streamsInfo,
+        packedStreams: packed,
+        folderIndex: folderIndex,
+        options: options,
+        output: out byte[] folderUnpacked);
 
       if (folderRes == SevenZipFolderDecodeResult.InvalidData)
         return SevenZipArchiveDecodeResult.InvalidData;
