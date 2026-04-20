@@ -69,6 +69,98 @@ public sealed class SevenZipReal7zAesCopyTests
     Assert.Equal(string.Empty, fileName);
   }
 
+  [Fact]
+  public void ExtractToDirectory_РеальныйAesCopyАрхив_СПаролем_ЗаписываетИсходныйФайл()
+  {
+    byte[] archive = ReadTestDataBytes("TestData/Real/aes_copy_singlefile_pwd_mhe_off.7z");
+
+    string root = CreateTempRoot();
+
+    try
+    {
+      using SevenZipPassword password = SevenZipPassword.FromString(Password);
+
+      SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.ExtractToDirectory(
+          archive: archive,
+          options: SevenZipDecodeOptions.WithPassword(password),
+          destinationDirectory: root,
+          overwrite: false,
+          bytesConsumed: out int bytesConsumed);
+
+      Assert.Equal(SevenZipArchiveDecodeResult.Ok, result);
+      Assert.Equal(archive.Length, bytesConsumed);
+
+      string filePath = Path.Combine(root, "aes-real.txt");
+
+      Assert.True(File.Exists(filePath));
+      Assert.Equal(
+          Encoding.UTF8.GetBytes("LzmaSharp AES real 7z test\r\n"),
+          File.ReadAllBytes(filePath));
+    }
+    finally
+    {
+      TryDeleteTree(root);
+    }
+  }
+
+  [Fact]
+  public void ExtractToDirectory_РеальныйAesCopyАрхив_БезПароля_ВозвращаетNotSupportedИНичегоНеПишет()
+  {
+    byte[] archive = ReadTestDataBytes("TestData/Real/aes_copy_singlefile_pwd_mhe_off.7z");
+
+    string root = CreateTempRoot();
+
+    try
+    {
+      SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.ExtractToDirectory(
+          archive: archive,
+          options: SevenZipDecodeOptions.Default,
+          destinationDirectory: root,
+          overwrite: false,
+          bytesConsumed: out int bytesConsumed);
+
+      Assert.Equal(SevenZipArchiveDecodeResult.NotSupported, result);
+      Assert.Equal(archive.Length, bytesConsumed);
+
+      Assert.False(File.Exists(Path.Combine(root, "aes-real.txt")));
+      Assert.False(Directory.Exists(root));
+    }
+    finally
+    {
+      TryDeleteTree(root);
+    }
+  }
+
+  [Fact]
+  public void ExtractToDirectory_РеальныйAesCopyАрхив_СНевернымПаролем_ВозвращаетInvalidDataИНичегоНеПишет()
+  {
+    byte[] archive = ReadTestDataBytes("TestData/Real/aes_copy_singlefile_pwd_mhe_off.7z");
+
+    string root = CreateTempRoot();
+
+    try
+    {
+      using SevenZipPassword password = SevenZipPassword.FromString("wrong-password");
+
+      SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.ExtractToDirectory(
+          archive: archive,
+          options: SevenZipDecodeOptions.WithPassword(password),
+          destinationDirectory: root,
+          overwrite: false,
+          bytesConsumed: out int bytesConsumed);
+
+      Assert.Equal(SevenZipArchiveDecodeResult.InvalidData, result);
+      Assert.Equal(archive.Length, bytesConsumed);
+
+      Assert.False(File.Exists(Path.Combine(root, "aes-real.txt")));
+      Assert.False(Directory.Exists(root));
+    }
+    finally
+    {
+      TryDeleteTree(root);
+    }
+  }
+
   private static byte[] ReadTestDataBytes(
       string relativePathFromSevenZipFolder,
       [CallerFilePath] string callerFile = "")
@@ -76,5 +168,27 @@ public sealed class SevenZipReal7zAesCopyTests
     string dir = Path.GetDirectoryName(callerFile)!;
     string fullPath = Path.GetFullPath(Path.Combine(dir, relativePathFromSevenZipFolder));
     return File.ReadAllBytes(fullPath);
+  }
+
+  private static string CreateTempRoot()
+  {
+    return Path.Combine(
+        Path.GetTempPath(),
+        "LzmaSharpTests",
+        nameof(SevenZipReal7zAesCopyTests),
+        Guid.NewGuid().ToString("N"));
+  }
+
+  private static void TryDeleteTree(string path)
+  {
+    try
+    {
+      if (Directory.Exists(path))
+        Directory.Delete(path, recursive: true);
+    }
+    catch
+    {
+      // best-effort cleanup для тестового каталога
+    }
   }
 }
