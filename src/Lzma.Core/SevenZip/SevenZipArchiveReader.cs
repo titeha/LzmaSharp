@@ -41,8 +41,12 @@ public sealed class SevenZipArchiveReader
   /// </summary>
   public ReadOnlyMemory<byte> DecodedHeaderBytes { get; private set; }
 
-  public SevenZipArchiveReadResult Read(ReadOnlySpan<byte> input, out int bytesConsumed)
+  public SevenZipArchiveReadResult Read(ReadOnlySpan<byte> input, out int bytesConsumed) => Read(input: input, options: SevenZipDecodeOptions.Default, bytesConsumed: out bytesConsumed);
+
+  public SevenZipArchiveReadResult Read(ReadOnlySpan<byte> input, SevenZipDecodeOptions options, out int bytesConsumed)
   {
+    ArgumentNullException.ThrowIfNull(options);
+
     // После терминального результата больше ничего не читаем.
     if (_isTerminal)
     {
@@ -119,10 +123,11 @@ public sealed class SevenZipArchiveReader
 
     // EncodedHeader
     var decodeRes = SevenZipEncodedHeaderDecoder.TryDecode(
-      NextHeaderBytes.Span,
-      PackedStreams.Span,
-      out byte[] decodedHeaderBytes,
-      out SevenZipHeader decodedHeader);
+      nextHeaderBytes: NextHeaderBytes.Span,
+      packedStreams: PackedStreams.Span,
+      options: options,
+      decodedHeaderBytes: out byte[] decodedHeaderBytes,
+      decodedHeader: out SevenZipHeader decodedHeader);
 
     if (decodeRes != SevenZipArchiveReadResult.Ok)
     {

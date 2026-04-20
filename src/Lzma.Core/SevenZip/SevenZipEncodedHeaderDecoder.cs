@@ -8,6 +8,23 @@ internal static class SevenZipEncodedHeaderDecoder
     out byte[] decodedHeaderBytes,
     out SevenZipHeader decodedHeader)
   {
+    return TryDecode(
+        nextHeaderBytes: nextHeaderBytes,
+        packedStreams: packedStreams,
+        options: SevenZipDecodeOptions.Default,
+        decodedHeaderBytes: out decodedHeaderBytes,
+        decodedHeader: out decodedHeader);
+  }
+
+  public static SevenZipArchiveReadResult TryDecode(
+    ReadOnlySpan<byte> nextHeaderBytes,
+    ReadOnlySpan<byte> packedStreams,
+    SevenZipDecodeOptions options,
+    out byte[] decodedHeaderBytes,
+    out SevenZipHeader decodedHeader)
+  {
+    ArgumentNullException.ThrowIfNull(options);
+
     decodedHeaderBytes = [];
     decodedHeader = default;
 
@@ -17,13 +34,12 @@ internal static class SevenZipEncodedHeaderDecoder
     if (nextHeaderBytes[0] != SevenZipNid.EncodedHeader)
       return SevenZipArchiveReadResult.InvalidData;
 
-    // В 7z после NID.EncodedHeader идёт StreamsInfo (без отдельного маркера NID).
     const int offset = 1;
 
     var streamsInfoRead = SevenZipStreamsInfoReader.TryRead(
-      nextHeaderBytes[offset..],
-      out SevenZipStreamsInfo streamsInfo,
-      out _);
+        nextHeaderBytes[offset..],
+        out SevenZipStreamsInfo streamsInfo,
+        out _);
 
     switch (streamsInfoRead)
     {
@@ -43,7 +59,6 @@ internal static class SevenZipEncodedHeaderDecoder
     SevenZipPackInfo packInfo = streamsInfo.PackInfo.Value;
     SevenZipUnpackInfo unpackInfo = streamsInfo.UnpackInfo;
 
-    // На этапе 1 поддерживаем только один packed stream у EncodedHeader.
     if (packInfo.PackSizes.Length == 0)
       return SevenZipArchiveReadResult.InvalidData;
 
@@ -53,7 +68,6 @@ internal static class SevenZipEncodedHeaderDecoder
     ulong packPos = packInfo.PackPos;
     ulong packSize = packInfo.PackSizes[0];
 
-    // Проверки границ, т.к. внутри будет Slice() по int.
     if (packPos > (ulong)packedStreams.Length)
       return SevenZipArchiveReadResult.InvalidData;
 
@@ -63,7 +77,6 @@ internal static class SevenZipEncodedHeaderDecoder
     if (packPos > int.MaxValue || packSize > int.MaxValue || packPos + packSize > int.MaxValue)
       return SevenZipArchiveReadResult.NotSupported;
 
-    // Пока поддерживаем ровно одну папку (folder) и один output stream (header bytes).
     if (unpackInfo.Folders.Length != 1 || unpackInfo.FolderUnpackSizes.Length != 1)
       return SevenZipArchiveReadResult.NotSupported;
 
@@ -71,34 +84,29 @@ internal static class SevenZipEncodedHeaderDecoder
     if (folderUnpackSizes is null || folderUnpackSizes.Length != 1)
       return SevenZipArchiveReadResult.NotSupported;
 
-    // Декодируем packed stream EncodedHeader через общий декодер folder'ов.
     SevenZipFolderDecodeResult folderDecodeResult = SevenZipFolderDecoder.DecodeFolderToArray(
-      streamsInfo: streamsInfo,
-      packedStreams: packedStreams,
-      folderIndex: 0,
-      output: out decodedHeaderBytes);
+        streamsInfo: streamsInfo,
+        packedStreams: packedStreams,
+        folderIndex: 0,
+        options: options,
+        output: out decodedHeaderBytes);
 
     if (folderDecodeResult != SevenZipFolderDecodeResult.Ok)
     {
       decodedHeaderBytes = [];
       return folderDecodeResult == SevenZipFolderDecodeResult.NotSupported
-        ? SevenZipArchiveReadResult.NotSupported
-        : SevenZipArchiveReadResult.InvalidData;
+          ? SevenZipArchiveReadResult.NotSupported
+          : SevenZipArchiveReadResult.InvalidData;
     }
 
-    // Парсим обычный Header из распакованных байт.
     switch (SevenZipHeaderReader.TryRead(decodedHeaderBytes, out decodedHeader, out int headerBytesConsumed))
     {
       case SevenZipHeaderReadResult.Ok:
         break;
-
       case SevenZipHeaderReadResult.NeedMoreInput:
-        // Декодированные байты уже целиком в памяти: если парсер просит ещё — значит заголовок битый.
         return SevenZipArchiveReadResult.InvalidData;
-
       case SevenZipHeaderReadResult.NotSupported:
         return SevenZipArchiveReadResult.NotSupported;
-
       default:
         return SevenZipArchiveReadResult.InvalidData;
     }
