@@ -36,14 +36,36 @@ public static class SevenZipFolderDecoder
   private const byte _methodIdLzma2 = 0x21;
   private const byte _methodIdDelta = 0x03;
 
+  /// <summary>
+  /// Декодирует Folder в массив байт с настройками по умолчанию.
+  /// </summary>
   public static SevenZipFolderDecodeResult DecodeFolderToArray(
       SevenZipStreamsInfo streamsInfo,
       ReadOnlySpan<byte> packedStreams,
       int folderIndex,
       out byte[] output)
   {
+    return DecodeFolderToArray(
+        streamsInfo: streamsInfo,
+        packedStreams: packedStreams,
+        folderIndex: folderIndex,
+        options: SevenZipDecodeOptions.Default,
+        output: out output);
+  }
+
+  /// <summary>
+  /// Декодирует Folder в массив байт.
+  /// </summary>
+  public static SevenZipFolderDecodeResult DecodeFolderToArray(
+      SevenZipStreamsInfo streamsInfo,
+      ReadOnlySpan<byte> packedStreams,
+      int folderIndex,
+      SevenZipDecodeOptions options,
+      out byte[] output)
+  {
     output = [];
 
+    ArgumentNullException.ThrowIfNull(options);
     ArgumentNullException.ThrowIfNull(streamsInfo);
 
     if (streamsInfo.PackInfo is not { } packInfo)
@@ -184,10 +206,11 @@ public static class SevenZipFolderDecoder
       return SevenZipFolderDecodeResult.InvalidData;
 
     static SevenZipFolderDecodeResult DecodeOneCoder(
-      SevenZipCoderInfo coder,
-      ReadOnlySpan<byte> input,
-      int expectedUnpackSize,
-      out byte[] decoded)
+    SevenZipCoderInfo coder,
+    ReadOnlySpan<byte> input,
+    int expectedUnpackSize,
+    SevenZipDecodeOptions options,
+    out byte[] decoded)
     {
       decoded = [];
 
@@ -995,6 +1018,7 @@ public static class SevenZipFolderDecoder
         coder: folder.Coders[current],
         input: currentInput,
         expectedUnpackSize: expectedSize,
+        options: options,
         decoded: out byte[] decoded);
 
       if (r != SevenZipFolderDecodeResult.Ok)
