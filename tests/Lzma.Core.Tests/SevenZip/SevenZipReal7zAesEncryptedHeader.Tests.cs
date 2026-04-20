@@ -9,7 +9,7 @@ public sealed class SevenZipReal7zAesEncryptedHeaderTests
   private const string _password = "LzmaSharp-AES-Stage15";
 
   [Fact]
-  public void DecodeToEntries_РеальныйAesАрхивСЗашифрованнымHeader_СПаролем_ВозвращаетNotSupported()
+  public void DecodeToEntries_РеальныйAesАрхивСЗашифрованнымHeader_СПаролем_ВозвращаетФайл()
   {
     byte[] archive = ReadTestDataBytes("TestData/Real/aes_lzma2_singlefile_pwd_mhe_on.7z");
 
@@ -21,9 +21,65 @@ public sealed class SevenZipReal7zAesEncryptedHeaderTests
         entries: out SevenZipDecodedEntry[] entries,
         bytesConsumed: out int bytesConsumed);
 
-    Assert.Equal(SevenZipArchiveDecodeResult.NotSupported, result);
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, result);
     Assert.Equal(archive.Length, bytesConsumed);
-    Assert.Empty(entries);
+
+    SevenZipDecodedEntry entry = Assert.Single(entries);
+    Assert.False(entry.IsDirectory);
+    Assert.Equal("aes-mhe-on-real.txt", entry.Name);
+    Assert.Equal(CreateExpectedBytes(), entry.Bytes);
+  }
+
+  [Fact]
+  public void DecodeSingleFileToArray_РеальныйAesАрхивСЗашифрованнымHeader_СПаролем_ВозвращаетИсходныйФайл()
+  {
+    byte[] archive = ReadTestDataBytes("TestData/Real/aes_lzma2_singlefile_pwd_mhe_on.7z");
+
+    using SevenZipPassword password = SevenZipPassword.FromString(_password);
+
+    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeSingleFileToArray(
+        archiveBytes: archive,
+        options: SevenZipDecodeOptions.WithPassword(password),
+        fileBytes: out byte[] fileBytes,
+        fileName: out string fileName,
+        bytesConsumed: out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, result);
+    Assert.Equal(archive.Length, bytesConsumed);
+    Assert.Equal("aes-mhe-on-real.txt", fileName);
+    Assert.Equal(CreateExpectedBytes(), fileBytes);
+  }
+
+  [Fact]
+  public void ExtractToDirectory_РеальныйAesАрхивСЗашифрованнымHeader_СПаролем_ЗаписываетИсходныйФайл()
+  {
+    byte[] archive = ReadTestDataBytes("TestData/Real/aes_lzma2_singlefile_pwd_mhe_on.7z");
+
+    string root = CreateTempRoot();
+
+    try
+    {
+      using SevenZipPassword password = SevenZipPassword.FromString(_password);
+
+      SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.ExtractToDirectory(
+          archive: archive,
+          options: SevenZipDecodeOptions.WithPassword(password),
+          destinationDirectory: root,
+          overwrite: false,
+          bytesConsumed: out int bytesConsumed);
+
+      Assert.Equal(SevenZipArchiveDecodeResult.Ok, result);
+      Assert.Equal(archive.Length, bytesConsumed);
+
+      string filePath = Path.Combine(root, "aes-mhe-on-real.txt");
+
+      Assert.True(File.Exists(filePath));
+      Assert.Equal(CreateExpectedBytes(), File.ReadAllBytes(filePath));
+    }
+    finally
+    {
+      TryDeleteTree(root);
+    }
   }
 
   [Fact]
@@ -43,51 +99,27 @@ public sealed class SevenZipReal7zAesEncryptedHeaderTests
   }
 
   [Fact]
-  public void DecodeSingleFileToArray_РеальныйAesАрхивСЗашифрованнымHeader_СПаролем_ВозвращаетNotSupported()
+  public void DecodeToEntries_РеальныйAesАрхивСЗашифрованнымHeader_СНевернымПаролем_ВозвращаетInvalidData()
   {
     byte[] archive = ReadTestDataBytes("TestData/Real/aes_lzma2_singlefile_pwd_mhe_on.7z");
 
-    using SevenZipPassword password = SevenZipPassword.FromString(_password);
+    using SevenZipPassword password = SevenZipPassword.FromString("wrong-password");
 
-    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeSingleFileToArray(
-        archiveBytes: archive,
+    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeToEntries(
+        archive: archive,
         options: SevenZipDecodeOptions.WithPassword(password),
-        fileBytes: out byte[] fileBytes,
-        fileName: out string fileName,
+        entries: out SevenZipDecodedEntry[] entries,
         bytesConsumed: out int bytesConsumed);
 
-    Assert.Equal(SevenZipArchiveDecodeResult.NotSupported, result);
+    Assert.Equal(SevenZipArchiveDecodeResult.InvalidData, result);
     Assert.Equal(archive.Length, bytesConsumed);
-    Assert.Empty(fileBytes);
-    Assert.Equal(string.Empty, fileName);
+    Assert.Empty(entries);
   }
 
-  [Fact]
-  public void ExtractToDirectory_РеальныйAesАрхивСЗашифрованнымHeader_СПаролем_ВозвращаетNotSupportedИНичегоНеПишет()
+  private static byte[] CreateExpectedBytes()
   {
-    byte[] archive = ReadTestDataBytes("TestData/Real/aes_lzma2_singlefile_pwd_mhe_on.7z");
-
-    string root = CreateTempRoot();
-
-    try
-    {
-      using SevenZipPassword password = SevenZipPassword.FromString(_password);
-
-      SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.ExtractToDirectory(
-          archive: archive,
-          options: SevenZipDecodeOptions.WithPassword(password),
-          destinationDirectory: root,
-          overwrite: false,
-          bytesConsumed: out int bytesConsumed);
-
-      Assert.Equal(SevenZipArchiveDecodeResult.NotSupported, result);
-      Assert.Equal(archive.Length, bytesConsumed);
-      Assert.False(Directory.Exists(root));
-    }
-    finally
-    {
-      TryDeleteTree(root);
-    }
+    return System.Text.Encoding.UTF8.GetBytes(
+        "LzmaSharp AES encrypted header real 7z test\r\n");
   }
 
   private static byte[] ReadTestDataBytes(

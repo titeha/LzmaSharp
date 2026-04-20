@@ -152,7 +152,7 @@ public static class SevenZipArchiveDecoder
     bytesConsumed = 0;
 
     SevenZipArchiveReader reader = new();
-    SevenZipArchiveReadResult read = reader.Read(archive, out bytesConsumed);
+    SevenZipArchiveReadResult read = reader.Read(input: archive, options: options, bytesConsumed: out bytesConsumed);
 
     if (read == SevenZipArchiveReadResult.NeedMoreInput)
       return SevenZipArchiveDecodeResult.NeedMoreData;
@@ -601,7 +601,7 @@ public static class SevenZipArchiveDecoder
 
     // 2) Повторно читаем только header, чтобы получить EmptyStream/EmptyFile и вычислить IsDirectory.
     SevenZipArchiveReader reader = new();
-    SevenZipArchiveReadResult read = reader.Read(archive, out _);
+    SevenZipArchiveReadResult read = reader.Read(input: archive, options: options, bytesConsumed: out _);
 
     if (read == SevenZipArchiveReadResult.NeedMoreInput)
       return SevenZipArchiveDecodeResult.NeedMoreData;
@@ -703,7 +703,7 @@ public static class SevenZipArchiveDecoder
     SevenZipFilesInfo filesInfo;
     {
       SevenZipArchiveReader reader = new();
-      SevenZipArchiveReadResult read = reader.Read(archive, out _);
+      SevenZipArchiveReadResult read = reader.Read(input: archive, options: options, bytesConsumed: out _);
 
       if (read == SevenZipArchiveReadResult.NeedMoreInput)
         return SevenZipArchiveDecodeResult.NeedMoreData;
