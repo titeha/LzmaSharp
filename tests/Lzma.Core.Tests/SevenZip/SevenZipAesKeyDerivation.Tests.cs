@@ -316,4 +316,142 @@ public sealed class SevenZipAesKeyDerivationTests
             password,
             key));
   }
+
+  [Fact]
+  public void TryDeriveKey_ДляDirectNumCyclesPower_ИспользуетDirectDerivation()
+  {
+    var properties = new SevenZipAesProperties(
+        numCyclesPower: SevenZipAesCoder.DirectKeyNumCyclesPower,
+        salt: [0xA1, 0xA2],
+        initializationVector: []);
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    byte[] key = new byte[SevenZipAesKeyDerivation.Aes256KeySize];
+
+    bool result = SevenZipAesKeyDerivation.TryDeriveKey(
+        properties,
+        password,
+        key);
+
+    Assert.True(result);
+
+    byte[] expected = new byte[SevenZipAesKeyDerivation.Aes256KeySize];
+    expected[0] = 0xA1;
+    expected[1] = 0xA2;
+    expected[2] = 0x61;
+    expected[3] = 0x00;
+    expected[4] = 0x62;
+    expected[5] = 0x00;
+
+    Assert.Equal(expected, key);
+  }
+
+  [Fact]
+  public void TryDeriveKey_ДляОбычногоNumCyclesPower_ИспользуетSha256Derivation()
+  {
+    var properties = new SevenZipAesProperties(
+        numCyclesPower: 1,
+        salt: [0xA1],
+        initializationVector: []);
+
+    using SevenZipPassword password = SevenZipPassword.FromString("p");
+
+    byte[] key = new byte[SevenZipAesKeyDerivation.Aes256KeySize];
+
+    bool result = SevenZipAesKeyDerivation.TryDeriveKey(
+        properties,
+        password,
+        key);
+
+    Assert.True(result);
+    Assert.Equal(
+        Convert.FromHexString("BE63EDB4A17DD1D8DC9975E3B869D516410C113BE644057978824970BE774E6A"),
+        key);
+  }
+
+  [Fact]
+  public void TryDeriveKey_ДляНеподдерживаемогоNumCyclesPower_ВозвращаетFalseИОчищаетDestination()
+  {
+    var properties = new SevenZipAesProperties(
+        numCyclesPower: 25,
+        salt: [0xA1],
+        initializationVector: []);
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    byte[] key = Enumerable.Repeat((byte)0xCC, SevenZipAesKeyDerivation.Aes256KeySize).ToArray();
+
+    bool result = SevenZipAesKeyDerivation.TryDeriveKey(
+        properties,
+        password,
+        key);
+
+    Assert.False(result);
+    Assert.Equal(new byte[SevenZipAesKeyDerivation.Aes256KeySize], key);
+  }
+
+  [Fact]
+  public void TryDeriveKey_ПриМаломБуфере_БросаетArgumentException()
+  {
+    var properties = new SevenZipAesProperties(
+        numCyclesPower: 0,
+        salt: [],
+        initializationVector: []);
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    Assert.Throws<ArgumentException>(
+        () => SevenZipAesKeyDerivation.TryDeriveKey(
+            properties,
+            password,
+            new byte[SevenZipAesKeyDerivation.Aes256KeySize - 1]));
+  }
+
+  [Fact]
+  public void TryDeriveKey_ПослеDisposeПароля_БросаетObjectDisposedException()
+  {
+    var properties = new SevenZipAesProperties(
+        numCyclesPower: 0,
+        salt: [],
+        initializationVector: []);
+
+    SevenZipPassword password = SevenZipPassword.FromString("ab");
+    password.Dispose();
+
+    byte[] key = new byte[SevenZipAesKeyDerivation.Aes256KeySize];
+
+    Assert.Throws<ObjectDisposedException>(
+        () => SevenZipAesKeyDerivation.TryDeriveKey(
+            properties,
+            password,
+            key));
+  }
+
+  [Fact]
+  public void TryDeriveKey_ПриNullProperties_БросаетArgumentNullException()
+  {
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    Assert.Throws<ArgumentNullException>(
+        () => SevenZipAesKeyDerivation.TryDeriveKey(
+            null!,
+            password,
+            new byte[SevenZipAesKeyDerivation.Aes256KeySize]));
+  }
+
+  [Fact]
+  public void TryDeriveKey_ПриNullPassword_БросаетArgumentNullException()
+  {
+    var properties = new SevenZipAesProperties(
+        numCyclesPower: 0,
+        salt: [],
+        initializationVector: []);
+
+    Assert.Throws<ArgumentNullException>(
+        () => SevenZipAesKeyDerivation.TryDeriveKey(
+            properties,
+            null!,
+            new byte[SevenZipAesKeyDerivation.Aes256KeySize]));
+  }
 }

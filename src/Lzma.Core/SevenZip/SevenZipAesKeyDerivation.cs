@@ -119,4 +119,28 @@ public static class SevenZipAesKeyDerivation
         CryptographicOperations.ZeroMemory(loopBuffer);
     }
   }
+
+  /// <summary>
+  /// Пытается построить AES-256 ключ для 7zAES,
+  /// автоматически выбирая direct-ветку или SHA-256 derivation.
+  /// </summary>
+  public static bool TryDeriveKey(
+      SevenZipAesProperties properties,
+      SevenZipPassword password,
+      Span<byte> destinationKey)
+  {
+    ArgumentNullException.ThrowIfNull(properties);
+    ArgumentNullException.ThrowIfNull(password);
+
+    if (properties.NumCyclesPower == SevenZipAesCoder.DirectKeyNumCyclesPower)
+      return TryDeriveDirectKey(
+                properties,
+                password,
+                destinationKey);
+
+    return TryDeriveSha256Key(
+        properties,
+        password,
+        destinationKey);
+  }
 }
