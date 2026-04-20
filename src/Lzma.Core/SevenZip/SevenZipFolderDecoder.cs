@@ -256,10 +256,26 @@ public static class SevenZipFolderDecoder
           return SevenZipFolderDecodeResult.InvalidData;
         }
 
-        if (decoded.Length != expectedUnpackSize)
+        if (decoded.Length < expectedUnpackSize)
         {
           decoded = [];
           return SevenZipFolderDecodeResult.InvalidData;
+        }
+
+        if (decoded.Length > expectedUnpackSize)
+        {
+          ReadOnlySpan<byte> tail = decoded.AsSpan(expectedUnpackSize);
+
+          for (int i = 0; i < tail.Length; i++)
+          {
+            if (tail[i] != 0)
+            {
+              decoded = [];
+              return SevenZipFolderDecodeResult.InvalidData;
+            }
+          }
+
+          Array.Resize(ref decoded, expectedUnpackSize);
         }
 
         return SevenZipFolderDecodeResult.Ok;
