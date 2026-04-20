@@ -90,6 +90,147 @@ public sealed class SevenZipArchiveDecoderAesCopyTests
     Assert.Equal(archive.Length, bytesConsumed);
   }
 
+  [Fact]
+  public void ExtractToDirectory_AesCopyArchive_СПаролем_ЗаписываетФайл()
+  {
+    byte[] plain = new byte[16];
+
+    // AES-256-CBC:
+    // key = 32 нулевых байта,
+    // iv = 16 нулевых байт,
+    // plaintext = 16 нулевых байт.
+    byte[] encrypted = Convert.FromHexString("DC95C078A2408989AD48A21492842087");
+
+    byte[] archive = Build7zArchive_SingleFile_AesThenCopy(
+        packedStreams: encrypted,
+        fileName: "aes.bin",
+        aesUnpackSize: (ulong)plain.Length,
+        finalUnpackSize: (ulong)plain.Length,
+        folderCrc: Crc32.Compute(plain));
+
+    string root = CreateTempRoot();
+
+    try
+    {
+      using SevenZipPassword password = SevenZipPassword.FromString("");
+
+      SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.ExtractToDirectory(
+          archive: archive,
+          options: SevenZipDecodeOptions.WithPassword(password),
+          destinationDirectory: root,
+          overwrite: false,
+          bytesConsumed: out int bytesConsumed);
+
+      Assert.Equal(SevenZipArchiveDecodeResult.Ok, result);
+      Assert.Equal(archive.Length, bytesConsumed);
+
+      string filePath = Path.Combine(root, "aes.bin");
+
+      Assert.True(File.Exists(filePath));
+      Assert.Equal(plain, File.ReadAllBytes(filePath));
+    }
+    finally
+    {
+      TryDeleteTree(root);
+    }
+  }
+
+  [Fact]
+  public void ExtractToDirectory_AesCopyArchive_БезПароля_ВозвращаетNotSupportedИНичегоНеПишет()
+  {
+    byte[] plain = new byte[16];
+    byte[] encrypted = Convert.FromHexString("DC95C078A2408989AD48A21492842087");
+
+    byte[] archive = Build7zArchive_SingleFile_AesThenCopy(
+        packedStreams: encrypted,
+        fileName: "aes.bin",
+        aesUnpackSize: (ulong)plain.Length,
+        finalUnpackSize: (ulong)plain.Length,
+        folderCrc: Crc32.Compute(plain));
+
+    string root = CreateTempRoot();
+
+    try
+    {
+      SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.ExtractToDirectory(
+          archive: archive,
+          options: SevenZipDecodeOptions.Default,
+          destinationDirectory: root,
+          overwrite: false,
+          bytesConsumed: out int bytesConsumed);
+
+      Assert.Equal(SevenZipArchiveDecodeResult.NotSupported, result);
+      Assert.Equal(archive.Length, bytesConsumed);
+
+      Assert.False(File.Exists(Path.Combine(root, "aes.bin")));
+      Assert.False(Directory.Exists(root));
+    }
+    finally
+    {
+      TryDeleteTree(root);
+    }
+  }
+
+  [Fact]
+  public void ExtractToDirectory_AesCopyArchive_СНевернымПаролем_ВозвращаетInvalidDataИНичегоНеПишет()
+  {
+    byte[] plain = new byte[16];
+    byte[] encrypted = Convert.FromHexString("DC95C078A2408989AD48A21492842087");
+
+    byte[] archive = Build7zArchive_SingleFile_AesThenCopy(
+        packedStreams: encrypted,
+        fileName: "aes.bin",
+        aesUnpackSize: (ulong)plain.Length,
+        finalUnpackSize: (ulong)plain.Length,
+        folderCrc: Crc32.Compute(plain));
+
+    string root = CreateTempRoot();
+
+    try
+    {
+      using SevenZipPassword password = SevenZipPassword.FromString("wrong");
+
+      SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.ExtractToDirectory(
+          archive: archive,
+          options: SevenZipDecodeOptions.WithPassword(password),
+          destinationDirectory: root,
+          overwrite: false,
+          bytesConsumed: out int bytesConsumed);
+
+      Assert.Equal(SevenZipArchiveDecodeResult.InvalidData, result);
+      Assert.Equal(archive.Length, bytesConsumed);
+
+      Assert.False(File.Exists(Path.Combine(root, "aes.bin")));
+      Assert.False(Directory.Exists(root));
+    }
+    finally
+    {
+      TryDeleteTree(root);
+    }
+  }
+
+  private static string CreateTempRoot()
+  {
+    return Path.Combine(
+        Path.GetTempPath(),
+        "LzmaSharpTests",
+        nameof(SevenZipArchiveDecoderAesCopyTests),
+        Guid.NewGuid().ToString("N"));
+  }
+
+  private static void TryDeleteTree(string path)
+  {
+    try
+    {
+      if (Directory.Exists(path))
+        Directory.Delete(path, recursive: true);
+    }
+    catch
+    {
+      // best-effort cleanup для тестового каталога
+    }
+  }
+
   private static byte[] Build7zArchive_SingleFile_AesThenCopy(
       byte[] packedStreams,
       string fileName,
