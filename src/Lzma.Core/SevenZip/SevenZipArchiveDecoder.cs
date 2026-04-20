@@ -512,18 +512,54 @@ public static class SevenZipArchiveDecoder
     return SevenZipArchiveDecodeResult.Ok;
   }
 
-  public static SevenZipArchiveDecodeResult DecodeToEntries(ReadOnlySpan<byte> archive, out SevenZipDecodedEntry[] entries)
-    => DecodeToEntries(archive, out entries, out _);
-
   public static SevenZipArchiveDecodeResult DecodeToEntries(
     ReadOnlySpan<byte> archive,
-    out SevenZipDecodedEntry[] entries,
-    out int bytesConsumed)
+    out SevenZipDecodedEntry[] entries)
   {
+    return DecodeToEntries(
+        archive: archive,
+        options: SevenZipDecodeOptions.Default,
+        entries: out entries,
+        bytesConsumed: out _);
+  }
+
+  public static SevenZipArchiveDecodeResult DecodeToEntries(
+      ReadOnlySpan<byte> archive,
+      SevenZipDecodeOptions options,
+      out SevenZipDecodedEntry[] entries)
+  {
+    return DecodeToEntries(
+        archive: archive,
+        options: options,
+        entries: out entries,
+        bytesConsumed: out _);
+  }
+
+  public static SevenZipArchiveDecodeResult DecodeToEntries(
+      ReadOnlySpan<byte> archive,
+      out SevenZipDecodedEntry[] entries,
+      out int bytesConsumed)
+  {
+    return DecodeToEntries(
+        archive: archive,
+        options: SevenZipDecodeOptions.Default,
+        entries: out entries,
+        bytesConsumed: out bytesConsumed);
+  }
+
+  public static SevenZipArchiveDecodeResult DecodeToEntries(
+      ReadOnlySpan<byte> archive,
+      SevenZipDecodeOptions options,
+      out SevenZipDecodedEntry[] entries,
+      out int bytesConsumed)
+  {
+    ArgumentNullException.ThrowIfNull(options);
+
     entries = [];
+    bytesConsumed = 0;
 
     // 1) Сначала делаем обычную распаковку (чтобы не трогать уже стабилизированный код).
-    SevenZipArchiveDecodeResult r = DecodeToArray(archive, out SevenZipDecodedFile[] files, out bytesConsumed);
+    SevenZipArchiveDecodeResult r = DecodeToArray(archive, options, out SevenZipDecodedFile[] files, out bytesConsumed);
     if (r != SevenZipArchiveDecodeResult.Ok)
       return r;
 
