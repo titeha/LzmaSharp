@@ -28,6 +28,7 @@ docs/
   ROADMAP.md
   TESTS_PLAN.md
   STAGE1_STATUS.md
+  STAGE15_AES_STATUS.md
 
 vendor/
   lzma-sdk/
@@ -195,6 +196,7 @@ Reader не должен заниматься безопасной запись�
 - `PPMd`;
 - `Deflate`;
 - `Deflate64`.
+- `AES` для поддерживаемых сценариев чтения 7z.
 
 Новые изменения в этом компоненте должны сопровождаться тестом, если они меняют публичный контракт, error-path или поведение на реальном архиве.
 
@@ -241,24 +243,81 @@ Reader не должен заниматься безопасной запись�
 
 ## AES и зашифрованные архивы
 
-AES не входит в этап 1.
+AES не входил в этап 1 и вынесен в отдельный этап 1.5.
 
-На этапе 1 архивы с AES и зашифрованными заголовками должны обрабатываться как явно неподдерживаемые сценарии, а не как случайные ошибки.
+На ветке `stage15-aes` реализован decoder-path для поддерживаемых AES-сценариев 7z.
 
-Поддержка AES вынесена в будущий этап 1.5.
+Архитектурно AES добавлен как слой перед обычным декодированием packed stream-ов:
 
-Архитектурно AES должен быть добавлен как слой перед обычным декодированием packed stream-ов:
+1. определяется AES coder;
+2. разбираются свойства AES coder-а;
+3. пароль передаётся через явный `SevenZipDecodeOptions`;
+4. парольный материал кодируется как UTF-16LE без BOM;
+5. выполняется key derivation по правилам 7zAES;
+6. строится полный IV из AES properties;
+7. packed stream расшифровывается через AES-256-CBC;
+8. расшифрованные данные передаются в обычный pipeline `SevenZipFolderDecoder`.
 
-1. определить AES coder;
-2. разобрать свойства AES;
-3. получить пароль через явный API;
-4. выполнить derivation ключа по правилам 7z;
-5. расшифровать packed stream;
-6. передать расшифрованные данные в уже существующий pipeline folder decoder-а.
+Поддержаны два основных уровня AES:
 
-Важно, чтобы добавление AES не ломало обычные нешифрованные архивы и не смешивало ввод пароля с низкоуровневой логикой codec-ов.
+- encrypted packed streams;
+- encrypted header.
 
-Запись AES-архивов относится к будущему развитию writer-а и не является частью этапа 1.5.
+AES подключён в такие уровни:
+
+- `SevenZipAesCoder`;
+- `SevenZipAesProperties`;
+- `SevenZipPassword`;
+- `SevenZipAesKeyDerivation`;
+- `SevenZipAesInitializationVector`;
+- `SevenZipAesDecryptor`;
+- `SevenZipAesPackedStreamDecryptor`;
+- `SevenZipDecodeOptions`;
+- `SevenZipFolderDecoder`;
+- `SevenZipEncodedHeaderDecoder`;
+- `SevenZipArchiveReader`;
+- `SevenZipArchiveDecoder`.
+
+На уровне верхнего API пароль проходит по цепочке:
+
+```text
+SevenZipArchiveDecoder
+  -> SevenZipArchiveReader
+  -> SevenZipEncodedHeaderDecoder
+  -> SevenZipFolderDecoder
+  -> AES decrypt
+```
+
+и по цепочке:
+
+```text
+ExtractToDirectory
+  -> DecodeToEntries
+    -> DecodeToArray
+      -> SevenZipFolderDecoder
+        -> AES decrypt
+```
+
+Покрытые real-archive сценарии:
+
+- mhe=off, single-file, AES + Copy;
+- mhe=off, single-file, AES + LZMA2;
+- mhe=off, multi-file, AES + LZMA2;
+- mhe=off, solid multi-file, AES + LZMA2;
+- mhe=on, single-file, AES + LZMA2;
+- mhe=on, multi-file, AES + LZMA2;
+- mhe=on, solid multi-file, AES + LZMA2.
+
+Ошибки AES должны возвращаться согласованно:
+
+- без пароля — NotSupported;
+- неверный пароль — InvalidData;
+- повреждённые encrypted данные — InvalidData;
+- неподдерживаемый AES-сценарий — NotSupported.
+
+Для ExtractToDirectory важное правило остаётся прежним: ошибка AES не должна создавать файлы или директории на диске.
+
+Запись AES-архивов не входит в текущую реализацию AES decoder-path. Она относится к будущему развитию writer-а.
 
 ## API-направление
 
@@ -267,6 +326,7 @@ AES не входит в этап 1.
 - работа с `byte[]`, `ReadOnlySpan<byte>` и `Span<byte>` внутри ядра;
 - декодирование архива в память;
 - распаковка на диск через безопасный high-level API;
+- передача пароля для AES через `SevenZipDecodeOptions`;
 - явные результаты вместо неявных исключений для ожидаемых ошибок данных.
 
 Долгосрочное направление:
