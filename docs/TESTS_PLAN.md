@@ -120,22 +120,73 @@
 
 ## AES и зашифрованные архивы
 
-AES и зашифрованные заголовки не входят в этап 1.
+AES не входил в этап 1 и был вынесен в отдельный этап 1.5.
 
-На этапе 1 для таких архивов должны оставаться видимыми только явные `NotSupported`-сценарии. Это нужно, чтобы ограничение было заметным и проверяемым, а не выглядело как случайно отсутствующая функциональность.
+На ветке `stage15-aes` уже реализован и покрыт тестами decoder-path для основных AES-сценариев 7z.
 
-Полноценная поддержка AES переносится в отдельный будущий этап 1.5.
+Покрыты низкоуровневые компоненты:
 
-Для этапа 1.5 понадобится отдельная группа тестов:
+- распознавание 7zAES method id;
+- разбор AES properties;
+- проверка поддерживаемых и неподдерживаемых `NumCyclesPower`;
+- парольный материал UTF-16LE без BOM;
+- direct key derivation для `NumCyclesPower == 0x3F`;
+- SHA-256 key derivation для поддерживаемых `NumCyclesPower`;
+- общий key derivation wrapper;
+- построение IV из AES properties;
+- AES-256-CBC decrypt helper;
+- AES packed stream decrypt wrapper.
 
-- реальные AES-архивы;
-- архивы с зашифрованными заголовками;
-- корректный пароль;
-- отсутствующий пароль;
-- неверный пароль;
-- повреждённые AES-данные;
-- проверка, что ошибки AES не приводят к небезопасной записи на диск;
-- проверка совместимости с обычными нешифрованными архивами после добавления AES.
+Покрыто прокидывание `SevenZipDecodeOptions` через основные API:
+
+- `SevenZipFolderDecoder.DecodeFolderToArray`;
+- `SevenZipArchiveReader.Read`;
+- `SevenZipArchiveDecoder.DecodeToArray`;
+- `SevenZipArchiveDecoder.DecodeToEntries`;
+- `SevenZipArchiveDecoder.DecodeSingleFileToArray`;
+- `SevenZipArchiveDecoder.ExtractToDirectory`.
+
+Покрыты real-archive сценарии, созданные настоящим `7z`:
+
+- `mhe=off`, single-file, `AES + Copy`;
+- `mhe=off`, single-file, `AES + LZMA2`;
+- `mhe=off`, multi-file, `AES + LZMA2`;
+- `mhe=off`, solid multi-file, `AES + LZMA2`;
+- `mhe=on`, single-file, `AES + LZMA2`;
+- `mhe=on`, multi-file, `AES + LZMA2`;
+- `mhe=on`, solid multi-file, `AES + LZMA2`.
+
+Для AES-сценариев должны оставаться обязательными проверки:
+
+- успешное чтение с правильным паролем;
+- `NotSupported` без пароля;
+- `InvalidData` при неверном пароле;
+- отсутствие файловой записи при ошибке;
+- сохранение поведения обычных нешифрованных архивов;
+- `ExtractToDirectory` для поддерживаемых real-archive сценариев.
+
+Новые AES-тесты дальше добавляются только если они закрывают конкретный риск:
+
+- новый real-archive сценарий;
+- новый topology-сценарий folder-а;
+- crash / exception path;
+- повреждённые encrypted данные;
+- ошибка пароля;
+- безопасность распаковки на диск;
+- публичный контракт `Ok` / `InvalidData` / `NotSupported`.
+
+Не нужно добавлять новые synthetic AES edge-case тесты только ради полного перебора комбинаций.
+
+## Перед закрытием этапа 1.5
+
+Перед закрытием AES-этапа нужно:
+
+- прогнать полный набор тестов;
+- проверить, что все новые real-archive генераторы добавлены в `tools/TestArchiveGenerators`;
+- проверить, что все новые `.7z`-архивы добавлены в `TestData/Real`;
+- сверить `README.md`, `ROADMAP.md`, `ARCHITECTURE.md`, `STAGE15_AES_STATUS.md` и этот файл;
+- убедиться, что ошибки AES не создают файлов и директорий при `ExtractToDirectory`;
+- после финального зелёного прогона зафиксировать завершение этапа 1.5 отдельным коммитом.
 
 ## После этапа 1
 
