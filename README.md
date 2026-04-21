@@ -51,6 +51,7 @@ docs/
   ROADMAP.md
   TESTS_PLAN.md
   STAGE1_STATUS.md
+  STAGE15_AES_STATUS.md
 
 vendor/
   lzma-sdk/               # Эталонные исходники для сверки
@@ -143,6 +144,44 @@ dotnet test
 - `SharpCompress` — временная поддержка отдельных методов 7z, например `PPMd` и `Deflate64`.
 
 Долгосрочное направление не меняется: критичные кодеки и логика контейнера должны постепенно переходить на собственные реализации проекта.
+
+## Текущая поддержка AES
+
+На ветке `stage15-aes` реализован decoder-path для AES-сценариев 7z.
+
+Поддержано:
+
+- распознавание 7zAES coder-а;
+- разбор свойств AES coder-а;
+- парольный материал в UTF-16LE без BOM;
+- direct key derivation для `NumCyclesPower == 0x3F`;
+- обычный SHA-256 key derivation для поддерживаемых `NumCyclesPower`;
+- построение IV из AES properties;
+- AES-256-CBC расшифровка packed stream-ов;
+- передача пароля через `SevenZipDecodeOptions`;
+- чтение AES-архивов без шифрования заголовков;
+- чтение AES-архивов с зашифрованными заголовками;
+- декодирование и распаковка AES-архивов через верхние API.
+
+Покрыты реальные 7z-сценарии:
+
+- `mhe=off`, single-file, `AES + Copy`;
+- `mhe=off`, single-file, `AES + LZMA2`;
+- `mhe=off`, multi-file, `AES + LZMA2`;
+- `mhe=off`, solid multi-file, `AES + LZMA2`;
+- `mhe=on`, single-file, `AES + LZMA2`;
+- `mhe=on`, multi-file, `AES + LZMA2`;
+- `mhe=on`, solid multi-file, `AES + LZMA2`.
+
+Пока не входит:
+
+- запись AES-архивов;
+- UI для ввода пароля;
+- хранение паролей;
+- интеграция с системными хранилищами секретов;
+- streaming decrypt API;
+- оптимизация derivation для больших `NumCyclesPower`;
+- собственная реализация AES.
 
 ## Границы этапов
 
