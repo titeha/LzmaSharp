@@ -81,8 +81,8 @@ internal static class SevenZipEncodedHeaderDecoder
       return SevenZipArchiveReadResult.NotSupported;
 
     ulong[]? folderUnpackSizes = unpackInfo.FolderUnpackSizes[0];
-    if (folderUnpackSizes is null || folderUnpackSizes.Length != 1)
-      return SevenZipArchiveReadResult.NotSupported;
+    if (folderUnpackSizes is null || folderUnpackSizes.Length == 0)
+      return SevenZipArchiveReadResult.InvalidData;
 
     SevenZipFolderDecodeResult folderDecodeResult = SevenZipFolderDecoder.DecodeFolderToArray(
         streamsInfo: streamsInfo,
