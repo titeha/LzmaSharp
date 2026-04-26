@@ -15,6 +15,16 @@ public static class SevenZipGostCoder
   public const byte CurrentPropertiesVersion = 1;
 
   /// <summary>
+  /// Специальное значение properties, при котором ключ строится напрямую
+  /// из salt и password без обычного KDF.
+  /// </summary>
+  /// <remarks>
+  /// Для GOST-ветки LzmaSharp это экспериментальный test-friendly режим.
+  /// Production KDF будет добавлен отдельным шагом через Стрибог.
+  /// </remarks>
+  public const byte DirectKeyNumCyclesPower = 0x3F;
+
+  /// <summary>
   /// Максимальный размер salt в properties экспериментального GOST coder-а.
   /// </summary>
   public const int MaxSaltSize = 32;
@@ -112,47 +122,39 @@ public static class SevenZipGostCoder
 /// <summary>
 /// Разобранные properties экспериментального GOST coder-а.
 /// </summary>
-public sealed class SevenZipGostProperties
+/// <remarks>
+/// Создаёт объект разобранных properties экспериментального GOST coder-а.
+/// </remarks>
+public sealed class SevenZipGostProperties(
+    byte version,
+    byte flags,
+    byte numCyclesPower,
+    byte[] salt,
+    byte[] initializationVector)
 {
-  /// <summary>
-  /// Создаёт объект разобранных properties экспериментального GOST coder-а.
-  /// </summary>
-  public SevenZipGostProperties(
-      byte version,
-      byte flags,
-      byte numCyclesPower,
-      byte[] salt,
-      byte[] initializationVector)
-  {
-    Version = version;
-    Flags = flags;
-    NumCyclesPower = numCyclesPower;
-    Salt = salt;
-    InitializationVector = initializationVector;
-  }
 
   /// <summary>
   /// Версия формата properties.
   /// </summary>
-  public byte Version { get; }
+  public byte Version { get; } = version;
 
   /// <summary>
   /// Flags поля properties.
   /// </summary>
-  public byte Flags { get; }
+  public byte Flags { get; } = flags;
 
   /// <summary>
   /// Показатель числа циклов derivation.
   /// </summary>
-  public byte NumCyclesPower { get; }
+  public byte NumCyclesPower { get; } = numCyclesPower;
 
   /// <summary>
   /// Salt.
   /// </summary>
-  public byte[] Salt { get; }
+  public byte[] Salt { get; } = salt;
 
   /// <summary>
   /// Initialization Vector.
   /// </summary>
-  public byte[] InitializationVector { get; }
+  public byte[] InitializationVector { get; } = initializationVector;
 }
