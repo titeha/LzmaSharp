@@ -248,6 +248,151 @@ public sealed class SevenZipArchiveDecoderGostKuznyechikLzma2Tests
     }
   }
 
+  [Fact]
+  public void DecodeToArray_GostKuznyechikLzma2Archive_СПаролем_ВозвращаетФайл()
+  {
+    byte[] plain = CreateGostKuznyechikLzma2PlainForTest();
+    const string fileName = "gost-lzma2.bin";
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+    byte[] archive = BuildGostKuznyechikLzma2ArchiveForTest(
+        plain: plain,
+        fileName: fileName,
+        password: password);
+
+    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeToArray(
+        archive: archive,
+        options: SevenZipDecodeOptions.WithPassword(password),
+        files: out SevenZipDecodedFile[] files,
+        bytesConsumed: out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, result);
+    Assert.Equal(archive.Length, bytesConsumed);
+
+    SevenZipDecodedFile file = Assert.Single(files);
+    Assert.Equal(fileName, file.Name);
+    Assert.Equal(plain, file.Bytes);
+  }
+
+  [Fact]
+  public void DecodeToArray_GostKuznyechikLzma2Archive_БезПароля_ВозвращаетNotSupported()
+  {
+    byte[] plain = CreateGostKuznyechikLzma2PlainForTest();
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+    byte[] archive = BuildGostKuznyechikLzma2ArchiveForTest(
+        plain: plain,
+        fileName: "gost-lzma2.bin",
+        password: password);
+
+    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeToArray(
+        archive: archive,
+        options: SevenZipDecodeOptions.Default,
+        files: out SevenZipDecodedFile[] files,
+        bytesConsumed: out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.NotSupported, result);
+    Assert.Equal(archive.Length, bytesConsumed);
+    Assert.Empty(files);
+  }
+
+  [Fact]
+  public void DecodeToArray_GostKuznyechikLzma2Archive_СНевернымПаролем_ВозвращаетInvalidData()
+  {
+    byte[] plain = CreateGostKuznyechikLzma2PlainForTest();
+
+    using SevenZipPassword correctPassword = SevenZipPassword.FromString("ab");
+    byte[] archive = BuildGostKuznyechikLzma2ArchiveForTest(
+        plain: plain,
+        fileName: "gost-lzma2.bin",
+        password: correctPassword);
+
+    using SevenZipPassword wrongPassword = SevenZipPassword.FromString("wrong");
+
+    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeToArray(
+        archive: archive,
+        options: SevenZipDecodeOptions.WithPassword(wrongPassword),
+        files: out SevenZipDecodedFile[] files,
+        bytesConsumed: out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.InvalidData, result);
+    Assert.Equal(archive.Length, bytesConsumed);
+    Assert.Empty(files);
+  }
+
+  [Fact]
+  public void DecodeToEntries_GostKuznyechikLzma2Archive_СПаролем_ВозвращаетФайловыйEntry()
+  {
+    byte[] plain = CreateGostKuznyechikLzma2PlainForTest();
+    const string fileName = "gost-lzma2.bin";
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+    byte[] archive = BuildGostKuznyechikLzma2ArchiveForTest(
+        plain: plain,
+        fileName: fileName,
+        password: password);
+
+    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeToEntries(
+        archive: archive,
+        options: SevenZipDecodeOptions.WithPassword(password),
+        entries: out SevenZipDecodedEntry[] entries,
+        bytesConsumed: out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, result);
+    Assert.Equal(archive.Length, bytesConsumed);
+
+    SevenZipDecodedEntry entry = Assert.Single(entries);
+    Assert.Equal(fileName, entry.Name);
+    Assert.False(entry.IsDirectory);
+    Assert.Equal(plain, entry.Bytes);
+  }
+
+  [Fact]
+  public void DecodeToEntries_GostKuznyechikLzma2Archive_БезПароля_ВозвращаетNotSupported()
+  {
+    byte[] plain = CreateGostKuznyechikLzma2PlainForTest();
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+    byte[] archive = BuildGostKuznyechikLzma2ArchiveForTest(
+        plain: plain,
+        fileName: "gost-lzma2.bin",
+        password: password);
+
+    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeToEntries(
+        archive: archive,
+        options: SevenZipDecodeOptions.Default,
+        entries: out SevenZipDecodedEntry[] entries,
+        bytesConsumed: out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.NotSupported, result);
+    Assert.Equal(archive.Length, bytesConsumed);
+    Assert.Empty(entries);
+  }
+
+  [Fact]
+  public void DecodeToEntries_GostKuznyechikLzma2Archive_СНевернымПаролем_ВозвращаетInvalidData()
+  {
+    byte[] plain = CreateGostKuznyechikLzma2PlainForTest();
+
+    using SevenZipPassword correctPassword = SevenZipPassword.FromString("ab");
+    byte[] archive = BuildGostKuznyechikLzma2ArchiveForTest(
+        plain: plain,
+        fileName: "gost-lzma2.bin",
+        password: correctPassword);
+
+    using SevenZipPassword wrongPassword = SevenZipPassword.FromString("wrong");
+
+    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeToEntries(
+        archive: archive,
+        options: SevenZipDecodeOptions.WithPassword(wrongPassword),
+        entries: out SevenZipDecodedEntry[] entries,
+        bytesConsumed: out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.InvalidData, result);
+    Assert.Equal(archive.Length, bytesConsumed);
+    Assert.Empty(entries);
+  }
+
   private static byte[] CreateGostKuznyechikLzma2PlainForTest()
   {
     var plain = new byte[256];
