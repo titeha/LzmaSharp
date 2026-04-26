@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+
 using Lzma.Core.Crypto.Gost;
 
 namespace Lzma.Core.SevenZip;
@@ -28,6 +30,65 @@ public enum SevenZipGostDecryptResult
 /// </summary>
 public static class SevenZipGostPackedStreamDecryptor
 {
+  /// <summary>
+  /// Пытается расшифровать packed stream через парольный материал.
+  /// </summary>
+  public static SevenZipGostDecryptResult TryDecrypt(
+      ReadOnlySpan<byte> methodId,
+      SevenZipGostProperties properties,
+      SevenZipPassword password,
+      ReadOnlySpan<byte> ciphertext,
+      out byte[] plaintext)
+  {
+    ArgumentNullException.ThrowIfNull(properties);
+    ArgumentNullException.ThrowIfNull(password);
+
+    plaintext = [];
+
+    if (SevenZipGostCoder.IsMagmaMethodId(methodId))
+    {
+      plaintext = [];
+      return SevenZipGostDecryptResult.NotSupported;
+    }
+
+    if (!SevenZipGostCoder.IsKuznyechikMethodId(methodId))
+    {
+      plaintext = [];
+      return SevenZipGostDecryptResult.InvalidData;
+    }
+
+    if (properties.NumCyclesPower != SevenZipGostCoder.DirectKeyNumCyclesPower)
+    {
+      plaintext = [];
+      return SevenZipGostDecryptResult.NotSupported;
+    }
+
+    Span<byte> key = stackalloc byte[SevenZipGostKeyDerivation.Gost256KeySize];
+
+    try
+    {
+      if (!SevenZipGostKeyDerivation.TryDeriveDirectKey(
+          properties,
+          password,
+          key))
+      {
+        plaintext = [];
+        return SevenZipGostDecryptResult.InvalidData;
+      }
+
+      return TryDecrypt(
+          methodId: methodId,
+          properties: properties,
+          key: key,
+          ciphertext: ciphertext,
+          plaintext: out plaintext);
+    }
+    finally
+    {
+      CryptographicOperations.ZeroMemory(key);
+    }
+  }
+
   /// <summary>
   /// Пытается расшифровать packed stream.
   /// </summary>
