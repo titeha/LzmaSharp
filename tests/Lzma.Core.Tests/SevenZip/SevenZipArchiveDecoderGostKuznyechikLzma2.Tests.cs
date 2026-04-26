@@ -144,6 +144,160 @@ public sealed class SevenZipArchiveDecoderGostKuznyechikLzma2Tests
     Assert.Equal(string.Empty, decodedName);
   }
 
+  [Fact]
+  public void ExtractToDirectory_GostKuznyechikLzma2Archive_СПаролем_ЗаписываетФайл()
+  {
+    byte[] plain = CreateGostKuznyechikLzma2PlainForTest();
+    const string fileName = "gost-lzma2.bin";
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+    byte[] archive = BuildGostKuznyechikLzma2ArchiveForTest(
+        plain: plain,
+        fileName: fileName,
+        password: password);
+
+    string root = CreateTempRoot();
+
+    try
+    {
+      SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.ExtractToDirectory(
+          archive: archive,
+          options: SevenZipDecodeOptions.WithPassword(password),
+          destinationDirectory: root,
+          overwrite: false,
+          bytesConsumed: out int bytesConsumed);
+
+      Assert.Equal(SevenZipArchiveDecodeResult.Ok, result);
+      Assert.Equal(archive.Length, bytesConsumed);
+
+      string filePath = Path.Combine(root, fileName);
+      Assert.True(File.Exists(filePath));
+      Assert.Equal(plain, File.ReadAllBytes(filePath));
+    }
+    finally
+    {
+      TryDeleteTree(root);
+    }
+  }
+
+  [Fact]
+  public void ExtractToDirectory_GostKuznyechikLzma2Archive_БезПароля_ВозвращаетNotSupportedИНичегоНеПишет()
+  {
+    byte[] plain = CreateGostKuznyechikLzma2PlainForTest();
+    const string fileName = "gost-lzma2.bin";
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+    byte[] archive = BuildGostKuznyechikLzma2ArchiveForTest(
+        plain: plain,
+        fileName: fileName,
+        password: password);
+
+    string root = CreateTempRoot();
+
+    try
+    {
+      SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.ExtractToDirectory(
+          archive: archive,
+          options: SevenZipDecodeOptions.Default,
+          destinationDirectory: root,
+          overwrite: false,
+          bytesConsumed: out int bytesConsumed);
+
+      Assert.Equal(SevenZipArchiveDecodeResult.NotSupported, result);
+      Assert.Equal(archive.Length, bytesConsumed);
+      AssertDestinationIsEmptyOrMissing(root, fileName);
+    }
+    finally
+    {
+      TryDeleteTree(root);
+    }
+  }
+
+  [Fact]
+  public void ExtractToDirectory_GostKuznyechikLzma2Archive_СНевернымПаролем_ВозвращаетInvalidDataИНичегоНеПишет()
+  {
+    byte[] plain = CreateGostKuznyechikLzma2PlainForTest();
+    const string fileName = "gost-lzma2.bin";
+
+    using SevenZipPassword correctPassword = SevenZipPassword.FromString("ab");
+    byte[] archive = BuildGostKuznyechikLzma2ArchiveForTest(
+        plain: plain,
+        fileName: fileName,
+        password: correctPassword);
+
+    string root = CreateTempRoot();
+
+    try
+    {
+      using SevenZipPassword wrongPassword = SevenZipPassword.FromString("wrong");
+
+      SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.ExtractToDirectory(
+          archive: archive,
+          options: SevenZipDecodeOptions.WithPassword(wrongPassword),
+          destinationDirectory: root,
+          overwrite: false,
+          bytesConsumed: out int bytesConsumed);
+
+      Assert.Equal(SevenZipArchiveDecodeResult.InvalidData, result);
+      Assert.Equal(archive.Length, bytesConsumed);
+      AssertDestinationIsEmptyOrMissing(root, fileName);
+    }
+    finally
+    {
+      TryDeleteTree(root);
+    }
+  }
+
+  private static byte[] CreateGostKuznyechikLzma2PlainForTest()
+  {
+    var plain = new byte[256];
+
+    for (int i = 0; i < plain.Length; i++)
+    {
+      plain[i] = unchecked((byte)(i * 31 + 7));
+    }
+
+    return plain;
+  }
+
+  private static byte[] BuildGostKuznyechikLzma2ArchiveForTest(
+      byte[] plain,
+      string fileName,
+      SevenZipPassword password)
+  {
+    byte[] salt = [0xA1, 0xA2];
+    byte[] iv = [0x12, 0x34, 0x56, 0x78, 0x90, 0xAB, 0xCE, 0xF0];
+    byte[] gostProperties = CreateGostDirectProperties(salt, iv);
+
+    const int dictionarySize = 1 << 20;
+    byte[] lzma2Packed = Lzma2CopyEncoder.Encode(
+        plain,
+        dictionarySize,
+        out byte lzma2PropertiesByte);
+
+    byte[] encrypted = EncryptKuznyechikDirectKeyForTest(
+        gostProperties,
+        password,
+        lzma2Packed);
+
+    return Build7zArchive_SingleFile_GostKuznyechikThenLzma2(
+        packedStreams: encrypted,
+        fileName: fileName,
+        gostProperties: gostProperties,
+        lzma2Properties: [lzma2PropertiesByte],
+        gostUnpackSize: (ulong)lzma2Packed.Length,
+        finalUnpackSize: (ulong)plain.Length,
+        folderCrc: Crc32.Compute(plain));
+  }
+
+  private static void AssertDestinationIsEmptyOrMissing(string root, string fileName)
+  {
+    Assert.False(File.Exists(Path.Combine(root, fileName)));
+
+    if (Directory.Exists(root))
+      Assert.Empty(Directory.GetFileSystemEntries(root));
+  }
+
   private static byte[] CreatePlain()
   {
     return System.Text.Encoding.UTF8.GetBytes(
@@ -457,5 +611,29 @@ public sealed class SevenZipArchiveDecoderGostKuznyechikLzma2Tests
     output.Add((byte)(value >> 8));
     output.Add((byte)(value >> 16));
     output.Add((byte)(value >> 24));
+  }
+
+  private static string CreateTempRoot()
+  {
+    return Path.Combine(
+        Path.GetTempPath(),
+        "LzmaSharpTests",
+        nameof(SevenZipArchiveDecoderGostKuznyechikLzma2Tests),
+        Guid.NewGuid().ToString("N"));
+  }
+
+  private static void TryDeleteTree(string path)
+  {
+    try
+    {
+      if (Directory.Exists(path))
+      {
+        Directory.Delete(path, recursive: true);
+      }
+    }
+    catch
+    {
+      // best-effort cleanup для тестового каталога
+    }
   }
 }
