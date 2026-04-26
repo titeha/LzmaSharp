@@ -293,12 +293,38 @@ public static class SevenZipFolderDecoder
           return SevenZipFolderDecodeResult.InvalidData;
         }
 
-        _ = parsedGostProperties;
+        if (options.Password is null)
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.NotSupported;
+        }
 
-        // GOST coder уже распознан и properties корректны,
-        // но фактическая криптография будет добавлена отдельными шагами.
-        decoded = [];
-        return SevenZipFolderDecodeResult.NotSupported;
+        SevenZipGostDecryptResult decryptResult = SevenZipGostPackedStreamDecryptor.TryDecrypt(
+            methodId: coder.MethodId,
+            properties: parsedGostProperties!,
+            password: options.Password,
+            ciphertext: input,
+            plaintext: out decoded);
+
+        if (decryptResult == SevenZipGostDecryptResult.NotSupported)
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.NotSupported;
+        }
+
+        if (decryptResult == SevenZipGostDecryptResult.InvalidData)
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.InvalidData;
+        }
+
+        if (decoded.Length != expectedUnpackSize)
+        {
+          decoded = [];
+          return SevenZipFolderDecodeResult.InvalidData;
+        }
+
+        return SevenZipFolderDecodeResult.Ok;
       }
 
       if (IsSingleByteMethodId(coder.MethodId, _methodIdCopy))
