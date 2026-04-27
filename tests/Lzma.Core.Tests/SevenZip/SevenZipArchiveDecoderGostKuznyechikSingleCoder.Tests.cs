@@ -193,6 +193,157 @@ public sealed class SevenZipArchiveDecoderGostKuznyechikSingleCoderTests
     }
   }
 
+  [Fact]
+  public void DecodeToArray_GostKuznyechikSingleCoder_СПаролем_ВозвращаетФайл()
+  {
+    byte[] plain = CreatePlainForTest();
+    const string fileName = "gost-single-coder.bin";
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    byte[] archive = Build7zArchive_SingleFile_GostKuznyechikSingleCoder(
+        plainFileBytes: plain,
+        fileName: fileName,
+        password: password);
+
+    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeToArray(
+        archive: archive,
+        options: SevenZipDecodeOptions.WithPassword(password),
+        files: out SevenZipDecodedFile[] files,
+        bytesConsumed: out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, result);
+    Assert.Equal(archive.Length, bytesConsumed);
+
+    SevenZipDecodedFile file = Assert.Single(files);
+    Assert.Equal(fileName, file.Name);
+    Assert.Equal(plain, file.Bytes);
+  }
+
+  [Fact]
+  public void DecodeToArray_GostKuznyechikSingleCoder_БезПароля_ВозвращаетNotSupported()
+  {
+    byte[] plain = CreatePlainForTest();
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    byte[] archive = Build7zArchive_SingleFile_GostKuznyechikSingleCoder(
+        plainFileBytes: plain,
+        fileName: "gost-single-coder.bin",
+        password: password);
+
+    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeToArray(
+        archive: archive,
+        options: SevenZipDecodeOptions.Default,
+        files: out SevenZipDecodedFile[] files,
+        bytesConsumed: out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.NotSupported, result);
+    Assert.Equal(archive.Length, bytesConsumed);
+    Assert.Empty(files);
+  }
+
+  [Fact]
+  public void DecodeToArray_GostKuznyechikSingleCoder_СНевернымПаролем_ВозвращаетInvalidData()
+  {
+    byte[] plain = CreatePlainForTest();
+
+    using SevenZipPassword correctPassword = SevenZipPassword.FromString("ab");
+
+    byte[] archive = Build7zArchive_SingleFile_GostKuznyechikSingleCoder(
+        plainFileBytes: plain,
+        fileName: "gost-single-coder.bin",
+        password: correctPassword);
+
+    using SevenZipPassword wrongPassword = SevenZipPassword.FromString("wrong");
+
+    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeToArray(
+        archive: archive,
+        options: SevenZipDecodeOptions.WithPassword(wrongPassword),
+        files: out SevenZipDecodedFile[] files,
+        bytesConsumed: out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.InvalidData, result);
+    Assert.Equal(archive.Length, bytesConsumed);
+    Assert.Empty(files);
+  }
+
+  [Fact]
+  public void DecodeToEntries_GostKuznyechikSingleCoder_СПаролем_ВозвращаетФайловыйEntry()
+  {
+    byte[] plain = CreatePlainForTest();
+    const string fileName = "gost-single-coder.bin";
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    byte[] archive = Build7zArchive_SingleFile_GostKuznyechikSingleCoder(
+        plainFileBytes: plain,
+        fileName: fileName,
+        password: password);
+
+    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeToEntries(
+        archive: archive,
+        options: SevenZipDecodeOptions.WithPassword(password),
+        entries: out SevenZipDecodedEntry[] entries,
+        bytesConsumed: out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, result);
+    Assert.Equal(archive.Length, bytesConsumed);
+
+    SevenZipDecodedEntry entry = Assert.Single(entries);
+    Assert.Equal(fileName, entry.Name);
+    Assert.False(entry.IsDirectory);
+    Assert.Equal(plain, entry.Bytes);
+  }
+
+  [Fact]
+  public void DecodeToEntries_GostKuznyechikSingleCoder_БезПароля_ВозвращаетNotSupported()
+  {
+    byte[] plain = CreatePlainForTest();
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    byte[] archive = Build7zArchive_SingleFile_GostKuznyechikSingleCoder(
+        plainFileBytes: plain,
+        fileName: "gost-single-coder.bin",
+        password: password);
+
+    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeToEntries(
+        archive: archive,
+        options: SevenZipDecodeOptions.Default,
+        entries: out SevenZipDecodedEntry[] entries,
+        bytesConsumed: out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.NotSupported, result);
+    Assert.Equal(archive.Length, bytesConsumed);
+    Assert.Empty(entries);
+  }
+
+  [Fact]
+  public void DecodeToEntries_GostKuznyechikSingleCoder_СНевернымПаролем_ВозвращаетInvalidData()
+  {
+    byte[] plain = CreatePlainForTest();
+
+    using SevenZipPassword correctPassword = SevenZipPassword.FromString("ab");
+
+    byte[] archive = Build7zArchive_SingleFile_GostKuznyechikSingleCoder(
+        plainFileBytes: plain,
+        fileName: "gost-single-coder.bin",
+        password: correctPassword);
+
+    using SevenZipPassword wrongPassword = SevenZipPassword.FromString("wrong");
+
+    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeToEntries(
+        archive: archive,
+        options: SevenZipDecodeOptions.WithPassword(wrongPassword),
+        entries: out SevenZipDecodedEntry[] entries,
+        bytesConsumed: out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.InvalidData, result);
+    Assert.Equal(archive.Length, bytesConsumed);
+    Assert.Empty(entries);
+  }
+
   private static string CreateTempRoot()
   {
     return Path.Combine(
