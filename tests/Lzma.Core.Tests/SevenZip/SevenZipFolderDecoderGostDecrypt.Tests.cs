@@ -371,6 +371,146 @@ public sealed class SevenZipFolderDecoderGostDecryptTests
     Assert.Empty(output);
   }
 
+  [Fact]
+  public void DecodeFolderToArray_KuznyechikSingleCoder_СDirectKey_ДекодируетЗашифрованныйВход()
+  {
+    var plain = new byte[64];
+
+    for (int i = 0; i < plain.Length; i++)
+    {
+      plain[i] = unchecked((byte)(i * 17 + 3));
+    }
+
+    byte[] properties = CreateGostDirectProperties(
+        salt: [0x11, 0x22],
+        iv: [0x10, 0x32, 0x54, 0x76, 0x98, 0xBA, 0xDC, 0xFE]);
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    byte[] encrypted = EncryptKuznyechikDirectKeyForTest(
+        properties,
+        password,
+        plain);
+
+    SevenZipStreamsInfo streamsInfo = CreateSingleGostCoderStreamsInfo(
+        methodId: SevenZipGostCoder.KuznyechikMethodId.ToArray(),
+        gostProperties: properties,
+        unpackSize: (ulong)plain.Length,
+        packSize: (ulong)encrypted.Length);
+
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.DecodeFolderToArray(
+        streamsInfo: streamsInfo,
+        packedStreams: encrypted,
+        folderIndex: 0,
+        options: SevenZipDecodeOptions.WithPassword(password),
+        output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.Ok, result);
+    Assert.Equal(plain, output);
+  }
+
+  [Fact]
+  public void DecodeFolderToArray_KuznyechikSingleCoder_БезПароля_ВозвращаетNotSupported()
+  {
+    byte[] plain = new byte[32];
+
+    byte[] properties = CreateGostDirectProperties(
+        salt: [],
+        iv: [0x10, 0x32, 0x54, 0x76, 0x98, 0xBA, 0xDC, 0xFE]);
+
+    using SevenZipPassword password = SevenZipPassword.FromString("");
+
+    byte[] encrypted = EncryptKuznyechikDirectKeyForTest(
+        properties,
+        password,
+        plain);
+
+    SevenZipStreamsInfo streamsInfo = CreateSingleGostCoderStreamsInfo(
+        methodId: SevenZipGostCoder.KuznyechikMethodId.ToArray(),
+        gostProperties: properties,
+        unpackSize: (ulong)plain.Length,
+        packSize: (ulong)encrypted.Length);
+
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.DecodeFolderToArray(
+        streamsInfo: streamsInfo,
+        packedStreams: encrypted,
+        folderIndex: 0,
+        options: SevenZipDecodeOptions.Default,
+        output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.NotSupported, result);
+    Assert.Empty(output);
+  }
+
+  [Fact]
+  public void DecodeFolderToArray_KuznyechikSingleCoder_ПослеРасшифровкиРазмерНеСовпадает_ВозвращаетInvalidData()
+  {
+    byte[] plain = new byte[32];
+
+    byte[] properties = CreateGostDirectProperties(
+        salt: [],
+        iv: [0x10, 0x32, 0x54, 0x76, 0x98, 0xBA, 0xDC, 0xFE]);
+
+    using SevenZipPassword password = SevenZipPassword.FromString("");
+
+    byte[] encrypted = EncryptKuznyechikDirectKeyForTest(
+        properties,
+        password,
+        plain);
+
+    SevenZipStreamsInfo streamsInfo = CreateSingleGostCoderStreamsInfo(
+        methodId: SevenZipGostCoder.KuznyechikMethodId.ToArray(),
+        gostProperties: properties,
+        unpackSize: (ulong)(plain.Length - 1),
+        packSize: (ulong)encrypted.Length);
+
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.DecodeFolderToArray(
+        streamsInfo: streamsInfo,
+        packedStreams: encrypted,
+        folderIndex: 0,
+        options: SevenZipDecodeOptions.WithPassword(password),
+        output: out byte[] output);
+
+    Assert.Equal(SevenZipFolderDecodeResult.InvalidData, result);
+    Assert.Empty(output);
+  }
+
+  private static SevenZipStreamsInfo CreateSingleGostCoderStreamsInfo(
+    byte[] methodId,
+    byte[] gostProperties,
+    ulong unpackSize,
+    ulong packSize)
+  {
+    var gostCoder = new SevenZipCoderInfo(
+        methodId: methodId,
+        properties: gostProperties,
+        numInStreams: 1,
+        numOutStreams: 1);
+
+    var folder = new SevenZipFolder(
+        Coders: [gostCoder],
+        BindPairs: [],
+        PackedStreamIndices: [0UL],
+        NumInStreams: 1,
+        NumOutStreams: 1);
+
+    var packInfo = new SevenZipPackInfo(
+        packPos: 0,
+        packSizes: [packSize]);
+
+    var unpackInfo = new SevenZipUnpackInfo(
+        folders: [folder],
+        folderUnpackSizes:
+        [
+            [unpackSize],
+        ]);
+
+    return new SevenZipStreamsInfo(
+        packInfo: packInfo,
+        unpackInfo: unpackInfo,
+        subStreamsInfo: null);
+  }
+
   private static byte[] CreateGostDirectProperties(
       byte[] salt,
       byte[] iv)
