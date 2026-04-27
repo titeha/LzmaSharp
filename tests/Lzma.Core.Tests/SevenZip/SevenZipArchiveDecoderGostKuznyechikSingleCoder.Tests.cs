@@ -401,14 +401,56 @@ public sealed class SevenZipArchiveDecoderGostKuznyechikSingleCoderTests
     }
   }
 
+  [Fact]
+  public void DecodeToArray_GostKuznyechikSingleCoder_БезDirectKeyKdf_ВозвращаетNotSupported()
+  {
+    byte[] packed = CreatePackedForUnsupportedKdfTest();
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    byte[] archive = Build7zArchive_SingleFile_GostKuznyechikSingleCoder_UnsupportedKdf(
+        packedBytes: packed,
+        fileName: "gost-single-coder-unsupported-kdf.bin");
+
+    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeToArray(
+        archive: archive,
+        options: SevenZipDecodeOptions.WithPassword(password),
+        files: out SevenZipDecodedFile[] files,
+        bytesConsumed: out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.NotSupported, result);
+    Assert.Equal(archive.Length, bytesConsumed);
+    Assert.Empty(files);
+  }
+
+  [Fact]
+  public void DecodeToEntries_GostKuznyechikSingleCoder_БезDirectKeyKdf_ВозвращаетNotSupported()
+  {
+    byte[] packed = CreatePackedForUnsupportedKdfTest();
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    byte[] archive = Build7zArchive_SingleFile_GostKuznyechikSingleCoder_UnsupportedKdf(
+        packedBytes: packed,
+        fileName: "gost-single-coder-unsupported-kdf.bin");
+
+    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeToEntries(
+        archive: archive,
+        options: SevenZipDecodeOptions.WithPassword(password),
+        entries: out SevenZipDecodedEntry[] entries,
+        bytesConsumed: out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.NotSupported, result);
+    Assert.Equal(archive.Length, bytesConsumed);
+    Assert.Empty(entries);
+  }
+
   private static byte[] CreatePackedForUnsupportedKdfTest()
   {
     var packed = new byte[32];
 
     for (int i = 0; i < packed.Length; i++)
-    {
       packed[i] = unchecked((byte)(i * 19 + 7));
-    }
 
     return packed;
   }
@@ -489,9 +531,7 @@ public sealed class SevenZipArchiveDecoderGostKuznyechikSingleCoderTests
     Assert.False(File.Exists(Path.Combine(root, fileName)));
 
     if (Directory.Exists(root))
-    {
       Assert.Empty(Directory.GetFileSystemEntries(root));
-    }
   }
 
   private static void TryDeleteTree(string path)
@@ -499,9 +539,7 @@ public sealed class SevenZipArchiveDecoderGostKuznyechikSingleCoderTests
     try
     {
       if (Directory.Exists(path))
-      {
         Directory.Delete(path, recursive: true);
-      }
     }
     catch
     {
