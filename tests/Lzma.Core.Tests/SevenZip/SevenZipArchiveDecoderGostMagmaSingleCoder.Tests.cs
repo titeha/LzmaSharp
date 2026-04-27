@@ -53,14 +53,110 @@ public sealed class SevenZipArchiveDecoderGostMagmaSingleCoderTests
     Assert.Equal(string.Empty, decodedFileName);
   }
 
+  [Fact]
+  public void ExtractToDirectory_GostMagmaSingleCoder_СПаролем_ВозвращаетNotSupportedИНичегоНеПишет()
+  {
+    byte[] packed = CreatePackedForTest();
+    const string fileName = "gost-magma-single-coder.bin";
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    byte[] archive = Build7zArchive_SingleFile_GostMagmaSingleCoder(
+        packedBytes: packed,
+        fileName: fileName);
+
+    string root = CreateTempRoot();
+
+    try
+    {
+      SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.ExtractToDirectory(
+          archive: archive,
+          options: SevenZipDecodeOptions.WithPassword(password),
+          destinationDirectory: root,
+          overwrite: false,
+          bytesConsumed: out int bytesConsumed);
+
+      Assert.Equal(SevenZipArchiveDecodeResult.NotSupported, result);
+      Assert.Equal(archive.Length, bytesConsumed);
+      AssertDestinationIsEmptyOrMissing(root, fileName);
+    }
+    finally
+    {
+      TryDeleteTree(root);
+    }
+  }
+
+  [Fact]
+  public void ExtractToDirectory_GostMagmaSingleCoder_БезПароля_ВозвращаетNotSupportedИНичегоНеПишет()
+  {
+    byte[] packed = CreatePackedForTest();
+    const string fileName = "gost-magma-single-coder.bin";
+
+    byte[] archive = Build7zArchive_SingleFile_GostMagmaSingleCoder(
+        packedBytes: packed,
+        fileName: fileName);
+
+    string root = CreateTempRoot();
+
+    try
+    {
+      SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.ExtractToDirectory(
+          archive: archive,
+          options: SevenZipDecodeOptions.Default,
+          destinationDirectory: root,
+          overwrite: false,
+          bytesConsumed: out int bytesConsumed);
+
+      Assert.Equal(SevenZipArchiveDecodeResult.NotSupported, result);
+      Assert.Equal(archive.Length, bytesConsumed);
+      AssertDestinationIsEmptyOrMissing(root, fileName);
+    }
+    finally
+    {
+      TryDeleteTree(root);
+    }
+  }
+
+  private static string CreateTempRoot()
+  {
+    return Path.Combine(
+        Path.GetTempPath(),
+        "LzmaSharpTests",
+        nameof(SevenZipArchiveDecoderGostMagmaSingleCoderTests),
+        Guid.NewGuid().ToString("N"));
+  }
+
+  private static void AssertDestinationIsEmptyOrMissing(
+      string root,
+      string fileName)
+  {
+    Assert.False(File.Exists(Path.Combine(root, fileName)));
+
+    if (Directory.Exists(root))
+      Assert.Empty(Directory.GetFileSystemEntries(root));
+  }
+
+  private static void TryDeleteTree(string path)
+  {
+    try
+    {
+      if (Directory.Exists(path))
+      {
+        Directory.Delete(path, recursive: true);
+      }
+    }
+    catch
+    {
+      // Best-effort cleanup для тестового каталога.
+    }
+  }
+
   private static byte[] CreatePackedForTest()
   {
     var packed = new byte[32];
 
     for (int i = 0; i < packed.Length; i++)
-    {
       packed[i] = unchecked((byte)(i * 13 + 5));
-    }
 
     return packed;
   }
