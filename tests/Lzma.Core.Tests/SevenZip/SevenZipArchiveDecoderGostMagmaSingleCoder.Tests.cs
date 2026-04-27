@@ -117,6 +117,90 @@ public sealed class SevenZipArchiveDecoderGostMagmaSingleCoderTests
     }
   }
 
+  [Fact]
+  public void DecodeToArray_GostMagmaSingleCoder_СПаролем_ВозвращаетNotSupported()
+  {
+    byte[] packed = CreatePackedForTest();
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    byte[] archive = Build7zArchive_SingleFile_GostMagmaSingleCoder(
+        packedBytes: packed,
+        fileName: "gost-magma-single-coder.bin");
+
+    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeToArray(
+        archive: archive,
+        options: SevenZipDecodeOptions.WithPassword(password),
+        files: out SevenZipDecodedFile[] files,
+        bytesConsumed: out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.NotSupported, result);
+    Assert.Equal(archive.Length, bytesConsumed);
+    Assert.Empty(files);
+  }
+
+  [Fact]
+  public void DecodeToArray_GostMagmaSingleCoder_БезПароля_ВозвращаетNotSupported()
+  {
+    byte[] packed = CreatePackedForTest();
+
+    byte[] archive = Build7zArchive_SingleFile_GostMagmaSingleCoder(
+        packedBytes: packed,
+        fileName: "gost-magma-single-coder.bin");
+
+    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeToArray(
+        archive: archive,
+        options: SevenZipDecodeOptions.Default,
+        files: out SevenZipDecodedFile[] files,
+        bytesConsumed: out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.NotSupported, result);
+    Assert.Equal(archive.Length, bytesConsumed);
+    Assert.Empty(files);
+  }
+
+  [Fact]
+  public void DecodeToEntries_GostMagmaSingleCoder_СПаролем_ВозвращаетNotSupported()
+  {
+    byte[] packed = CreatePackedForTest();
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    byte[] archive = Build7zArchive_SingleFile_GostMagmaSingleCoder(
+        packedBytes: packed,
+        fileName: "gost-magma-single-coder.bin");
+
+    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeToEntries(
+        archive: archive,
+        options: SevenZipDecodeOptions.WithPassword(password),
+        entries: out SevenZipDecodedEntry[] entries,
+        bytesConsumed: out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.NotSupported, result);
+    Assert.Equal(archive.Length, bytesConsumed);
+    Assert.Empty(entries);
+  }
+
+  [Fact]
+  public void DecodeToEntries_GostMagmaSingleCoder_БезПароля_ВозвращаетNotSupported()
+  {
+    byte[] packed = CreatePackedForTest();
+
+    byte[] archive = Build7zArchive_SingleFile_GostMagmaSingleCoder(
+        packedBytes: packed,
+        fileName: "gost-magma-single-coder.bin");
+
+    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeToEntries(
+        archive: archive,
+        options: SevenZipDecodeOptions.Default,
+        entries: out SevenZipDecodedEntry[] entries,
+        bytesConsumed: out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.NotSupported, result);
+    Assert.Equal(archive.Length, bytesConsumed);
+    Assert.Empty(entries);
+  }
+
   private static string CreateTempRoot()
   {
     return Path.Combine(
