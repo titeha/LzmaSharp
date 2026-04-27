@@ -188,6 +188,116 @@ public sealed class SevenZipArchiveReaderGostEncryptedHeaderTests
     Assert.Equal(string.Empty, decodedFileName);
   }
 
+  [Fact]
+  public void ExtractToDirectory_GostKuznyechikEncryptedHeader_СПаролем_ЗаписываетФайл()
+  {
+    byte[] plain = CreatePlainForTest();
+    const string fileName = "gost-header-file.bin";
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    byte[] archive = Build7zArchive_SingleFile_GostKuznyechikEncryptedHeader_CopyFile(
+        plainFileBytes: plain,
+        fileName: fileName,
+        password: password,
+        expectedDecodedHeader: out _);
+
+    string root = CreateTempRoot();
+
+    try
+    {
+      SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.ExtractToDirectory(
+          archive: archive,
+          options: SevenZipDecodeOptions.WithPassword(password),
+          destinationDirectory: root,
+          overwrite: false,
+          bytesConsumed: out int bytesConsumed);
+
+      Assert.Equal(SevenZipArchiveDecodeResult.Ok, result);
+      Assert.Equal(archive.Length, bytesConsumed);
+
+      string filePath = Path.Combine(root, fileName);
+      Assert.True(File.Exists(filePath));
+      Assert.Equal(plain, File.ReadAllBytes(filePath));
+    }
+    finally
+    {
+      TryDeleteTree(root);
+    }
+  }
+
+  [Fact]
+  public void ExtractToDirectory_GostKuznyechikEncryptedHeader_БезПароля_ВозвращаетNotSupportedИНичегоНеПишет()
+  {
+    byte[] plain = CreatePlainForTest();
+    const string fileName = "gost-header-file.bin";
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    byte[] archive = Build7zArchive_SingleFile_GostKuznyechikEncryptedHeader_CopyFile(
+        plainFileBytes: plain,
+        fileName: fileName,
+        password: password,
+        expectedDecodedHeader: out _);
+
+    string root = CreateTempRoot();
+
+    try
+    {
+      SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.ExtractToDirectory(
+          archive: archive,
+          options: SevenZipDecodeOptions.Default,
+          destinationDirectory: root,
+          overwrite: false,
+          bytesConsumed: out int bytesConsumed);
+
+      Assert.Equal(SevenZipArchiveDecodeResult.NotSupported, result);
+      Assert.Equal(archive.Length, bytesConsumed);
+      AssertDestinationIsEmptyOrMissing(root, fileName);
+    }
+    finally
+    {
+      TryDeleteTree(root);
+    }
+  }
+
+  [Fact]
+  public void ExtractToDirectory_GostKuznyechikEncryptedHeader_СНевернымПаролем_ВозвращаетInvalidDataИНичегоНеПишет()
+  {
+    byte[] plain = CreatePlainForTest();
+    const string fileName = "gost-header-file.bin";
+
+    using SevenZipPassword correctPassword = SevenZipPassword.FromString("ab");
+
+    byte[] archive = Build7zArchive_SingleFile_GostKuznyechikEncryptedHeader_CopyFile(
+        plainFileBytes: plain,
+        fileName: fileName,
+        password: correctPassword,
+        expectedDecodedHeader: out _);
+
+    string root = CreateTempRoot();
+
+    try
+    {
+      using SevenZipPassword wrongPassword = SevenZipPassword.FromString("wrong");
+
+      SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.ExtractToDirectory(
+          archive: archive,
+          options: SevenZipDecodeOptions.WithPassword(wrongPassword),
+          destinationDirectory: root,
+          overwrite: false,
+          bytesConsumed: out int bytesConsumed);
+
+      Assert.Equal(SevenZipArchiveDecodeResult.InvalidData, result);
+      Assert.Equal(archive.Length, bytesConsumed);
+      AssertDestinationIsEmptyOrMissing(root, fileName);
+    }
+    finally
+    {
+      TryDeleteTree(root);
+    }
+  }
+
   private static byte[] CreatePlainForTest()
   {
     var plain = new byte[256];
@@ -497,5 +607,37 @@ public sealed class SevenZipArchiveReaderGostEncryptedHeaderTests
     output.Add((byte)(value >> 8));
     output.Add((byte)(value >> 16));
     output.Add((byte)(value >> 24));
+  }
+
+  private static string CreateTempRoot()
+  {
+    return Path.Combine(
+        Path.GetTempPath(),
+        "LzmaSharpTests",
+        nameof(SevenZipArchiveReaderGostEncryptedHeaderTests),
+        Guid.NewGuid().ToString("N"));
+  }
+
+  private static void AssertDestinationIsEmptyOrMissing(
+      string root,
+      string fileName)
+  {
+    Assert.False(File.Exists(Path.Combine(root, fileName)));
+
+    if (Directory.Exists(root))
+      Assert.Empty(Directory.GetFileSystemEntries(root));
+  }
+
+  private static void TryDeleteTree(string path)
+  {
+    try
+    {
+      if (Directory.Exists(path))
+        Directory.Delete(path, recursive: true);
+    }
+    catch
+    {
+      // Best-effort cleanup для тестового каталога.
+    }
   }
 }
