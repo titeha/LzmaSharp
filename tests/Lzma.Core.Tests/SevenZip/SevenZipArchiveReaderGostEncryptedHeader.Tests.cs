@@ -803,6 +803,107 @@ public sealed class SevenZipArchiveReaderGostEncryptedHeaderTests
     Assert.Empty(files);
   }
 
+  [Fact]
+  public void DecodeToEntries_GostKuznyechikEncryptedHeaderAndFile_СПаролем_ВозвращаетФайловыйEntry()
+  {
+    byte[] plain = CreatePlainForTest();
+    const string fileName = "gost-header-and-file.bin";
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    byte[] archive = Build7zArchive_SingleFile_GostKuznyechikEncryptedHeader_GostKuznyechikCopyFile(
+        plainFileBytes: plain,
+        fileName: fileName,
+        password: password);
+
+    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeToEntries(
+        archive: archive,
+        options: SevenZipDecodeOptions.WithPassword(password),
+        entries: out SevenZipDecodedEntry[] entries,
+        bytesConsumed: out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, result);
+    Assert.Equal(archive.Length, bytesConsumed);
+
+    SevenZipDecodedEntry entry = Assert.Single(entries);
+    Assert.Equal(fileName, entry.Name);
+    Assert.False(entry.IsDirectory);
+    Assert.Equal(plain, entry.Bytes);
+  }
+
+  [Fact]
+  public void DecodeToEntries_GostKuznyechikEncryptedHeaderAndFile_БезПароля_ВозвращаетNotSupported()
+  {
+    byte[] plain = CreatePlainForTest();
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    byte[] archive = Build7zArchive_SingleFile_GostKuznyechikEncryptedHeader_GostKuznyechikCopyFile(
+        plainFileBytes: plain,
+        fileName: "gost-header-and-file.bin",
+        password: password);
+
+    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeToEntries(
+        archive: archive,
+        options: SevenZipDecodeOptions.Default,
+        entries: out SevenZipDecodedEntry[] entries,
+        bytesConsumed: out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.NotSupported, result);
+    Assert.Equal(archive.Length, bytesConsumed);
+    Assert.Empty(entries);
+  }
+
+  [Fact]
+  public void DecodeToEntries_GostKuznyechikEncryptedHeaderAndFile_СНевернымПаролемДляЗаголовка_ВозвращаетInvalidData()
+  {
+    byte[] plain = CreatePlainForTest();
+
+    using SevenZipPassword correctPassword = SevenZipPassword.FromString("ab");
+
+    byte[] archive = Build7zArchive_SingleFile_GostKuznyechikEncryptedHeader_GostKuznyechikCopyFile(
+        plainFileBytes: plain,
+        fileName: "gost-header-and-file.bin",
+        password: correctPassword);
+
+    using SevenZipPassword wrongPassword = SevenZipPassword.FromString("wrong");
+
+    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeToEntries(
+        archive: archive,
+        options: SevenZipDecodeOptions.WithPassword(wrongPassword),
+        entries: out SevenZipDecodedEntry[] entries,
+        bytesConsumed: out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.InvalidData, result);
+    Assert.Equal(archive.Length, bytesConsumed);
+    Assert.Empty(entries);
+  }
+
+  [Fact]
+  public void DecodeToEntries_GostKuznyechikEncryptedHeaderAndFile_СВернымПаролемДляЗаголовкаИНевернымДляФайла_ВозвращаетInvalidData()
+  {
+    byte[] plain = CreatePlainForTest();
+
+    using SevenZipPassword headerPassword = SevenZipPassword.FromString("header");
+    using SevenZipPassword filePassword = SevenZipPassword.FromString("file");
+
+    byte[] archive = Build7zArchive_SingleFile_GostKuznyechikEncryptedHeader_GostKuznyechikCopyFile(
+        plainFileBytes: plain,
+        fileName: "gost-header-and-file.bin",
+        headerPassword: headerPassword,
+        filePassword: filePassword);
+
+    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeToEntries(
+        archive: archive,
+        options: SevenZipDecodeOptions.WithPassword(headerPassword),
+        entries: out SevenZipDecodedEntry[] entries,
+        bytesConsumed: out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.InvalidData, result);
+    Assert.Equal(archive.Length, bytesConsumed);
+    Assert.Empty(entries);
+  }
+
   private static byte[] CreatePlainForTest()
   {
     var plain = new byte[256];
