@@ -481,6 +481,85 @@ public sealed class SevenZipArchiveReaderGostEncryptedHeaderTests
     Assert.Equal(plain, fileBytes);
   }
 
+  [Fact]
+  public void DecodeSingleFileToArray_GostKuznyechikEncryptedHeaderAndFile_БезПароля_ВозвращаетNotSupported()
+  {
+    byte[] plain = CreatePlainForTest();
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    byte[] archive = Build7zArchive_SingleFile_GostKuznyechikEncryptedHeader_GostKuznyechikCopyFile(
+        plainFileBytes: plain,
+        fileName: "gost-header-and-file.bin",
+        password: password);
+
+    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeSingleFileToArray(
+        archiveBytes: archive,
+        options: SevenZipDecodeOptions.Default,
+        fileBytes: out byte[] fileBytes,
+        fileName: out string decodedFileName,
+        bytesConsumed: out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.NotSupported, result);
+    Assert.Equal(archive.Length, bytesConsumed);
+    Assert.Empty(fileBytes);
+    Assert.Equal(string.Empty, decodedFileName);
+  }
+
+  [Fact]
+  public void DecodeSingleFileToArray_GostKuznyechikEncryptedHeaderAndFile_СНевернымПаролемДляЗаголовка_ВозвращаетInvalidData()
+  {
+    byte[] plain = CreatePlainForTest();
+
+    using SevenZipPassword correctPassword = SevenZipPassword.FromString("ab");
+
+    byte[] archive = Build7zArchive_SingleFile_GostKuznyechikEncryptedHeader_GostKuznyechikCopyFile(
+        plainFileBytes: plain,
+        fileName: "gost-header-and-file.bin",
+        password: correctPassword);
+
+    using SevenZipPassword wrongPassword = SevenZipPassword.FromString("wrong");
+
+    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeSingleFileToArray(
+        archiveBytes: archive,
+        options: SevenZipDecodeOptions.WithPassword(wrongPassword),
+        fileBytes: out byte[] fileBytes,
+        fileName: out string decodedFileName,
+        bytesConsumed: out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.InvalidData, result);
+    Assert.Equal(archive.Length, bytesConsumed);
+    Assert.Empty(fileBytes);
+    Assert.Equal(string.Empty, decodedFileName);
+  }
+
+  [Fact]
+  public void DecodeSingleFileToArray_GostKuznyechikEncryptedHeaderAndFile_СВернымПаролемДляЗаголовкаИНевернымДляФайла_ВозвращаетInvalidData()
+  {
+    byte[] plain = CreatePlainForTest();
+
+    using SevenZipPassword headerPassword = SevenZipPassword.FromString("header");
+    using SevenZipPassword filePassword = SevenZipPassword.FromString("file");
+
+    byte[] archive = Build7zArchive_SingleFile_GostKuznyechikEncryptedHeader_GostKuznyechikCopyFile(
+        plainFileBytes: plain,
+        fileName: "gost-header-and-file.bin",
+        headerPassword: headerPassword,
+        filePassword: filePassword);
+
+    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeSingleFileToArray(
+        archiveBytes: archive,
+        options: SevenZipDecodeOptions.WithPassword(headerPassword),
+        fileBytes: out byte[] fileBytes,
+        fileName: out string decodedFileName,
+        bytesConsumed: out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.InvalidData, result);
+    Assert.Equal(archive.Length, bytesConsumed);
+    Assert.Empty(fileBytes);
+    Assert.Equal(string.Empty, decodedFileName);
+  }
+
   private static byte[] CreatePlainForTest()
   {
     var plain = new byte[256];
@@ -829,6 +908,19 @@ public sealed class SevenZipArchiveReaderGostEncryptedHeaderTests
     string fileName,
     SevenZipPassword password)
   {
+    return Build7zArchive_SingleFile_GostKuznyechikEncryptedHeader_GostKuznyechikCopyFile(
+        plainFileBytes: plainFileBytes,
+        fileName: fileName,
+        headerPassword: password,
+        filePassword: password);
+  }
+
+  private static byte[] Build7zArchive_SingleFile_GostKuznyechikEncryptedHeader_GostKuznyechikCopyFile(
+      ReadOnlySpan<byte> plainFileBytes,
+      string fileName,
+      SevenZipPassword headerPassword,
+      SevenZipPassword filePassword)
+  {
     byte[] plainFileBytesArray = plainFileBytes.ToArray();
 
     byte[] fileSalt = [0xB1, 0xB2];
@@ -837,7 +929,7 @@ public sealed class SevenZipArchiveReaderGostEncryptedHeaderTests
 
     byte[] filePackedStream = EncryptKuznyechikDirectKeyForTest(
         propertiesBytes: fileGostProperties,
-        password: password,
+        password: filePassword,
         plain: plainFileBytesArray);
 
     byte[] innerHeader = BuildInnerHeader_SingleFile_SingleFolder_GostKuznyechikThenCopy(
@@ -854,7 +946,7 @@ public sealed class SevenZipArchiveReaderGostEncryptedHeaderTests
 
     byte[] encryptedHeaderPackedStream = EncryptKuznyechikDirectKeyForTest(
         propertiesBytes: headerGostProperties,
-        password: password,
+        password: headerPassword,
         plain: innerHeader);
 
     byte[] outerNextHeader = BuildOuterNextHeader_EncodedHeader_GostKuznyechikThenCopy(
