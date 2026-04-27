@@ -455,6 +455,32 @@ public sealed class SevenZipArchiveReaderGostEncryptedHeaderTests
     Assert.Empty(entries);
   }
 
+  [Fact]
+  public void DecodeSingleFileToArray_GostKuznyechikEncryptedHeaderAndFile_СПаролем_ВозвращаетФайл()
+  {
+    byte[] plain = CreatePlainForTest();
+    const string fileName = "gost-header-and-file.bin";
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    byte[] archive = Build7zArchive_SingleFile_GostKuznyechikEncryptedHeader_GostKuznyechikCopyFile(
+        plainFileBytes: plain,
+        fileName: fileName,
+        password: password);
+
+    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeSingleFileToArray(
+        archiveBytes: archive,
+        options: SevenZipDecodeOptions.WithPassword(password),
+        fileBytes: out byte[] fileBytes,
+        fileName: out string decodedFileName,
+        bytesConsumed: out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, result);
+    Assert.Equal(archive.Length, bytesConsumed);
+    Assert.Equal(fileName, decodedFileName);
+    Assert.Equal(plain, fileBytes);
+  }
+
   private static byte[] CreatePlainForTest()
   {
     var plain = new byte[256];
@@ -796,5 +822,135 @@ public sealed class SevenZipArchiveReaderGostEncryptedHeaderTests
     {
       // Best-effort cleanup для тестового каталога.
     }
+  }
+
+  private static byte[] Build7zArchive_SingleFile_GostKuznyechikEncryptedHeader_GostKuznyechikCopyFile(
+    ReadOnlySpan<byte> plainFileBytes,
+    string fileName,
+    SevenZipPassword password)
+  {
+    byte[] plainFileBytesArray = plainFileBytes.ToArray();
+
+    byte[] fileSalt = [0xB1, 0xB2];
+    byte[] fileIv = [0x21, 0x43, 0x65, 0x87, 0xA9, 0xCB, 0xED, 0x0F];
+    byte[] fileGostProperties = CreateGostDirectProperties(fileSalt, fileIv);
+
+    byte[] filePackedStream = EncryptKuznyechikDirectKeyForTest(
+        propertiesBytes: fileGostProperties,
+        password: password,
+        plain: plainFileBytesArray);
+
+    byte[] innerHeader = BuildInnerHeader_SingleFile_SingleFolder_GostKuznyechikThenCopy(
+        packSize: (ulong)filePackedStream.Length,
+        gostUnpackSize: (ulong)plainFileBytesArray.Length,
+        finalUnpackSize: (ulong)plainFileBytesArray.Length,
+        fileName: fileName,
+        gostProperties: fileGostProperties,
+        folderCrc: Crc32.Compute(plainFileBytesArray));
+
+    byte[] headerSalt = [0xA1, 0xA2];
+    byte[] headerIv = [0x12, 0x34, 0x56, 0x78, 0x90, 0xAB, 0xCE, 0xF0];
+    byte[] headerGostProperties = CreateGostDirectProperties(headerSalt, headerIv);
+
+    byte[] encryptedHeaderPackedStream = EncryptKuznyechikDirectKeyForTest(
+        propertiesBytes: headerGostProperties,
+        password: password,
+        plain: innerHeader);
+
+    byte[] outerNextHeader = BuildOuterNextHeader_EncodedHeader_GostKuznyechikThenCopy(
+        packPos: (ulong)filePackedStream.Length,
+        packSize: (ulong)encryptedHeaderPackedStream.Length,
+        gostUnpackSize: (ulong)innerHeader.Length,
+        finalUnpackSize: (ulong)innerHeader.Length,
+        gostProperties: headerGostProperties,
+        folderCrc: Crc32.Compute(innerHeader));
+
+    uint nextHeaderCrc = Crc32.Compute(outerNextHeader);
+
+    var signatureHeader = new SevenZipSignatureHeader(
+        NextHeaderOffset: (ulong)(filePackedStream.Length + encryptedHeaderPackedStream.Length),
+        NextHeaderSize: (ulong)outerNextHeader.Length,
+        NextHeaderCrc: nextHeaderCrc);
+
+    byte[] signatureHeaderBytes = new byte[SevenZipSignatureHeader.TotalSize];
+    signatureHeader.Write(signatureHeaderBytes);
+
+    byte[] archive = new byte[
+        signatureHeaderBytes.Length +
+        filePackedStream.Length +
+        encryptedHeaderPackedStream.Length +
+        outerNextHeader.Length];
+
+    signatureHeaderBytes.CopyTo(archive.AsSpan(0));
+    filePackedStream.CopyTo(archive.AsSpan(signatureHeaderBytes.Length));
+    encryptedHeaderPackedStream.CopyTo(archive.AsSpan(signatureHeaderBytes.Length + filePackedStream.Length));
+    outerNextHeader.CopyTo(archive.AsSpan(signatureHeaderBytes.Length + filePackedStream.Length + encryptedHeaderPackedStream.Length));
+
+    return archive;
+  }
+
+  private static byte[] BuildInnerHeader_SingleFile_SingleFolder_GostKuznyechikThenCopy(
+    ulong packSize,
+    ulong gostUnpackSize,
+    ulong finalUnpackSize,
+    string fileName,
+    byte[] gostProperties,
+    uint? folderCrc)
+  {
+    List<byte> header =
+    [
+        SevenZipNid.Header,
+        SevenZipNid.MainStreamsInfo,
+        SevenZipNid.PackInfo,
+    ];
+
+    // Данные файла начинаются с нулевой позиции внутри packed streams.
+    WriteEncodedUInt64(header, 0);
+    WriteEncodedUInt64(header, 1);
+
+    header.Add(SevenZipNid.Size);
+    WriteEncodedUInt64(header, packSize);
+    header.Add(SevenZipNid.End);
+
+    header.Add(SevenZipNid.UnpackInfo);
+    header.Add(SevenZipNid.Folder);
+    WriteEncodedUInt64(header, 1);
+    header.Add(0);
+
+    WriteFolderGostKuznyechikThenCopy(header, gostProperties);
+
+    header.Add(SevenZipNid.CodersUnpackSize);
+    WriteEncodedUInt64(header, gostUnpackSize);
+    WriteEncodedUInt64(header, finalUnpackSize);
+
+    if (folderCrc.HasValue)
+    {
+      header.Add(SevenZipNid.Crc);
+      header.Add(1);
+      WriteUInt32LE(header, folderCrc.Value);
+    }
+
+    header.Add(SevenZipNid.End);
+
+    header.Add(SevenZipNid.SubStreamsInfo);
+    header.Add(SevenZipNid.NumUnpackStream);
+    WriteEncodedUInt64(header, 1);
+    header.Add(SevenZipNid.End);
+
+    header.Add(SevenZipNid.End);
+
+    header.Add(SevenZipNid.FilesInfo);
+    WriteEncodedUInt64(header, 1);
+
+    header.Add(SevenZipNid.Name);
+    byte[] nameBytes = Encoding.Unicode.GetBytes(fileName + "\0");
+    WriteEncodedUInt64(header, (ulong)(1 + nameBytes.Length));
+    header.Add(0);
+    header.AddRange(nameBytes);
+
+    header.Add(SevenZipNid.End);
+    header.Add(SevenZipNid.End);
+
+    return [.. header];
   }
 }
