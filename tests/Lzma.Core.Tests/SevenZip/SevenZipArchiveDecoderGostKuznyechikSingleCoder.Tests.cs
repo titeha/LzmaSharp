@@ -445,6 +445,116 @@ public sealed class SevenZipArchiveDecoderGostKuznyechikSingleCoderTests
     Assert.Empty(entries);
   }
 
+  [Fact]
+  public void DecodeSingleFileToArray_GostKuznyechikSingleCoder_СНекорректнымиProperties_ВозвращаетInvalidData()
+  {
+    byte[] packed = CreatePackedForInvalidPropertiesTest();
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    byte[] archive = Build7zArchive_SingleFile_GostKuznyechikSingleCoder_InvalidProperties(
+        packedBytes: packed,
+        fileName: "gost-single-coder-invalid-properties.bin");
+
+    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeSingleFileToArray(
+        archiveBytes: archive,
+        options: SevenZipDecodeOptions.WithPassword(password),
+        fileBytes: out byte[] fileBytes,
+        fileName: out string decodedFileName,
+        bytesConsumed: out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.InvalidData, result);
+    Assert.Equal(archive.Length, bytesConsumed);
+    Assert.Empty(fileBytes);
+    Assert.Equal(string.Empty, decodedFileName);
+  }
+
+  [Fact]
+  public void ExtractToDirectory_GostKuznyechikSingleCoder_СНекорректнымиProperties_ВозвращаетInvalidDataИНичегоНеПишет()
+  {
+    byte[] packed = CreatePackedForInvalidPropertiesTest();
+    const string fileName = "gost-single-coder-invalid-properties.bin";
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    byte[] archive = Build7zArchive_SingleFile_GostKuznyechikSingleCoder_InvalidProperties(
+        packedBytes: packed,
+        fileName: fileName);
+
+    string root = CreateTempRoot();
+
+    try
+    {
+      SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.ExtractToDirectory(
+          archive: archive,
+          options: SevenZipDecodeOptions.WithPassword(password),
+          destinationDirectory: root,
+          overwrite: false,
+          bytesConsumed: out int bytesConsumed);
+
+      Assert.Equal(SevenZipArchiveDecodeResult.InvalidData, result);
+      Assert.Equal(archive.Length, bytesConsumed);
+      AssertDestinationIsEmptyOrMissing(root, fileName);
+    }
+    finally
+    {
+      TryDeleteTree(root);
+    }
+  }
+
+  private static byte[] CreatePackedForInvalidPropertiesTest()
+  {
+    var packed = new byte[32];
+
+    for (int i = 0; i < packed.Length; i++)
+    {
+      packed[i] = unchecked((byte)(i * 23 + 9));
+    }
+
+    return packed;
+  }
+
+  private static byte[] Build7zArchive_SingleFile_GostKuznyechikSingleCoder_InvalidProperties(
+      ReadOnlySpan<byte> packedBytes,
+      string fileName)
+  {
+    byte[] packedBytesArray = packedBytes.ToArray();
+
+    byte[] invalidGostProperties =
+    [
+        SevenZipGostCoder.CurrentPropertiesVersion,
+        0x00,
+    ];
+
+    byte[] nextHeader = BuildHeaderSingleFolderGostKuznyechikSingleCoder(
+        packSize: (ulong)packedBytesArray.Length,
+        gostProperties: invalidGostProperties,
+        unpackSize: (ulong)packedBytesArray.Length,
+        fileName: fileName,
+        folderCrc: null);
+
+    uint nextHeaderCrc = Crc32.Compute(nextHeader);
+
+    var signatureHeader = new SevenZipSignatureHeader(
+        NextHeaderOffset: (ulong)packedBytesArray.Length,
+        NextHeaderSize: (ulong)nextHeader.Length,
+        NextHeaderCrc: nextHeaderCrc);
+
+    byte[] signatureHeaderBytes = new byte[SevenZipSignatureHeader.TotalSize];
+    signatureHeader.Write(signatureHeaderBytes);
+
+    byte[] archive = new byte[
+        signatureHeaderBytes.Length +
+        packedBytesArray.Length +
+        nextHeader.Length];
+
+    signatureHeaderBytes.CopyTo(archive.AsSpan(0));
+    packedBytesArray.CopyTo(archive.AsSpan(signatureHeaderBytes.Length));
+    nextHeader.CopyTo(archive.AsSpan(signatureHeaderBytes.Length + packedBytesArray.Length));
+
+    return archive;
+  }
+
   private static byte[] CreatePackedForUnsupportedKdfTest()
   {
     var packed = new byte[32];
