@@ -20,16 +20,24 @@ public enum SevenZipFolderDecodeResult
 }
 
 /// <summary>
-/// <para>Декодирование данных папки (Folder) из 7z.</para>
-/// <para>
-/// На текущем этапе поддерживаем только простейший вариант:
-/// - один coder
-/// - один входной поток
-/// - один выходной поток
-/// - без BindPairs
-/// - coder: Copy (0x00) или LZMA2 (0x21)
-/// </para>
+/// Декодирование данных папки (Folder) из 7z.
 /// </summary>
+/// <remarks>
+/// Поддерживаются два основных пути:
+/// <list type="bullet">
+/// <item>
+/// <description>специальная ветка BCJ2 для multi-stream folder-ов;</description>
+/// </item>
+/// <item>
+/// <description>
+/// линейный конвейер из одного packed stream и одного или нескольких coder-ов
+/// с формой 1 вход / 1 выход.
+/// </description>
+/// </item>
+/// </list>
+/// В линейном конвейере поддерживаются обычные фильтры и распаковщики,
+/// а также decoder-path для AES и экспериментальных GOST coder-ов LzmaSharp.
+/// </remarks>
 public static class SevenZipFolderDecoder
 {
   private const byte _methodIdCopy = 0x00;
@@ -166,7 +174,7 @@ public static class SevenZipFolderDecoder
         output: out output);
     }
 
-    // На этапе 1 поддерживаем только "линейный конвейер":
+    // Линейный конвейер:
     // - ровно один packed stream;
     // - N coders (N >= 1);
     // - каждый coder: 1 in / 1 out;
