@@ -9,9 +9,15 @@ public enum SevenZipArchiveReadResult
 }
 
 /// <summary>
-/// <para>Инкрементальный reader для 7z-архивов: читает SignatureHeader, NextHeader и парсит Header.</para>
-/// <para>На этом шаге добавлена поддержка EncodedHeader (когда Header лежит в packed streams и должен быть распакован).</para>
+/// Инкрементальный reader для 7z-архивов:
+/// читает SignatureHeader, packed streams, NextHeader и parsed Header.
 /// </summary>
+/// <remarks>
+/// Поддерживает как обычный Header, так и EncodedHeader, когда заголовок
+/// хранится внутри packed streams и должен быть декодирован через Folder decoder.
+/// Для зашифрованного EncodedHeader пароль передаётся через
+/// <see cref="SevenZipDecodeOptions"/>.
+/// </remarks>
 public sealed class SevenZipArchiveReader
 {
   private readonly SevenZipNextHeaderReader _nextHeaderReader = new();
@@ -41,8 +47,24 @@ public sealed class SevenZipArchiveReader
   /// </summary>
   public ReadOnlyMemory<byte> DecodedHeaderBytes { get; private set; }
 
+  /// <summary>
+  /// Читает архив без дополнительных настроек декодирования.
+  /// </summary>
+  /// <remarks>
+  /// Этот overload подходит для незашифрованных архивов и незашифрованных
+  /// EncodedHeader. Для зашифрованного заголовка используйте overload с
+  /// <see cref="SevenZipDecodeOptions"/>.
+  /// </remarks>
   public SevenZipArchiveReadResult Read(ReadOnlySpan<byte> input, out int bytesConsumed) => Read(input: input, options: SevenZipDecodeOptions.Default, bytesConsumed: out bytesConsumed);
 
+
+  /// <summary>
+  /// Читает архив с настройками декодирования.
+  /// </summary>
+  /// <remarks>
+  /// Настройки используются при декодировании EncodedHeader, в том числе для
+  /// передачи пароля в AES и экспериментальные GOST decoder-path сценарии.
+  /// </remarks>
   public SevenZipArchiveReadResult Read(ReadOnlySpan<byte> input, SevenZipDecodeOptions options, out int bytesConsumed)
   {
     ArgumentNullException.ThrowIfNull(options);
