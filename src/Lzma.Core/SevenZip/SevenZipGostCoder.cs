@@ -1,10 +1,10 @@
 namespace Lzma.Core.SevenZip;
 
 /// <summary>
-/// Экспериментальные private method id для GOST-веток LzmaSharp.
+/// Экспериментальные закрытые идентификаторы методов для GOST-ветки LzmaSharp.
 /// </summary>
 /// <remarks>
-/// Это не стандартные method id 7-Zip.
+/// Это не стандартные идентификаторы методов 7-Zip.
 /// Они используются только как внутреннее расширение формата для LzmaSharp.
 /// </remarks>
 public static class SevenZipGostCoder
@@ -15,39 +15,37 @@ public static class SevenZipGostCoder
   public const byte CurrentPropertiesVersion = 1;
 
   /// <summary>
-  /// Специальное значение properties, при котором ключ строится напрямую
-  /// из salt и password без обычного KDF.
+  /// Специальное значение свойства numCyclesPower, при котором ключ строится
+  /// напрямую из соли и парольного материала без обычной функции формирования ключа.
   /// </summary>
   /// <remarks>
-  /// Для GOST-ветки LzmaSharp это экспериментальный test-friendly режим.
-  /// Production KDF будет добавлен отдельным шагом через Стрибог.
+  /// Для GOST-ветки LzmaSharp это экспериментальный тестовый режим.
+  /// Полноценная функция формирования ключа через Стрибог будет добавлена отдельно.
   /// </remarks>
   public const byte DirectKeyNumCyclesPower = 0x3F;
 
   /// <summary>
-  /// Максимальный размер salt в properties экспериментального GOST coder-а.
+  /// Максимальный размер соли в свойствах экспериментального GOST-кодера.
   /// </summary>
   public const int MaxSaltSize = 32;
 
   /// <summary>
-  /// Максимальный размер IV в properties экспериментального GOST coder-а.
+  /// Максимальный размер вектора инициализации в свойствах экспериментального GOST-кодера.
   /// </summary>
   public const int MaxInitializationVectorSize = 16;
 
-  // Private experimental IDs по схеме 3F ... MM MM.
+  // Закрытые экспериментальные идентификаторы методов по схеме 3F ... MM MM.
   // Префикс фиксируем внутри проекта и не меняем без крайней необходимости.
 
   /// <summary>
-  /// Experimental method id для шифрования Кузнечик.
+  /// Экспериментальный идентификатор метода для шифрования Кузнечиком.
   /// </summary>
-  public static ReadOnlySpan<byte> KuznyechikMethodId
-      => [0x3F, 0xD1, 0x6A, 0x52, 0x8C, 0x01, 0x00, 0x01];
+  public static ReadOnlySpan<byte> KuznyechikMethodId => [0x3F, 0xD1, 0x6A, 0x52, 0x8C, 0x01, 0x00, 0x01];
 
   /// <summary>
-  /// Experimental method id для шифрования Магма.
+  /// Экспериментальный идентификатор метода для шифрования Магмой.
   /// </summary>
-  public static ReadOnlySpan<byte> MagmaMethodId
-      => [0x3F, 0xD1, 0x6A, 0x52, 0x8C, 0x01, 0x00, 0x02];
+  public static ReadOnlySpan<byte> MagmaMethodId => [0x3F, 0xD1, 0x6A, 0x52, 0x8C, 0x01, 0x00, 0x02];
 
   /// <summary>
   /// Проверяет, относится ли method id к экспериментальным GOST coder-ам LzmaSharp.
@@ -65,21 +63,35 @@ public static class SevenZipGostCoder
   public static bool IsMagmaMethodId(ReadOnlySpan<byte> methodId) => methodId.SequenceEqual(MagmaMethodId);
 
   /// <summary>
-  /// Пытается разобрать properties экспериментального GOST coder-а.
+  /// Пытается разобрать свойства экспериментального GOST-кодера.
   /// </summary>
   /// <remarks>
-  /// Формат version 1:
-  ///   byte 0: version
-  ///   byte 1: flags (пока должен быть 0)
-  ///   byte 2: numCyclesPower
-  ///   byte 3: saltSize
-  ///   byte 4: ivSize
-  ///   затем: salt
-  ///   затем: IV
+  /// Формат версии 1:
+  /// <list type="bullet">
+  /// <item>
+  /// <description>байт 0: версия формата;</description>
+  /// </item>
+  /// <item>
+  /// <description>байт 1: флаги, пока должны быть равны 0;</description>
+  /// </item>
+  /// <item>
+  /// <description>байт 2: показатель числа циклов формирования ключа;</description>
+  /// </item>
+  /// <item>
+  /// <description>байт 3: размер соли;</description>
+  /// </item>
+  /// <item>
+  /// <description>байт 4: размер вектора инициализации;</description>
+  /// </item>
+  /// <item>
+  /// <description>далее: соль;</description>
+  /// </item>
+  /// <item>
+  /// <description>далее: вектор инициализации.</description>
+  /// </item>
+  /// </list>
   /// </remarks>
-  public static bool TryParseProperties(
-      ReadOnlySpan<byte> properties,
-      out SevenZipGostProperties? parsed)
+  public static bool TryParseProperties(ReadOnlySpan<byte> properties, out SevenZipGostProperties? parsed)
   {
     parsed = null;
 
@@ -120,11 +132,13 @@ public static class SevenZipGostCoder
 }
 
 /// <summary>
-/// Разобранные properties экспериментального GOST coder-а.
+/// Разобранные свойства экспериментального GOST-кодера.
 /// </summary>
-/// <remarks>
-/// Создаёт объект разобранных properties экспериментального GOST coder-а.
-/// </remarks>
+/// <param name="version">Версия формата свойств.</param>
+/// <param name="flags">Флаги свойств.</param>
+/// <param name="numCyclesPower">Показатель числа циклов формирования ключа.</param>
+/// <param name="salt">Соль.</param>
+/// <param name="initializationVector">Вектор инициализации.</param>
 public sealed class SevenZipGostProperties(
     byte version,
     byte flags,
@@ -134,27 +148,27 @@ public sealed class SevenZipGostProperties(
 {
 
   /// <summary>
-  /// Версия формата properties.
+  /// Версия формата свойств.
   /// </summary>
   public byte Version { get; } = version;
 
   /// <summary>
-  /// Flags поля properties.
+  /// Флаги свойств.
   /// </summary>
   public byte Flags { get; } = flags;
 
   /// <summary>
-  /// Показатель числа циклов derivation.
+  /// Показатель числа циклов формирования ключа.
   /// </summary>
   public byte NumCyclesPower { get; } = numCyclesPower;
 
   /// <summary>
-  /// Salt.
+  /// Соль.
   /// </summary>
   public byte[] Salt { get; } = salt;
 
   /// <summary>
-  /// Initialization Vector.
+  /// Вектор инициализации.
   /// </summary>
   public byte[] InitializationVector { get; } = initializationVector;
 }
