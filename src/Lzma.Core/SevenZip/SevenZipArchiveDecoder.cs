@@ -3,14 +3,28 @@ using Lzma.Core.Checksums;
 namespace Lzma.Core.SevenZip;
 
 /// <summary>
-/// <para>Декодирует 7z-архив (в памяти) и возвращает все файлы в виде массива (имя + байты).</para>
-/// <para>
-/// Текущая реализация рассчитана на «простой» 7z, который генерируют наши тесты:
-/// - Только 1 входной поток на folder (NumInStreams = 1)
-/// - Только 1 выходной поток на coder (NumOutStreams = 1)
-/// - LZMA2 (включая COPY-режим)
-/// </para>
+/// Декодирует 7z-архив в памяти и возвращает распакованные файлы или записи архива.
 /// </summary>
+/// <remarks>
+/// Поддерживаемый decoder-path постепенно расширяется и сейчас включает:
+/// <list type="bullet">
+/// <item>
+/// <description>обычные незашифрованные folder-ы с линейным конвейером coder-ов;</description>
+/// </item>
+/// <item>
+/// <description>часть multi-stream сценариев, включая специальную ветку BCJ2;</description>
+/// </item>
+/// <item>
+/// <description>AES-256-CBC для файловых потоков и зашифрованного заголовка;</description>
+/// </item>
+/// <item>
+/// <description>
+/// экспериментальные private GOST coder-ы LzmaSharp для decoder-path.
+/// </description>
+/// </item>
+/// </list>
+/// Реализация остаётся decoder-only: writer 7z-архивов здесь не реализован.
+/// </remarks>
 public static class SevenZipArchiveDecoder
 {
   /// <summary>
@@ -205,7 +219,7 @@ public static class SevenZipArchiveDecoder
     if (emptyStreams is not null && emptyStreams.Length != fileCount)
       return SevenZipArchiveDecodeResult.InvalidData;
 
-    // kAnti: элементы "удаления" (обычно в update-архивах). На этапе 1 не поддерживаем.
+    // kAnti: элементы "удаления" из update-архивов пока не поддерживаются.
     bool[]? anti = filesInfo.Anti;
     if (anti is not null && anti.Length != fileCount)
       return SevenZipArchiveDecodeResult.InvalidData;
