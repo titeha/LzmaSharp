@@ -1,18 +1,27 @@
 namespace Lzma.Core.SevenZip;
 
 /// <summary>
-/// Подготовка initialization vector для экспериментальных GOST coder-ов.
+/// Подготовка вектора инициализации для экспериментальных ГОСТ-кодеров.
 /// </summary>
+/// <remarks>
+/// Сейчас используется только сценарий Кузнечик в режиме CTR.
+/// </remarks>
 public static class SevenZipGostInitializationVector
 {
   /// <summary>
-  /// Размер IV в байтах для текущего сценария Кузнечик + CTR.
+  /// Размер вектора инициализации в байтах для текущего сценария Кузнечик + CTR.
   /// </summary>
   public const int KuznyechikCtrInitializationVectorSize = 8;
 
   /// <summary>
-  /// Пытается построить IV для текущего сценария Кузнечик + CTR.
+  /// Пытается построить вектор инициализации для текущего сценария Кузнечик + CTR.
   /// </summary>
+  /// <param name="properties">Разобранные свойства ГОСТ-кодера.</param>
+  /// <param name="destination">Буфер, куда будет записан вектор инициализации.</param>
+  /// <returns>
+  /// <see langword="true"/>, если вектор инициализации удалось построить;
+  /// иначе <see langword="false"/>.
+  /// </returns>
   public static bool TryBuildKuznyechikCtr(
       SevenZipGostProperties properties,
       Span<byte> destination)
@@ -20,7 +29,7 @@ public static class SevenZipGostInitializationVector
     ArgumentNullException.ThrowIfNull(properties);
 
     if (destination.Length < KuznyechikCtrInitializationVectorSize)
-      throw new ArgumentException("Буфер назначения меньше размера IV для Кузнечика в CTR.", nameof(destination));
+      throw new ArgumentException("Буфер назначения меньше размера вектора инициализации для Кузнечика в CTR.", nameof(destination));
 
     if (properties.InitializationVector.Length != KuznyechikCtrInitializationVectorSize)
       return false;
@@ -30,8 +39,16 @@ public static class SevenZipGostInitializationVector
   }
 
   /// <summary>
-  /// Пытается построить IV для текущего сценария Кузнечик + CTR.
+  /// Пытается построить вектор инициализации для текущего сценария Кузнечик + CTR.
   /// </summary>
+  /// <param name="properties">Разобранные свойства ГОСТ-кодера.</param>
+  /// <param name="initializationVector">
+  /// Вектор инициализации при успешном результате; иначе пустой массив.
+  /// </param>
+  /// <returns>
+  /// <see langword="true"/>, если вектор инициализации удалось построить;
+  /// иначе <see langword="false"/>.
+  /// </returns>
   public static bool TryBuildKuznyechikCtr(
       SevenZipGostProperties properties,
       out byte[] initializationVector)
