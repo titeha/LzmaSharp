@@ -5,7 +5,7 @@ using Lzma.Core.Crypto.Gost;
 namespace Lzma.Core.SevenZip;
 
 /// <summary>
-/// Результат расшифровки packed stream через экспериментальный GOST coder.
+/// Результат расшифровки упакованного потока через экспериментальный ГОСТ-кодер.
 /// </summary>
 public enum SevenZipGostDecryptResult
 {
@@ -15,7 +15,7 @@ public enum SevenZipGostDecryptResult
   Ok = 0,
 
   /// <summary>
-  /// Данные или свойства coder-а некорректны.
+  /// Данные, свойства кодера или идентификатор метода некорректны.
   /// </summary>
   InvalidData = 1,
 
@@ -26,13 +26,28 @@ public enum SevenZipGostDecryptResult
 }
 
 /// <summary>
-/// Расшифровка packed stream для экспериментальных GOST coder-ов.
+/// Расшифровка упакованных потоков для экспериментальных ГОСТ-кодеров.
 /// </summary>
+/// <remarks>
+/// Сейчас поддержан только Кузнечик в режиме CTR и только тестовый direct-key
+/// режим формирования ключа. Магма и полноценный ГОСТ-KDF пока возвращают
+/// <see cref="SevenZipGostDecryptResult.NotSupported"/>.
+/// </remarks>
 public static class SevenZipGostPackedStreamDecryptor
 {
   /// <summary>
-  /// Пытается расшифровать packed stream через парольный материал.
+  /// Пытается расшифровать упакованный поток через парольный материал.
   /// </summary>
+  /// <remarks>
+  /// Этот overload сам формирует ключ из свойств ГОСТ-кодера и пароля.
+  /// Пока поддержан только direct-key режим <see cref="SevenZipGostCoder.DirectKeyNumCyclesPower"/>.
+  /// </remarks>
+  /// <param name="methodId">Идентификатор метода ГОСТ-кодера.</param>
+  /// <param name="properties">Разобранные свойства ГОСТ-кодера.</param>
+  /// <param name="password">Парольный материал архива.</param>
+  /// <param name="ciphertext">Зашифрованный упакованный поток.</param>
+  /// <param name="plaintext">Расшифрованный поток при успешном результате.</param>
+  /// <returns>Результат попытки расшифровки.</returns>
   public static SevenZipGostDecryptResult TryDecrypt(
       ReadOnlySpan<byte> methodId,
       SevenZipGostProperties properties,
@@ -90,8 +105,18 @@ public static class SevenZipGostPackedStreamDecryptor
   }
 
   /// <summary>
-  /// Пытается расшифровать packed stream.
+  /// Пытается расшифровать упакованный поток готовым ключом.
   /// </summary>
+  /// <remarks>
+  /// Этот overload не выполняет формирование ключа и используется после того,
+  /// как ключ уже получен вызывающим кодом.
+  /// </remarks>
+  /// <param name="methodId">Идентификатор метода ГОСТ-кодера.</param>
+  /// <param name="properties">Разобранные свойства ГОСТ-кодера.</param>
+  /// <param name="key">Готовый 256-битный ключ.</param>
+  /// <param name="ciphertext">Зашифрованный упакованный поток.</param>
+  /// <param name="plaintext">Расшифрованный поток при успешном результате.</param>
+  /// <returns>Результат попытки расшифровки.</returns>
   public static SevenZipGostDecryptResult TryDecrypt(
       ReadOnlySpan<byte> methodId,
       SevenZipGostProperties properties,
