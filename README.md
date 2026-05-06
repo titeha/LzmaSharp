@@ -4,9 +4,13 @@
 
 ## Текущий этап
 
-**Этап 1.6 завершён.**
+**Этап 2 начат.**
 
-Проект доведён до состояния надёжного управляемого decoder-only распаковщика 7z для поддерживаемого подмножества формата.
+Этапы 1, 1.5 и 1.6 завершены.
+
+Текущий основной этап — encoder / writer.
+
+Цель ближайшей работы — постепенно реализовать базовый путь записи данных и архивов без шифрования, не переписывая уже стабилизированный decoder-path.
 
 Завершены:
 
@@ -14,7 +18,7 @@
 - этап 1.5 — AES / 7zAES decoder-path;
 - этап 1.6 — экспериментальный GOST decoder-path.
 
-GOST-поддержка является экспериментальным расширением LzmaSharp, использует private method id и не совместима со стандартным 7-Zip.
+Этап 2 описан в [`docs/STAGE2_WRITER_STATUS.md`](docs/STAGE2_WRITER_STATUS.md).
 
 ## Принципы разработки
 
@@ -46,11 +50,13 @@ tests/
 
 docs/
   ARCHITECTURE.md
+  ARCHIVER_ROADMAP.md
   ROADMAP.md
   TESTS_PLAN.md
   STAGE1_STATUS.md
   STAGE15_AES_STATUS.md
   STAGE16_GOST_STATUS.md
+  STAGE2_WRITER_STATUS.md
 
 vendor/
   lzma-sdk/               # Эталонные исходники для сверки
