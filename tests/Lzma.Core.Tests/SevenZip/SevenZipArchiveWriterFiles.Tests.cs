@@ -50,17 +50,30 @@ public sealed class SevenZipArchiveWriterFilesTests
   }
 
   [Fact]
-  public void BuildArchive_НепустойФайлПокаВозвращаетNotSupported()
+  public void BuildArchive_ОдинНепустойФайлСоздаётCopyАрхивКоторыйЧитаетсяDecoderPath()
   {
+    byte[] content = [1, 2, 3, 4, 5];
+
     SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
         new[]
         {
-                new SevenZipArchiveWriterFile("file.txt", new byte[] { 1, 2, 3 }),
+            new SevenZipArchiveWriterFile("file.bin", content),
         },
         out byte[] archive);
 
-    Assert.Equal(SevenZipArchiveWriteResult.NotSupported, writeResult);
-    Assert.Empty(archive);
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
+    Assert.NotEmpty(archive);
+
+    SevenZipArchiveDecodeResult decodeResult = SevenZipArchiveDecoder.DecodeSingleFileToArray(
+        archive,
+        out byte[] fileBytes,
+        out string fileName,
+        out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, decodeResult);
+    Assert.Equal("file.bin", fileName);
+    Assert.Equal(content, fileBytes);
+    Assert.Equal(archive.Length, bytesConsumed);
   }
 
   [Fact]

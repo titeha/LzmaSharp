@@ -68,10 +68,118 @@ public static class SevenZipArchiveWriter
     if (file is null || file.Content is null)
       return SevenZipArchiveWriteResult.InvalidData;
 
-    if (file.Content.Length != 0)
-      return SevenZipArchiveWriteResult.NotSupported;
+    if (file.Content.Length == 0)
+      return BuildSingleEmptyFileArchive(file.Name, out archive);
 
-    return BuildSingleEmptyFileArchive(file.Name, out archive);
+    return BuildSingleFileCopyArchive(file.Name, file.Content, out archive);
+  }
+
+  /// <summary>
+  /// Строит 7z-архив с одним непустым файлом через Copy coder.
+  /// </summary>
+  private static SevenZipArchiveWriteResult BuildSingleFileCopyArchive(
+      string fileName,
+      byte[] content,
+      out byte[] archive)
+  {
+    archive = [];
+
+    if (!IsSupportedSingleFileName(fileName))
+      return SevenZipArchiveWriteResult.InvalidData;
+
+    if (content is null)
+      return SevenZipArchiveWriteResult.InvalidData;
+
+    if (content.Length == 0)
+      return BuildSingleEmptyFileArchive(fileName, out archive);
+
+    if (!TryBuildSingleFileCopyNextHeader(fileName, content.Length, out byte[] nextHeaderBytes))
+      return SevenZipArchiveWriteResult.InternalError;
+
+    archive = BuildArchiveWithPackedData(content, nextHeaderBytes);
+
+    return SevenZipArchiveWriteResult.Ok;
+  }
+
+  /// <summary>
+  /// Строит next header для архива с одним непустым файлом через Copy coder.
+  /// </summary>
+  private static bool TryBuildSingleFileCopyNextHeader(
+      string fileName,
+      int contentLength,
+      out byte[] nextHeaderBytes)
+  {
+    nextHeaderBytes = [];
+
+    List<byte> header = new(128)
+    {
+        SevenZipNid.Header,
+
+        SevenZipNid.MainStreamsInfo,
+
+        SevenZipNid.PackInfo,
+    };
+
+    if (!TryWriteUInt64(header, 0))
+      return false;
+
+    if (!TryWriteUInt64(header, 1))
+      return false;
+
+    header.Add(SevenZipNid.Size);
+
+    if (!TryWriteUInt64(header, (ulong)contentLength))
+      return false;
+
+    header.Add(SevenZipNid.End);
+
+    header.Add(SevenZipNid.UnpackInfo);
+
+    header.Add(SevenZipNid.Folder);
+
+    if (!TryWriteUInt64(header, 1))
+      return false;
+
+    header.Add(0x00);
+
+    if (!TryWriteUInt64(header, 1))
+      return false;
+
+    // Copy coder: Method ID = 00, id size = 1, без properties.
+    header.Add(0x01);
+    header.Add(0x00);
+
+    header.Add(SevenZipNid.CodersUnpackSize);
+
+    if (!TryWriteUInt64(header, (ulong)contentLength))
+      return false;
+
+    header.Add(SevenZipNid.End);
+
+    header.Add(SevenZipNid.End);
+
+    header.Add(SevenZipNid.FilesInfo);
+
+    if (!TryWriteUInt64(header, 1))
+      return false;
+
+    header.Add(SevenZipNid.Name);
+
+    byte[] nameBytes = Encoding.Unicode.GetBytes(fileName + "\0");
+
+    if (!TryWriteUInt64(header, (ulong)(1 + nameBytes.Length)))
+      return false;
+
+    header.Add(0x00);
+    header.AddRange(nameBytes);
+
+    header.Add(SevenZipNid.End);
+
+    header.Add(SevenZipNid.End);
+
+    nextHeaderBytes = [.. header];
+
+    return true;
   }
 
   /// <summary>
@@ -127,19 +235,33 @@ public static class SevenZipArchiveWriter
   /// <summary>
   /// Строит каркас 7z-архива из уже подготовленного next header.
   /// </summary>
-  private static byte[] BuildArchiveWithNextHeader(byte[] nextHeaderBytes)
+  private static byte[] BuildArchiveWithNextHeader(byte[] nextHeaderBytes) => BuildArchiveWithPackedData([], nextHeaderBytes);
+
+  /// <summary>
+  /// Строит 7z-архив из packed data и уже подготовленного next header.
+  /// </summary>
+  private static byte[] BuildArchiveWithPackedData(
+      byte[] packedData,
+      byte[] nextHeaderBytes)
   {
     uint nextHeaderCrc = Crc32.Compute(nextHeaderBytes);
 
     var signatureHeader = new SevenZipSignatureHeader(
-        NextHeaderOffset: 0,
+        NextHeaderOffset: (ulong)packedData.Length,
         NextHeaderSize: (ulong)nextHeaderBytes.Length,
         NextHeaderCrc: nextHeaderCrc);
 
-    byte[] archive = new byte[SevenZipSignatureHeader.Size + nextHeaderBytes.Length];
+    byte[] archive = new byte[
+        SevenZipSignatureHeader.Size
+        + packedData.Length
+        + nextHeaderBytes.Length];
 
     signatureHeader.Write(archive);
-    nextHeaderBytes.CopyTo(archive.AsSpan(SevenZipSignatureHeader.Size));
+
+    packedData.CopyTo(archive.AsSpan(SevenZipSignatureHeader.Size));
+
+    nextHeaderBytes.CopyTo(
+        archive.AsSpan(SevenZipSignatureHeader.Size + packedData.Length));
 
     return archive;
   }
