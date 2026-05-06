@@ -18,6 +18,16 @@ public static class SevenZipArchiveWriter
             SevenZipNid.End,
         ];
 
+    archive = BuildArchiveWithNextHeader(nextHeaderBytes);
+
+    return SevenZipArchiveWriteResult.Ok;
+  }
+
+  /// <summary>
+  /// Строит каркас 7z-архива из уже подготовленного next header.
+  /// </summary>
+  private static byte[] BuildArchiveWithNextHeader(byte[] nextHeaderBytes)
+  {
     uint nextHeaderCrc = Crc32.Compute(nextHeaderBytes);
 
     var signatureHeader = new SevenZipSignatureHeader(
@@ -25,11 +35,11 @@ public static class SevenZipArchiveWriter
         NextHeaderSize: (ulong)nextHeaderBytes.Length,
         NextHeaderCrc: nextHeaderCrc);
 
-    archive = new byte[SevenZipSignatureHeader.Size + nextHeaderBytes.Length];
+    byte[] archive = new byte[SevenZipSignatureHeader.Size + nextHeaderBytes.Length];
 
     signatureHeader.Write(archive);
     nextHeaderBytes.CopyTo(archive.AsSpan(SevenZipSignatureHeader.Size));
 
-    return SevenZipArchiveWriteResult.Ok;
+    return archive;
   }
 }
