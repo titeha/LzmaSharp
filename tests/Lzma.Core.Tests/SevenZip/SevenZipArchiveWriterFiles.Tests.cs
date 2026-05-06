@@ -115,4 +115,33 @@ public sealed class SevenZipArchiveWriterFilesTests
     Assert.Equal(SevenZipArchiveWriteResult.InvalidData, writeResult);
     Assert.Empty(archive);
   }
+
+  [Fact]
+  public void BuildArchive_ПовреждениеНепустогоCopyФайлаДаётInvalidData()
+  {
+    byte[] content = [1, 2, 3, 4, 5];
+
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
+        new[]
+        {
+            new SevenZipArchiveWriterFile("file.bin", content),
+        },
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
+    Assert.NotEmpty(archive);
+
+    archive[SevenZipSignatureHeader.Size] ^= 0xFF;
+
+    SevenZipArchiveDecodeResult decodeResult = SevenZipArchiveDecoder.DecodeSingleFileToArray(
+        archive,
+        out byte[] fileBytes,
+        out string fileName,
+        out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.InvalidData, decodeResult);
+    Assert.Empty(fileBytes);
+    Assert.Equal(string.Empty, fileName);
+    Assert.Equal(archive.Length, bytesConsumed);
+  }
 }

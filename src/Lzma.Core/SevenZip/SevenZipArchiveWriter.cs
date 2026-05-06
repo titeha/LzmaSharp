@@ -93,7 +93,13 @@ public static class SevenZipArchiveWriter
     if (content.Length == 0)
       return BuildSingleEmptyFileArchive(fileName, out archive);
 
-    if (!TryBuildSingleFileCopyNextHeader(fileName, content.Length, out byte[] nextHeaderBytes))
+    uint contentCrc = Crc32.Compute(content);
+
+    if (!TryBuildSingleFileCopyNextHeader(
+            fileName,
+            content.Length,
+            contentCrc,
+            out byte[] nextHeaderBytes))
       return SevenZipArchiveWriteResult.InternalError;
 
     archive = BuildArchiveWithPackedData(content, nextHeaderBytes);
@@ -105,9 +111,10 @@ public static class SevenZipArchiveWriter
   /// Строит next header для архива с одним непустым файлом через Copy coder.
   /// </summary>
   private static bool TryBuildSingleFileCopyNextHeader(
-      string fileName,
-      int contentLength,
-      out byte[] nextHeaderBytes)
+    string fileName,
+    int contentLength,
+    uint contentCrc,
+    out byte[] nextHeaderBytes)
   {
     nextHeaderBytes = [];
 
@@ -131,6 +138,10 @@ public static class SevenZipArchiveWriter
     if (!TryWriteUInt64(header, (ulong)contentLength))
       return false;
 
+    header.Add(SevenZipNid.Crc);
+    header.Add(0x01);
+    WriteUInt32LittleEndian(header, contentCrc);
+
     header.Add(SevenZipNid.End);
 
     header.Add(SevenZipNid.UnpackInfo);
@@ -153,6 +164,10 @@ public static class SevenZipArchiveWriter
 
     if (!TryWriteUInt64(header, (ulong)contentLength))
       return false;
+
+    header.Add(SevenZipNid.Crc);
+    header.Add(0x01);
+    WriteUInt32LittleEndian(header, contentCrc);
 
     header.Add(SevenZipNid.End);
 
@@ -288,5 +303,16 @@ public static class SevenZipArchiveWriter
         out _);
 
     return result == SevenZipEncodedUInt64.WriteResult.Ok;
+  }
+
+  /// <summary>
+  /// Пишет UInt32 в little-endian представлении.
+  /// </summary>
+  private static void WriteUInt32LittleEndian(List<byte> destination, uint value)
+  {
+    destination.Add((byte)value);
+    destination.Add((byte)(value >> 8));
+    destination.Add((byte)(value >> 16));
+    destination.Add((byte)(value >> 24));
   }
 }
