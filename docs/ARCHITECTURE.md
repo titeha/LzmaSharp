@@ -319,6 +319,29 @@ ExtractToDirectory
 
 Запись AES-архивов не входит в текущую реализацию AES decoder-path. Она относится к будущему развитию writer-а.
 
+## Экспериментальная GOST-ветка
+
+GOST-поддержка является экспериментальным decoder-only расширением LzmaSharp.
+
+Она подключена в decode-path 7z через `SevenZipFolderDecoder` и используется только для чтения архивов с private method id проекта.
+
+Поддержанный сценарий:
+
+- Kuznyechik;
+- CTR;
+- IV;
+- direct-key KDF;
+- расшифровка packed stream-ов;
+- поддержка encrypted header.
+
+Не входит в текущую архитектуру:
+
+- запись GOST-архивов;
+- совместимость со стандартным 7-Zip;
+- Magma decrypt;
+- полноценный KDF через Стрибог;
+- streaming decrypt API.
+
 ## API-направление
 
 Текущий фокус API:
