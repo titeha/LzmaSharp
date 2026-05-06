@@ -1,3 +1,5 @@
+using System.Text;
+
 using Lzma.Core.Checksums;
 
 namespace Lzma.Core.SevenZip;
@@ -24,6 +26,105 @@ public static class SevenZipArchiveWriter
   }
 
   /// <summary>
+  /// Строит 7z-архив с одним пустым файлом.
+  /// </summary>
+  public static SevenZipArchiveWriteResult BuildSingleEmptyFileArchive(
+      string fileName,
+      out byte[] archive)
+  {
+    archive = [];
+
+    if (!IsSupportedSingleFileName(fileName))
+      return SevenZipArchiveWriteResult.InvalidData;
+
+    if (!TryBuildSingleEmptyFileNextHeader(fileName, out byte[] nextHeaderBytes))
+      return SevenZipArchiveWriteResult.InternalError;
+
+    archive = BuildArchiveWithNextHeader(nextHeaderBytes);
+
+    return SevenZipArchiveWriteResult.Ok;
+  }
+
+  /// <summary>
+  /// Строит 7z-архив для поддерживаемого набора файлов.
+  /// </summary>
+  public static SevenZipArchiveWriteResult BuildArchive(
+      IReadOnlyList<SevenZipArchiveWriterFile> files,
+      out byte[] archive)
+  {
+    archive = [];
+
+    if (files is null)
+      return SevenZipArchiveWriteResult.InvalidData;
+
+    if (files.Count == 0)
+      return BuildEmptyArchive(out archive);
+
+    if (files.Count != 1)
+      return SevenZipArchiveWriteResult.NotSupported;
+
+    SevenZipArchiveWriterFile file = files[0];
+
+    if (file is null || file.Content is null)
+      return SevenZipArchiveWriteResult.InvalidData;
+
+    if (file.Content.Length != 0)
+      return SevenZipArchiveWriteResult.NotSupported;
+
+    return BuildSingleEmptyFileArchive(file.Name, out archive);
+  }
+
+  /// <summary>
+  /// Строит next header для архива с одним пустым файлом.
+  /// </summary>
+  private static bool TryBuildSingleEmptyFileNextHeader(
+      string fileName,
+      out byte[] nextHeaderBytes)
+  {
+    nextHeaderBytes = [];
+
+    List<byte> header = new(128)
+    {
+      SevenZipNid.Header,
+      SevenZipNid.FilesInfo,
+    };
+
+    if (!TryWriteUInt64(header, 1))
+      return false;
+
+    header.Add(SevenZipNid.EmptyStream);
+
+    if (!TryWriteUInt64(header, 1))
+      return false;
+
+    header.Add(0x80);
+
+    header.Add(SevenZipNid.EmptyFile);
+
+    if (!TryWriteUInt64(header, 1))
+      return false;
+
+    header.Add(0x80);
+
+    header.Add(SevenZipNid.Name);
+
+    byte[] nameBytes = Encoding.Unicode.GetBytes(fileName + "\0");
+
+    if (!TryWriteUInt64(header, (ulong)(1 + nameBytes.Length)))
+      return false;
+
+    header.Add(0x00);
+    header.AddRange(nameBytes);
+
+    header.Add(SevenZipNid.End);
+    header.Add(SevenZipNid.End);
+
+    nextHeaderBytes = [.. header];
+
+    return true;
+  }
+
+  /// <summary>
   /// Строит каркас 7z-архива из уже подготовленного next header.
   /// </summary>
   private static byte[] BuildArchiveWithNextHeader(byte[] nextHeaderBytes)
@@ -41,5 +142,29 @@ public static class SevenZipArchiveWriter
     nextHeaderBytes.CopyTo(archive.AsSpan(SevenZipSignatureHeader.Size));
 
     return archive;
+  }
+
+  /// <summary>
+  /// Проверяет имя файла для первого минимального writer-сценария.
+  /// </summary>
+  private static bool IsSupportedSingleFileName(string fileName)
+  {
+    return !string.IsNullOrEmpty(fileName)
+        && fileName.IndexOf('\0') < 0
+        && fileName.IndexOf('/') < 0
+        && fileName.IndexOf('\\') < 0;
+  }
+
+  /// <summary>
+  /// Пишет UInt64 в 7z-представлении в наращиваемый буфер.
+  /// </summary>
+  private static bool TryWriteUInt64(List<byte> destination, ulong value)
+  {
+    SevenZipEncodedUInt64.WriteResult result = SevenZipEncodedUInt64.TryWrite(
+        destination,
+        value,
+        out _);
+
+    return result == SevenZipEncodedUInt64.WriteResult.Ok;
   }
 }
