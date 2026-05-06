@@ -188,6 +188,14 @@ public static class SevenZipArchiveWriter
     header.Add(0x00);
     header.AddRange(nameBytes);
 
+    header.Add(SevenZipNid.Crc);
+
+    if (!TryWriteUInt64(header, 5))
+      return false;
+
+    header.Add(0x01);
+    WriteUInt32LittleEndian(header, contentCrc);
+
     header.Add(SevenZipNid.End);
 
     header.Add(SevenZipNid.End);

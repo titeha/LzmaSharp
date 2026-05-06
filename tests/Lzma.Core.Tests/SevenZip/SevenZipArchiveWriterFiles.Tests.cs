@@ -1,3 +1,4 @@
+using Lzma.Core.Checksums;
 using Lzma.Core.SevenZip;
 
 namespace Lzma.Core.Tests.SevenZip;
@@ -143,5 +144,77 @@ public sealed class SevenZipArchiveWriterFilesTests
     Assert.Empty(fileBytes);
     Assert.Equal(string.Empty, fileName);
     Assert.Equal(archive.Length, bytesConsumed);
+  }
+
+  [Fact]
+  public void BuildArchive_ПовреждениеФайловогоCrcВHeaderДаётInvalidData()
+  {
+    byte[] content = [1, 2, 3, 4, 5];
+
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
+        new[]
+        {
+            new SevenZipArchiveWriterFile("file.bin", content),
+        },
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
+    Assert.NotEmpty(archive);
+
+    CorruptLastCrcPropertyInNextHeaderAndRefreshHeaderCrc(
+        archive,
+        packedDataLength: content.Length);
+
+    SevenZipArchiveDecodeResult decodeResult = SevenZipArchiveDecoder.DecodeSingleFileToArray(
+        archive,
+        out byte[] fileBytes,
+        out string fileName,
+        out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.InvalidData, decodeResult);
+    Assert.Empty(fileBytes);
+    Assert.Equal(string.Empty, fileName);
+    Assert.Equal(archive.Length, bytesConsumed);
+  }
+
+  private static void CorruptLastCrcPropertyInNextHeaderAndRefreshHeaderCrc(
+    byte[] archive,
+    int packedDataLength)
+  {
+    int nextHeaderStart = SevenZipSignatureHeader.Size + packedDataLength;
+
+    Span<byte> nextHeader = archive.AsSpan(nextHeaderStart);
+
+    int crcPropertyOffset = FindLastCrcPropertyOffset(nextHeader);
+
+    Assert.True(crcPropertyOffset >= 0);
+
+    nextHeader[crcPropertyOffset + 3] ^= 0xFF;
+
+    uint nextHeaderCrc = Crc32.Compute(nextHeader);
+
+    var signatureHeader = new SevenZipSignatureHeader(
+        NextHeaderOffset: (ulong)packedDataLength,
+        NextHeaderSize: (ulong)nextHeader.Length,
+        NextHeaderCrc: nextHeaderCrc);
+
+    signatureHeader.Write(archive);
+  }
+
+  private static int FindLastCrcPropertyOffset(ReadOnlySpan<byte> nextHeader)
+  {
+    int result = -1;
+
+    for (int i = 0; i <= nextHeader.Length - 7; i++)
+    {
+      if (nextHeader[i] == SevenZipNid.Crc
+          && nextHeader[i + 1] == 0x05
+          && nextHeader[i + 2] == 0x01)
+      {
+        result = i;
+      }
+    }
+
+    return result;
   }
 }
