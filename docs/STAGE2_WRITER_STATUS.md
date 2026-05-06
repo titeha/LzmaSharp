@@ -58,7 +58,58 @@ Writer реализуется снизу вверх:
 - без timestamp-метаданных, если они не нужны для корректного чтения;
 - с round-trip проверкой через `SevenZipArchiveReader` / `SevenZipArchiveDecoder`.
 
-Конкретный первый метод записи выбирается отдельным маленьким шагом.
+Первый метод записи выбран и реализован: один непустой файл через `Copy`.
+
+## Первый реализованный результат
+
+На старте этапа 2 добавлен минимальный writer API:
+
+- `SevenZipArchiveWriter.BuildArchive(...)`;
+- `SevenZipArchiveWriterFile`;
+- `SevenZipArchiveWriteResult`.
+
+Основной публичный вход writer-а сейчас — `BuildArchive(...)`.
+
+Поддержанные сценарии:
+
+- пустой архив;
+- архив с одним пустым файлом;
+- архив с одним непустым файлом через `Copy`.
+
+Для сценария одного непустого файла через `Copy` writer формирует:
+
+- packed data между signature header и next header;
+- `PackInfo`;
+- `UnpackInfo`;
+- `FilesInfo`;
+- `Copy` coder;
+- CRC packed stream-а;
+- CRC folder stream-а;
+- CRC файла.
+
+Покрыто тестами:
+
+- round-trip пустого архива через decoder-path;
+- round-trip одного пустого файла через decoder-path;
+- round-trip одного непустого `Copy`-файла через decoder-path;
+- структурная проверка writer-архива через `SevenZipArchiveReader`;
+- повреждение packed data возвращает `InvalidData`;
+- повреждение файлового CRC в header возвращает `InvalidData`;
+- несколько файлов пока возвращают `NotSupported`;
+- некорректные имена файлов возвращают `InvalidData`;
+- `null`-входные данные возвращают `InvalidData`.
+
+Пока не поддержано:
+
+- несколько файлов;
+- директории;
+- timestamps;
+- file attributes;
+- solid-группировка;
+- LZMA writer;
+- LZMA2 writer;
+- AES writer;
+- GOST writer.
 
 ## Контракт ошибок
 
