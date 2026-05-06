@@ -173,30 +173,8 @@ public static class SevenZipArchiveWriter
 
     header.Add(SevenZipNid.End);
 
-    header.Add(SevenZipNid.FilesInfo);
-
-    if (!TryWriteUInt64(header, 1))
+    if (!TryWriteSingleFileCopyFilesInfo(header, fileName, contentCrc))
       return false;
-
-    header.Add(SevenZipNid.Name);
-
-    byte[] nameBytes = Encoding.Unicode.GetBytes(fileName + "\0");
-
-    if (!TryWriteUInt64(header, (ulong)(1 + nameBytes.Length)))
-      return false;
-
-    header.Add(0x00);
-    header.AddRange(nameBytes);
-
-    header.Add(SevenZipNid.Crc);
-
-    if (!TryWriteUInt64(header, 5))
-      return false;
-
-    header.Add(0x01);
-    WriteUInt32LittleEndian(header, contentCrc);
-
-    header.Add(SevenZipNid.End);
 
     header.Add(SevenZipNid.End);
 
@@ -214,11 +192,26 @@ public static class SevenZipArchiveWriter
   {
     nextHeaderBytes = [];
 
-    List<byte> header = new(128)
-    {
-      SevenZipNid.Header,
-      SevenZipNid.FilesInfo,
-    };
+    List<byte> header = new(128) { SevenZipNid.Header };
+
+    if (!TryWriteSingleEmptyFileFilesInfo(header, fileName))
+      return false;
+
+    header.Add(SevenZipNid.End);
+
+    nextHeaderBytes = [.. header];
+
+    return true;
+  }
+
+  /// <summary>
+  /// Пишет FilesInfo для одного пустого файла.
+  /// </summary>
+  private static bool TryWriteSingleEmptyFileFilesInfo(
+      List<byte> header,
+      string fileName)
+  {
+    header.Add(SevenZipNid.FilesInfo);
 
     if (!TryWriteUInt64(header, 1))
       return false;
@@ -237,6 +230,45 @@ public static class SevenZipArchiveWriter
 
     header.Add(0x80);
 
+    if (!TryWriteSingleFileNameProperty(header, fileName))
+      return false;
+
+    header.Add(SevenZipNid.End);
+
+    return true;
+  }
+
+  /// <summary>
+  /// Пишет FilesInfo для одного непустого файла Copy.
+  /// </summary>
+  private static bool TryWriteSingleFileCopyFilesInfo(
+      List<byte> header,
+      string fileName,
+      uint contentCrc)
+  {
+    header.Add(SevenZipNid.FilesInfo);
+
+    if (!TryWriteUInt64(header, 1))
+      return false;
+
+    if (!TryWriteSingleFileNameProperty(header, fileName))
+      return false;
+
+    if (!TryWriteSingleDefinedCrcProperty(header, contentCrc))
+      return false;
+
+    header.Add(SevenZipNid.End);
+
+    return true;
+  }
+
+  /// <summary>
+  /// Пишет свойство имени для одного файла.
+  /// </summary>
+  private static bool TryWriteSingleFileNameProperty(
+      List<byte> header,
+      string fileName)
+  {
     header.Add(SevenZipNid.Name);
 
     byte[] nameBytes = Encoding.Unicode.GetBytes(fileName + "\0");
@@ -247,10 +279,23 @@ public static class SevenZipArchiveWriter
     header.Add(0x00);
     header.AddRange(nameBytes);
 
-    header.Add(SevenZipNid.End);
-    header.Add(SevenZipNid.End);
+    return true;
+  }
 
-    nextHeaderBytes = [.. header];
+  /// <summary>
+  /// Пишет CRC-свойство для одного файла с allAreDefined.
+  /// </summary>
+  private static bool TryWriteSingleDefinedCrcProperty(
+      List<byte> header,
+      uint crc)
+  {
+    header.Add(SevenZipNid.Crc);
+
+    if (!TryWriteUInt64(header, 5))
+      return false;
+
+    header.Add(0x01);
+    WriteUInt32LittleEndian(header, crc);
 
     return true;
   }
