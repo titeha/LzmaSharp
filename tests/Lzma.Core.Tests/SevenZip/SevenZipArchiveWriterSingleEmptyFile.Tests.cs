@@ -7,9 +7,9 @@ public sealed class SevenZipArchiveWriterSingleEmptyFileTests
   [Fact]
   public void BuildSingleEmptyFileArchive_СоздаётАрхивКоторыйЧитаетсяDecoderPath()
   {
-    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildSingleEmptyFileArchive(
-        "empty.txt",
-        out byte[] archive);
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
+    [new SevenZipArchiveWriterFile("empty.txt", []),],
+    out byte[] archive);
 
     Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
     Assert.NotEmpty(archive);
@@ -33,9 +33,9 @@ public sealed class SevenZipArchiveWriterSingleEmptyFileTests
   [InlineData("bad\0name.txt")]
   public void BuildSingleEmptyFileArchive_НекорректноеИмяВозвращаетInvalidData(string fileName)
   {
-    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildSingleEmptyFileArchive(
-        fileName,
-        out byte[] archive);
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
+      [new SevenZipArchiveWriterFile(fileName, []),],
+      out byte[] archive);
 
     Assert.Equal(SevenZipArchiveWriteResult.InvalidData, writeResult);
     Assert.Empty(archive);
@@ -44,7 +44,7 @@ public sealed class SevenZipArchiveWriterSingleEmptyFileTests
   [Fact]
   public void BuildSingleEmptyFileArchive_NullИмяВозвращаетInvalidData()
   {
-    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildSingleEmptyFileArchive(
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
         null!,
         out byte[] archive);
 

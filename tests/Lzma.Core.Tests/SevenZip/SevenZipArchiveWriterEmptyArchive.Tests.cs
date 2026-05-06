@@ -5,10 +5,11 @@ namespace Lzma.Core.Tests.SevenZip;
 public sealed class SevenZipArchiveWriterEmptyArchiveTests
 {
   [Fact]
-  public void BuildEmptyArchive_СоздаётАрхивКоторыйЧитаетсяDecoderPath()
+  public void BuildArchive_БезФайловСоздаётПустойАрхивКоторыйЧитаетсяDecoderPath()
   {
-    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildEmptyArchive(
-        out byte[] archive);
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
+    Array.Empty<SevenZipArchiveWriterFile>(),
+    out byte[] archive);
 
     Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
     Assert.NotEmpty(archive);

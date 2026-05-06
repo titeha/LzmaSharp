@@ -12,7 +12,7 @@ public static class SevenZipArchiveWriter
   /// <summary>
   /// Строит минимальный пустой 7z-архив без packed stream-ов и без файлов.
   /// </summary>
-  public static SevenZipArchiveWriteResult BuildEmptyArchive(out byte[] archive)
+  private static SevenZipArchiveWriteResult BuildEmptyArchive(out byte[] archive)
   {
     byte[] nextHeaderBytes =
     [
@@ -28,7 +28,7 @@ public static class SevenZipArchiveWriter
   /// <summary>
   /// Строит 7z-архив с одним пустым файлом.
   /// </summary>
-  public static SevenZipArchiveWriteResult BuildSingleEmptyFileArchive(
+  private static SevenZipArchiveWriteResult BuildSingleEmptyFileArchive(
       string fileName,
       out byte[] archive)
   {

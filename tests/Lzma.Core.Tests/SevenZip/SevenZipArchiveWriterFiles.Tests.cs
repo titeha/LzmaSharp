@@ -29,10 +29,7 @@ public sealed class SevenZipArchiveWriterFilesTests
   public void BuildArchive_ОдинПустойФайлСоздаётАрхивКоторыйЧитаетсяDecoderPath()
   {
     SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
-        new[]
-        {
-                new SevenZipArchiveWriterFile("empty.txt", Array.Empty<byte>()),
-        },
+        [new SevenZipArchiveWriterFile("empty.txt", [])],
         out byte[] archive);
 
     Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
@@ -56,10 +53,7 @@ public sealed class SevenZipArchiveWriterFilesTests
     byte[] content = [1, 2, 3, 4, 5];
 
     SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
-        new[]
-        {
-            new SevenZipArchiveWriterFile("file.bin", content),
-        },
+        [new SevenZipArchiveWriterFile("file.bin", content)],
         out byte[] archive);
 
     Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
@@ -81,11 +75,10 @@ public sealed class SevenZipArchiveWriterFilesTests
   public void BuildArchive_НесколькоФайловПокаВозвращаетNotSupported()
   {
     SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
-        new[]
-        {
-                new SevenZipArchiveWriterFile("a.txt", Array.Empty<byte>()),
-                new SevenZipArchiveWriterFile("b.txt", Array.Empty<byte>()),
-        },
+        [
+                new SevenZipArchiveWriterFile("a.txt", []),
+                new SevenZipArchiveWriterFile("b.txt", []),
+        ],
         out byte[] archive);
 
     Assert.Equal(SevenZipArchiveWriteResult.NotSupported, writeResult);
@@ -107,10 +100,7 @@ public sealed class SevenZipArchiveWriterFilesTests
   public void BuildArchive_NullContentВозвращаетInvalidData()
   {
     SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
-        new[]
-        {
-                new SevenZipArchiveWriterFile("file.txt", null!),
-        },
+        [new SevenZipArchiveWriterFile("file.txt", null!),],
         out byte[] archive);
 
     Assert.Equal(SevenZipArchiveWriteResult.InvalidData, writeResult);
@@ -123,10 +113,7 @@ public sealed class SevenZipArchiveWriterFilesTests
     byte[] content = [1, 2, 3, 4, 5];
 
     SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
-        new[]
-        {
-            new SevenZipArchiveWriterFile("file.bin", content),
-        },
+        [new SevenZipArchiveWriterFile("file.bin", content),],
         out byte[] archive);
 
     Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
@@ -152,10 +139,7 @@ public sealed class SevenZipArchiveWriterFilesTests
     byte[] content = [1, 2, 3, 4, 5];
 
     SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
-        new[]
-        {
-            new SevenZipArchiveWriterFile("file.bin", content),
-        },
+        [new SevenZipArchiveWriterFile("file.bin", content),],
         out byte[] archive);
 
     Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
@@ -175,6 +159,32 @@ public sealed class SevenZipArchiveWriterFilesTests
     Assert.Empty(fileBytes);
     Assert.Equal(string.Empty, fileName);
     Assert.Equal(archive.Length, bytesConsumed);
+  }
+
+  [Theory]
+  [InlineData("")]
+  [InlineData("dir/file.txt")]
+  [InlineData("dir\\file.txt")]
+  [InlineData("bad\0name.txt")]
+  public void BuildArchive_НекорректноеИмяНепустогоФайлаВозвращаетInvalidData(string fileName)
+  {
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
+        [new SevenZipArchiveWriterFile(fileName, [1, 2, 3]),],
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.InvalidData, writeResult);
+    Assert.Empty(archive);
+  }
+
+  [Fact]
+  public void BuildArchive_NullИмяНепустогоФайлаВозвращаетInvalidData()
+  {
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
+        [new SevenZipArchiveWriterFile(null!, [1, 2, 3]),],
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.InvalidData, writeResult);
+    Assert.Empty(archive);
   }
 
   private static void CorruptLastCrcPropertyInNextHeaderAndRefreshHeaderCrc(
