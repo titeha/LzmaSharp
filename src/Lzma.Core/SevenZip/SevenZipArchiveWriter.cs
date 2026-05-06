@@ -111,21 +111,46 @@ public static class SevenZipArchiveWriter
   /// Строит next header для архива с одним непустым файлом через Copy coder.
   /// </summary>
   private static bool TryBuildSingleFileCopyNextHeader(
-    string fileName,
-    int contentLength,
-    uint contentCrc,
-    out byte[] nextHeaderBytes)
+      string fileName,
+      int contentLength,
+      uint contentCrc,
+      out byte[] nextHeaderBytes)
   {
     nextHeaderBytes = [];
 
     List<byte> header = new(128)
     {
         SevenZipNid.Header,
-
         SevenZipNid.MainStreamsInfo,
-
-        SevenZipNid.PackInfo,
     };
+
+    if (!TryWriteSinglePackInfo(header, contentLength, contentCrc))
+      return false;
+
+    if (!TryWriteSingleCopyUnpackInfo(header, contentLength, contentCrc))
+      return false;
+
+    header.Add(SevenZipNid.End);
+
+    if (!TryWriteSingleFileCopyFilesInfo(header, fileName, contentCrc))
+      return false;
+
+    header.Add(SevenZipNid.End);
+
+    nextHeaderBytes = [.. header];
+
+    return true;
+  }
+
+  /// <summary>
+  /// Пишет PackInfo для одного packed stream-а.
+  /// </summary>
+  private static bool TryWriteSinglePackInfo(
+      List<byte> header,
+      int packedSize,
+      uint packedCrc)
+  {
+    header.Add(SevenZipNid.PackInfo);
 
     if (!TryWriteUInt64(header, 0))
       return false;
@@ -135,15 +160,25 @@ public static class SevenZipArchiveWriter
 
     header.Add(SevenZipNid.Size);
 
-    if (!TryWriteUInt64(header, (ulong)contentLength))
+    if (!TryWriteUInt64(header, (ulong)packedSize))
       return false;
 
     header.Add(SevenZipNid.Crc);
-    header.Add(0x01);
-    WriteUInt32LittleEndian(header, contentCrc);
+    WriteSingleDefinedStreamCrcDigest(header, packedCrc);
 
     header.Add(SevenZipNid.End);
 
+    return true;
+  }
+
+  /// <summary>
+  /// Пишет UnpackInfo для одного folder-а с Copy coder.
+  /// </summary>
+  private static bool TryWriteSingleCopyUnpackInfo(
+      List<byte> header,
+      int unpackSize,
+      uint unpackCrc)
+  {
     header.Add(SevenZipNid.UnpackInfo);
 
     header.Add(SevenZipNid.Folder);
@@ -162,25 +197,26 @@ public static class SevenZipArchiveWriter
 
     header.Add(SevenZipNid.CodersUnpackSize);
 
-    if (!TryWriteUInt64(header, (ulong)contentLength))
+    if (!TryWriteUInt64(header, (ulong)unpackSize))
       return false;
 
     header.Add(SevenZipNid.Crc);
-    header.Add(0x01);
-    WriteUInt32LittleEndian(header, contentCrc);
+    WriteSingleDefinedStreamCrcDigest(header, unpackCrc);
 
     header.Add(SevenZipNid.End);
-
-    header.Add(SevenZipNid.End);
-
-    if (!TryWriteSingleFileCopyFilesInfo(header, fileName, contentCrc))
-      return false;
-
-    header.Add(SevenZipNid.End);
-
-    nextHeaderBytes = [.. header];
 
     return true;
+  }
+
+  /// <summary>
+  /// Пишет CRC digest для одного stream-а с allAreDefined.
+  /// </summary>
+  private static void WriteSingleDefinedStreamCrcDigest(
+      List<byte> header,
+      uint crc)
+  {
+    header.Add(0x01);
+    WriteUInt32LittleEndian(header, crc);
   }
 
   /// <summary>
