@@ -67,14 +67,17 @@ public static class SevenZipArchiveWriter
     {
       SevenZipArchiveWriterFile file = files[0];
 
+      if (file.IsDirectory)
+        return BuildEmptyEntriesArchive(files, out archive);
+
       if (file.Content.Length == 0)
         return BuildSingleEmptyFileArchive(file.Name, out archive);
 
       return BuildSingleFileCopyArchive(file.Name, file.Content, out archive);
     }
 
-    if (AllFilesAreEmpty(files))
-      return BuildEmptyFilesArchive(files, out archive);
+    if (AllEntriesHaveNoContent(files))
+      return BuildEmptyEntriesArchive(files, out archive);
 
     return SevenZipArchiveWriteResult.NotSupported;
   }
@@ -282,13 +285,13 @@ public static class SevenZipArchiveWriter
   /// <summary>
   /// Строит 7z-архив с несколькими пустыми файлами.
   /// </summary>
-  private static SevenZipArchiveWriteResult BuildEmptyFilesArchive(
+  private static SevenZipArchiveWriteResult BuildEmptyEntriesArchive(
       IReadOnlyList<SevenZipArchiveWriterFile> files,
       out byte[] archive)
   {
     archive = [];
 
-    if (!TryBuildEmptyFilesNextHeader(files, out byte[] nextHeaderBytes))
+    if (!TryBuildEmptyEntriesNextHeader(files, out byte[] nextHeaderBytes))
       return SevenZipArchiveWriteResult.InternalError;
 
     archive = BuildArchiveWithNextHeader(nextHeaderBytes);
@@ -299,7 +302,7 @@ public static class SevenZipArchiveWriter
   /// <summary>
   /// Строит next header для архива с несколькими пустыми файлами.
   /// </summary>
-  private static bool TryBuildEmptyFilesNextHeader(
+  private static bool TryBuildEmptyEntriesNextHeader(
       IReadOnlyList<SevenZipArchiveWriterFile> files,
       out byte[] nextHeaderBytes)
   {
@@ -310,7 +313,7 @@ public static class SevenZipArchiveWriter
         SevenZipNid.Header,
     };
 
-    if (!TryWriteEmptyFilesFilesInfo(header, files))
+    if (!TryWriteEmptyEntriesFilesInfo(header, files))
       return false;
 
     header.Add(SevenZipNid.End);
@@ -323,7 +326,7 @@ public static class SevenZipArchiveWriter
   /// <summary>
   /// Пишет FilesInfo для нескольких пустых файлов.
   /// </summary>
-  private static bool TryWriteEmptyFilesFilesInfo(
+  private static bool TryWriteEmptyEntriesFilesInfo(
       List<byte> header,
       IReadOnlyList<SevenZipArchiveWriterFile> files)
   {
@@ -344,7 +347,7 @@ public static class SevenZipArchiveWriter
     if (!TryWriteUInt64(header, (ulong)GetBitVectorByteCount(files.Count)))
       return false;
 
-    WriteAllTrueBitVector(header, files.Count);
+    WriteEmptyFileBitVector(header, files);
 
     if (!TryWriteFileNamesProperty(header, files))
       return false;
@@ -400,6 +403,9 @@ public static class SevenZipArchiveWriter
 
       if (!IsSupportedSingleFileName(file.Name))
         return false;
+
+      if (file.IsDirectory && file.Content.Length != 0)
+        return false;
     }
 
     return true;
@@ -408,16 +414,43 @@ public static class SevenZipArchiveWriter
   /// <summary>
   /// Проверяет, что все файлы пустые.
   /// </summary>
-  private static bool AllFilesAreEmpty(
+  private static bool AllEntriesHaveNoContent(
       IReadOnlyList<SevenZipArchiveWriterFile> files)
   {
     for (int i = 0; i < files.Count; i++)
-    {
       if (files[i].Content.Length != 0)
         return false;
-    }
 
     return true;
+  }
+
+  /// <summary>
+  /// Пишет bit-vector EmptyFile для набора empty stream элементов.
+  /// true означает пустой файл, false означает директорию.
+  /// </summary>
+  private static void WriteEmptyFileBitVector(
+      List<byte> destination,
+      IReadOnlyList<SevenZipArchiveWriterFile> files)
+  {
+    int byteCount = GetBitVectorByteCount(files.Count);
+
+    for (int byteIndex = 0; byteIndex < byteCount; byteIndex++)
+    {
+      byte value = 0;
+
+      for (int bitIndex = 0; bitIndex < 8; bitIndex++)
+      {
+        int itemIndex = byteIndex * 8 + bitIndex;
+
+        if (itemIndex >= files.Count)
+          break;
+
+        if (!files[itemIndex].IsDirectory)
+          value |= (byte)(0x80 >> bitIndex);
+      }
+
+      destination.Add(value);
+    }
   }
 
   /// <summary>

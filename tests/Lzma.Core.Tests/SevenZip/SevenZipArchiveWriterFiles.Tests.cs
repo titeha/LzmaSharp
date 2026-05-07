@@ -75,11 +75,10 @@ public sealed class SevenZipArchiveWriterFilesTests
   public void BuildArchive_НесколькоПустыхФайловСоздаётАрхивКоторыйЧитаетсяDecoderPath()
   {
     SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
-        new[]
-        {
-            new SevenZipArchiveWriterFile("a.txt", Array.Empty<byte>()),
-            new SevenZipArchiveWriterFile("b.txt", Array.Empty<byte>()),
-        },
+        [
+            new SevenZipArchiveWriterFile("a.txt", []),
+            new SevenZipArchiveWriterFile("b.txt", []),
+        ],
         out byte[] archive);
 
     Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
@@ -233,6 +232,79 @@ public sealed class SevenZipArchiveWriterFilesTests
             new SevenZipArchiveWriterFile("a.txt", []),
             new SevenZipArchiveWriterFile("dir/b.txt", []),
         ],
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.InvalidData, writeResult);
+    Assert.Empty(archive);
+  }
+
+  [Fact]
+  public void BuildArchive_ОднаПустаяДиректорияСоздаётАрхивКоторыйЧитаетсяDecoderPath()
+  {
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
+        [new SevenZipArchiveWriterFile("dir", [], IsDirectory: true)],
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
+    Assert.NotEmpty(archive);
+
+    SevenZipArchiveDecodeResult decodeResult = SevenZipArchiveDecoder.DecodeToEntries(
+        archive,
+        out SevenZipDecodedEntry[] entries,
+        out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, decodeResult);
+    Assert.Equal(archive.Length, bytesConsumed);
+
+    SevenZipDecodedEntry entry = Assert.Single(entries);
+
+    Assert.Equal("dir", entry.Name);
+    Assert.Empty(entry.Bytes);
+    Assert.True(entry.IsDirectory);
+  }
+
+  [Fact]
+  public void BuildArchive_ПустойФайлИДиректорияСоздаютАрхивКоторыйЧитаетсяDecoderPath()
+  {
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
+        [
+            new SevenZipArchiveWriterFile("a.txt", []),
+            new SevenZipArchiveWriterFile("dir", [], IsDirectory: true),
+        ],
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
+    Assert.NotEmpty(archive);
+
+    SevenZipArchiveDecodeResult decodeResult = SevenZipArchiveDecoder.DecodeToEntries(
+        archive,
+        out SevenZipDecodedEntry[] entries,
+        out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, decodeResult);
+    Assert.Equal(archive.Length, bytesConsumed);
+
+    Assert.Collection(
+        entries,
+        [entry =>
+        {
+          Assert.Equal("a.txt", entry.Name);
+          Assert.Empty(entry.Bytes);
+          Assert.False(entry.IsDirectory);
+        },
+        entry =>
+        {
+          Assert.Equal("dir", entry.Name);
+          Assert.Empty(entry.Bytes);
+          Assert.True(entry.IsDirectory);
+        }]);
+  }
+
+  [Fact]
+  public void BuildArchive_ДиректорияСДаннымиВозвращаетInvalidData()
+  {
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
+        [new SevenZipArchiveWriterFile("dir", [1, 2, 3], IsDirectory: true)],
         out byte[] archive);
 
     Assert.Equal(SevenZipArchiveWriteResult.InvalidData, writeResult);
