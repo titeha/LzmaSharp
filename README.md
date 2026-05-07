@@ -20,6 +20,30 @@
 
 Этап 2 описан в [`docs/STAGE2_WRITER_STATUS.md`](docs/STAGE2_WRITER_STATUS.md).
 
+Первый минимальный writer-сценарий уже реализован.
+
+Текущий writer API:
+
+- `SevenZipArchiveWriter.BuildArchive(...)`;
+- `SevenZipArchiveWriterFile`;
+- `SevenZipArchiveWriteResult`.
+
+Сейчас writer поддерживает:
+
+- пустой архив;
+- архив с одним пустым файлом;
+- архив с одним непустым файлом через `Copy`.
+
+Пока writer не поддерживает:
+
+- несколько файлов;
+- директории;
+- timestamps;
+- file attributes;
+- LZMA / LZMA2 writer;
+- AES writer;
+- GOST writer.
+
 ## Принципы разработки
 
 - Работаем маленькими, проверяемыми шагами.
@@ -101,6 +125,11 @@ dotnet test
   - декодирование архива;
   - декодирование folder;
   - вспомогательные части распаковки.
+  - минимальный writer API;
+  - запись пустого архива;
+  - запись архива с одним пустым файлом;
+  - запись архива с одним непустым файлом через `Copy`;
+  - round-trip проверки writer-сценариев через существующий decoder-path.
 
 ### Поддерживаемые методы 7z
 
@@ -328,6 +357,16 @@ Magma и остальные GOST-алгоритмы будут рассматр�
 Реализация энкодера LZMA / LZMA2 / 7z.
 
 После появления базового writer-а можно отдельно вернуться к вопросу записи AES-архивов.
+
+Первый реализованный writer-сценарий:
+
+- основной вход `SevenZipArchiveWriter.BuildArchive(...)`;
+- пустой архив;
+- один пустой файл;
+- один непустой файл через `Copy`;
+- CRC для packed stream-а, folder stream-а и файла;
+- структурные тесты через `SevenZipArchiveReader`;
+- round-trip тесты через существующий decoder-path.
 
 ### Этап 3
 
