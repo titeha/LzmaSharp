@@ -60,18 +60,23 @@ public static class SevenZipArchiveWriter
     if (files.Count == 0)
       return BuildEmptyArchive(out archive);
 
-    if (files.Count != 1)
-      return SevenZipArchiveWriteResult.NotSupported;
-
-    SevenZipArchiveWriterFile file = files[0];
-
-    if (file is null || file.Content is null)
+    if (!TryValidateWriterFiles(files))
       return SevenZipArchiveWriteResult.InvalidData;
 
-    if (file.Content.Length == 0)
-      return BuildSingleEmptyFileArchive(file.Name, out archive);
+    if (files.Count == 1)
+    {
+      SevenZipArchiveWriterFile file = files[0];
 
-    return BuildSingleFileCopyArchive(file.Name, file.Content, out archive);
+      if (file.Content.Length == 0)
+        return BuildSingleEmptyFileArchive(file.Name, out archive);
+
+      return BuildSingleFileCopyArchive(file.Name, file.Content, out archive);
+    }
+
+    if (AllFilesAreEmpty(files))
+      return BuildEmptyFilesArchive(files, out archive);
+
+    return SevenZipArchiveWriteResult.NotSupported;
   }
 
   /// <summary>
@@ -272,6 +277,182 @@ public static class SevenZipArchiveWriter
     header.Add(SevenZipNid.End);
 
     return true;
+  }
+
+  /// <summary>
+  /// Строит 7z-архив с несколькими пустыми файлами.
+  /// </summary>
+  private static SevenZipArchiveWriteResult BuildEmptyFilesArchive(
+      IReadOnlyList<SevenZipArchiveWriterFile> files,
+      out byte[] archive)
+  {
+    archive = [];
+
+    if (!TryBuildEmptyFilesNextHeader(files, out byte[] nextHeaderBytes))
+      return SevenZipArchiveWriteResult.InternalError;
+
+    archive = BuildArchiveWithNextHeader(nextHeaderBytes);
+
+    return SevenZipArchiveWriteResult.Ok;
+  }
+
+  /// <summary>
+  /// Строит next header для архива с несколькими пустыми файлами.
+  /// </summary>
+  private static bool TryBuildEmptyFilesNextHeader(
+      IReadOnlyList<SevenZipArchiveWriterFile> files,
+      out byte[] nextHeaderBytes)
+  {
+    nextHeaderBytes = [];
+
+    List<byte> header = new(128)
+    {
+        SevenZipNid.Header,
+    };
+
+    if (!TryWriteEmptyFilesFilesInfo(header, files))
+      return false;
+
+    header.Add(SevenZipNid.End);
+
+    nextHeaderBytes = [.. header];
+
+    return true;
+  }
+
+  /// <summary>
+  /// Пишет FilesInfo для нескольких пустых файлов.
+  /// </summary>
+  private static bool TryWriteEmptyFilesFilesInfo(
+      List<byte> header,
+      IReadOnlyList<SevenZipArchiveWriterFile> files)
+  {
+    header.Add(SevenZipNid.FilesInfo);
+
+    if (!TryWriteUInt64(header, (ulong)files.Count))
+      return false;
+
+    header.Add(SevenZipNid.EmptyStream);
+
+    if (!TryWriteUInt64(header, (ulong)GetBitVectorByteCount(files.Count)))
+      return false;
+
+    WriteAllTrueBitVector(header, files.Count);
+
+    header.Add(SevenZipNid.EmptyFile);
+
+    if (!TryWriteUInt64(header, (ulong)GetBitVectorByteCount(files.Count)))
+      return false;
+
+    WriteAllTrueBitVector(header, files.Count);
+
+    if (!TryWriteFileNamesProperty(header, files))
+      return false;
+
+    header.Add(SevenZipNid.End);
+
+    return true;
+  }
+
+  /// <summary>
+  /// Пишет свойство имён для набора файлов.
+  /// </summary>
+  private static bool TryWriteFileNamesProperty(
+      List<byte> header,
+      IReadOnlyList<SevenZipArchiveWriterFile> files)
+  {
+    header.Add(SevenZipNid.Name);
+
+    List<byte[]> encodedNames = new(files.Count);
+    int nameBytesLength = 0;
+
+    for (int i = 0; i < files.Count; i++)
+    {
+      byte[] nameBytes = Encoding.Unicode.GetBytes(files[i].Name + "\0");
+
+      encodedNames.Add(nameBytes);
+      nameBytesLength += nameBytes.Length;
+    }
+
+    if (!TryWriteUInt64(header, (ulong)(1 + nameBytesLength)))
+      return false;
+
+    header.Add(0x00);
+
+    for (int i = 0; i < encodedNames.Count; i++)
+      header.AddRange(encodedNames[i]);
+
+    return true;
+  }
+
+  /// <summary>
+  /// Проверяет входные файлы writer-а.
+  /// </summary>
+  private static bool TryValidateWriterFiles(
+      IReadOnlyList<SevenZipArchiveWriterFile> files)
+  {
+    for (int i = 0; i < files.Count; i++)
+    {
+      SevenZipArchiveWriterFile file = files[i];
+
+      if (file is null || file.Content is null)
+        return false;
+
+      if (!IsSupportedSingleFileName(file.Name))
+        return false;
+    }
+
+    return true;
+  }
+
+  /// <summary>
+  /// Проверяет, что все файлы пустые.
+  /// </summary>
+  private static bool AllFilesAreEmpty(
+      IReadOnlyList<SevenZipArchiveWriterFile> files)
+  {
+    for (int i = 0; i < files.Count; i++)
+    {
+      if (files[i].Content.Length != 0)
+        return false;
+    }
+
+    return true;
+  }
+
+  /// <summary>
+  /// Возвращает размер bit-vector в байтах.
+  /// </summary>
+  private static int GetBitVectorByteCount(int bitCount)
+  {
+    return (bitCount + 7) / 8;
+  }
+
+  /// <summary>
+  /// Пишет bit-vector, в котором все элементы установлены в true.
+  /// </summary>
+  private static void WriteAllTrueBitVector(
+      List<byte> destination,
+      int bitCount)
+  {
+    int byteCount = GetBitVectorByteCount(bitCount);
+
+    for (int byteIndex = 0; byteIndex < byteCount; byteIndex++)
+    {
+      byte value = 0;
+
+      for (int bitIndex = 0; bitIndex < 8; bitIndex++)
+      {
+        int itemIndex = byteIndex * 8 + bitIndex;
+
+        if (itemIndex >= bitCount)
+          break;
+
+        value |= (byte)(0x80 >> bitIndex);
+      }
+
+      destination.Add(value);
+    }
   }
 
   /// <summary>
