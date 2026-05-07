@@ -54,7 +54,7 @@ Writer реализуется снизу вверх:
 - без шифрования;
 - без solid-группировки;
 - без сложных фильтров;
-- без директорий;
+- без вложенной файловой структуры;
 - без timestamp-метаданных, если они не нужны для корректного чтения;
 - с round-trip проверкой через `SevenZipArchiveReader` / `SevenZipArchiveDecoder`.
 
@@ -68,6 +68,12 @@ Writer реализуется снизу вверх:
 - `SevenZipArchiveWriterFile`;
 - `SevenZipArchiveWriteResult`.
 
+`SevenZipArchiveWriterFile` описывает элемент архива:
+
+- имя;
+- содержимое;
+- признак директории.
+
 Основной публичный вход writer-а сейчас — `BuildArchive(...)`.
 
 Поддержанные сценарии:
@@ -75,6 +81,8 @@ Writer реализуется снизу вверх:
 - пустой архив;
 - архив с одним пустым файлом;
 - архив с несколькими пустыми файлами;
+- архив с одной пустой директорией;
+- архив со смесью пустых файлов и пустых директорий;
 - архив с одним непустым файлом через `Copy`.
 
 Для сценария одного непустого файла через `Copy` writer формирует:
@@ -88,16 +96,26 @@ Writer реализуется снизу вверх:
 - CRC folder stream-а;
 - CRC файла.
 
-Для сценария нескольких пустых файлов writer формирует:
+Для сценария пустых файлов и пустых директорий writer формирует:
 
 - `SignatureHeader`;
 - `NextHeader`;
 - `FilesInfo`;
 - `EmptyStream`;
 - `EmptyFile`;
-- список имён файлов.
+- список имён файлов и директорий.
 
-Packed data, `PackInfo` и `UnpackInfo` для этого сценария не формируются, потому что файловые данные отсутствуют.
+Packed data, `MainStreamsInfo`, `PackInfo` и `UnpackInfo` для этого сценария не формируются, потому что файловые данные отсутствуют.
+
+Для пустого файла writer пишет:
+
+- `EmptyStream = true`;
+- `EmptyFile = true`.
+
+Для пустой директории writer пишет:
+
+- `EmptyStream = true`;
+- `EmptyFile = false`.
 
 Покрыто тестами:
 
@@ -105,8 +123,12 @@ Packed data, `PackInfo` и `UnpackInfo` для этого сценария не 
 - round-trip одного пустого файла через decoder-path;
 - round-trip нескольких пустых файлов через decoder-path;
 - round-trip одного непустого `Copy`-файла через decoder-path;
+- round-trip одной пустой директории через decoder-path;
+- round-trip смеси пустого файла и пустой директории через decoder-path;
+- структурная проверка `EmptyFile` bit-vector для пустого файла и пустой директории;
+- директория с данными возвращает `InvalidData`;
 - структурная проверка `Copy` writer-архива через `SevenZipArchiveReader`;
-- структурная проверка `FilesInfo` для нескольких пустых файлов через `SevenZipArchiveReader`;
+- структурная проверка `FilesInfo` для empty entries через `SevenZipArchiveReader`;
 - повреждение packed data возвращает `InvalidData`;
 - повреждение файлового CRC в header возвращает `InvalidData`;
 - несколько файлов с непустыми данными пока возвращают `NotSupported`;
@@ -117,7 +139,8 @@ Packed data, `PackInfo` и `UnpackInfo` для этого сценария не 
 
 - несколько непустых файлов;
 - смешанный multi-file сценарий с пустыми и непустыми файлами;
-- директории;
+- вложенные пути и файлы внутри директорий;
+- директории с данными;
 - timestamps;
 - file attributes;
 - solid-группировка;
