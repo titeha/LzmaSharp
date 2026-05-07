@@ -74,6 +74,7 @@ Writer реализуется снизу вверх:
 
 - пустой архив;
 - архив с одним пустым файлом;
+- архив с несколькими пустыми файлами;
 - архив с одним непустым файлом через `Copy`.
 
 Для сценария одного непустого файла через `Copy` writer формирует:
@@ -87,21 +88,35 @@ Writer реализуется снизу вверх:
 - CRC folder stream-а;
 - CRC файла.
 
+Для сценария нескольких пустых файлов writer формирует:
+
+- `SignatureHeader`;
+- `NextHeader`;
+- `FilesInfo`;
+- `EmptyStream`;
+- `EmptyFile`;
+- список имён файлов.
+
+Packed data, `PackInfo` и `UnpackInfo` для этого сценария не формируются, потому что файловые данные отсутствуют.
+
 Покрыто тестами:
 
 - round-trip пустого архива через decoder-path;
 - round-trip одного пустого файла через decoder-path;
+- round-trip нескольких пустых файлов через decoder-path;
 - round-trip одного непустого `Copy`-файла через decoder-path;
-- структурная проверка writer-архива через `SevenZipArchiveReader`;
+- структурная проверка `Copy` writer-архива через `SevenZipArchiveReader`;
+- структурная проверка `FilesInfo` для нескольких пустых файлов через `SevenZipArchiveReader`;
 - повреждение packed data возвращает `InvalidData`;
 - повреждение файлового CRC в header возвращает `InvalidData`;
-- несколько файлов пока возвращают `NotSupported`;
+- несколько файлов с непустыми данными пока возвращают `NotSupported`;
 - некорректные имена файлов возвращают `InvalidData`;
 - `null`-входные данные возвращают `InvalidData`.
 
 Пока не поддержано:
 
-- несколько файлов;
+- несколько непустых файлов;
+- смешанный multi-file сценарий с пустыми и непустыми файлами;
 - директории;
 - timestamps;
 - file attributes;
