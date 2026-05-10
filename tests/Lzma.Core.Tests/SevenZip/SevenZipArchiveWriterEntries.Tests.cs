@@ -311,6 +311,34 @@ public sealed class SevenZipArchiveWriterEntriesTests
     Assert.Empty(archive);
   }
 
+  [Fact]
+  public void BuildArchive_ДублирующиесяИменаВозвращаютInvalidData()
+  {
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
+        [
+            new SevenZipArchiveWriterEntry("same.txt", []),
+            new SevenZipArchiveWriterEntry("same.txt", []),
+        ],
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.InvalidData, writeResult);
+    Assert.Empty(archive);
+  }
+
+  [Fact]
+  public void BuildArchive_ФайлИДиректорияСОдинаковымИменемВозвращаютInvalidData()
+  {
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
+        [
+            new SevenZipArchiveWriterEntry("entry", []),
+            new SevenZipArchiveWriterEntry("entry", [], IsDirectory: true),
+        ],
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.InvalidData, writeResult);
+    Assert.Empty(archive);
+  }
+
   private static void CorruptLastCrcPropertyInNextHeaderAndRefreshHeaderCrc(
     byte[] archive,
     int packedDataLength)

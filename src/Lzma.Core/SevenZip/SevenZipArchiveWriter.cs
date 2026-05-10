@@ -60,7 +60,7 @@ public static class SevenZipArchiveWriter
     if (files.Count == 0)
       return BuildEmptyArchive(out archive);
 
-    if (!TryValidateWriterFiles(files))
+    if (!TryValidateWriterEntries(files))
       return SevenZipArchiveWriteResult.InvalidData;
 
     if (files.Count == 1)
@@ -391,20 +391,24 @@ public static class SevenZipArchiveWriter
   /// <summary>
   /// Проверяет входные элементы writer-а.
   /// </summary>
-  private static bool TryValidateWriterFiles(
-      IReadOnlyList<SevenZipArchiveWriterEntry> files)
+  private static bool TryValidateWriterEntries(IReadOnlyList<SevenZipArchiveWriterEntry> entries)
   {
-    for (int i = 0; i < files.Count; i++)
+    HashSet<string> names = new(StringComparer.Ordinal);
+
+    for (int i = 0; i < entries.Count; i++)
     {
-      SevenZipArchiveWriterEntry file = files[i];
+      SevenZipArchiveWriterEntry entry = entries[i];
 
-      if (file is null || file.Content is null)
+      if (entry is null || entry.Content is null)
         return false;
 
-      if (!IsSupportedEntryName(file.Name))
+      if (!IsSupportedEntryName(entry.Name))
         return false;
 
-      if (file.IsDirectory && file.Content.Length != 0)
+      if (!names.Add(entry.Name))
+        return false;
+
+      if (entry.IsDirectory && entry.Content.Length != 0)
         return false;
     }
 
