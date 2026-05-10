@@ -393,7 +393,7 @@ public static class SevenZipArchiveWriter
   /// </summary>
   private static bool TryValidateWriterEntries(IReadOnlyList<SevenZipArchiveWriterEntry> entries)
   {
-    HashSet<string> names = new(StringComparer.Ordinal);
+    HashSet<string> names = new(StringComparer.OrdinalIgnoreCase);
 
     for (int i = 0; i < entries.Count; i++)
     {

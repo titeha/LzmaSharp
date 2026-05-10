@@ -339,6 +339,39 @@ public sealed class SevenZipArchiveWriterEntriesTests
     Assert.Empty(archive);
   }
 
+  [Theory]
+  [InlineData("file.txt", "FILE.txt")]
+  [InlineData("File.txt", "file.txt")]
+  [InlineData("FILE.TXT", "file.txt")]
+  public void BuildArchive_ИменаОтличающиесяТолькоРегистромВозвращаютInvalidData(
+    string firstName,
+    string secondName)
+  {
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
+        [
+            new SevenZipArchiveWriterEntry(firstName, []),
+            new SevenZipArchiveWriterEntry(secondName, []),
+        ],
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.InvalidData, writeResult);
+    Assert.Empty(archive);
+  }
+
+  [Fact]
+  public void BuildArchive_ФайлИДиректорияСИменемОтличающимсяТолькоРегистромВозвращаютInvalidData()
+  {
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
+        [
+            new SevenZipArchiveWriterEntry("entry", []),
+            new SevenZipArchiveWriterEntry("ENTRY", [], IsDirectory: true),
+        ],
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.InvalidData, writeResult);
+    Assert.Empty(archive);
+  }
+
   private static void CorruptLastCrcPropertyInNextHeaderAndRefreshHeaderCrc(
     byte[] archive,
     int packedDataLength)
