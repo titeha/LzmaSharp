@@ -65,10 +65,10 @@ Writer реализуется снизу вверх:
 На старте этапа 2 добавлен минимальный writer API:
 
 - `SevenZipArchiveWriter.BuildArchive(...)`;
-- `SevenZipArchiveWriterFile`;
+- `SevenZipArchiveWriterEntry`;
 - `SevenZipArchiveWriteResult`.
 
-`SevenZipArchiveWriterFile` описывает элемент архива:
+`SevenZipArchiveWriterEntry` описывает элемент архива:
 
 - имя;
 - содержимое;
@@ -179,3 +179,4 @@ Magma, полноценный GOST KDF через Стрибог и осталь
 Этап 2 можно считать завершённым, когда в проекте есть production-ориентированный базовый writer, покрытый тестами и согласованный с существующим decoder-path.
 
 До этого момента любые writer-сценарии считаются поэтапным развитием, а не полной реализацией архиватора.
+

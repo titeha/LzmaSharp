@@ -223,7 +223,7 @@ GOST-сценарии тестируются synthetic-архивами.
 Первый реализованный writer API:
 
 - `SevenZipArchiveWriter.BuildArchive(...)`;
-- `SevenZipArchiveWriterFile`;
+- `SevenZipArchiveWriterEntry`;
 - `SevenZipArchiveWriteResult`.
 
 Сейчас writer-тесты покрывают минимальные сценарии:
@@ -313,3 +313,4 @@ GOST-сценарии тестируются synthetic-архивами.
 - negative-тесты на повреждённый поток;
 - тесты на граничные размеры;
 - проверка, что внешний контракт `SevenZipFolderDecoder` не меняется при замене реализации.
+

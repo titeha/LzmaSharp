@@ -25,7 +25,7 @@
 Текущий writer API:
 
 - `SevenZipArchiveWriter.BuildArchive(...)`;
-- `SevenZipArchiveWriterFile`;
+- `SevenZipArchiveWriterEntry`;
 - `SevenZipArchiveWriteResult`.
 
 Сейчас writer поддерживает:
