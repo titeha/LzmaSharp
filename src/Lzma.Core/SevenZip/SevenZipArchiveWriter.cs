@@ -34,7 +34,7 @@ public static class SevenZipArchiveWriter
   {
     archive = [];
 
-    if (!IsSupportedSingleFileName(fileName))
+    if (!IsSupportedEntryName(fileName))
       return SevenZipArchiveWriteResult.InvalidData;
 
     if (!TryBuildSingleEmptyFileNextHeader(fileName, out byte[] nextHeaderBytes))
@@ -46,7 +46,7 @@ public static class SevenZipArchiveWriter
   }
 
   /// <summary>
-  /// Строит 7z-архив для поддерживаемого набора файлов.
+  /// Строит 7z-архив для поддерживаемого набора элементов.
   /// </summary>
   public static SevenZipArchiveWriteResult BuildArchive(
       IReadOnlyList<SevenZipArchiveWriterFile> files,
@@ -92,7 +92,7 @@ public static class SevenZipArchiveWriter
   {
     archive = [];
 
-    if (!IsSupportedSingleFileName(fileName))
+    if (!IsSupportedEntryName(fileName))
       return SevenZipArchiveWriteResult.InvalidData;
 
     if (content is null)
@@ -283,7 +283,7 @@ public static class SevenZipArchiveWriter
   }
 
   /// <summary>
-  /// Строит 7z-архив с несколькими пустыми файлами.
+  /// Строит 7z-архив с пустыми файлами и пустыми директориями.
   /// </summary>
   private static SevenZipArchiveWriteResult BuildEmptyEntriesArchive(
       IReadOnlyList<SevenZipArchiveWriterFile> files,
@@ -300,7 +300,7 @@ public static class SevenZipArchiveWriter
   }
 
   /// <summary>
-  /// Строит next header для архива с несколькими пустыми файлами.
+  /// Строит next header для архива с пустыми файлами и пустыми директориями.
   /// </summary>
   private static bool TryBuildEmptyEntriesNextHeader(
       IReadOnlyList<SevenZipArchiveWriterFile> files,
@@ -324,7 +324,7 @@ public static class SevenZipArchiveWriter
   }
 
   /// <summary>
-  /// Пишет FilesInfo для нескольких пустых файлов.
+  /// Пишет FilesInfo для пустых файлов и пустых директорий.
   /// </summary>
   private static bool TryWriteEmptyEntriesFilesInfo(
       List<byte> header,
@@ -358,7 +358,7 @@ public static class SevenZipArchiveWriter
   }
 
   /// <summary>
-  /// Пишет свойство имён для набора файлов.
+  /// Пишет свойство имён для набора элементов архива.
   /// </summary>
   private static bool TryWriteFileNamesProperty(
       List<byte> header,
@@ -389,7 +389,7 @@ public static class SevenZipArchiveWriter
   }
 
   /// <summary>
-  /// Проверяет входные файлы writer-а.
+  /// Проверяет входные элементы writer-а.
   /// </summary>
   private static bool TryValidateWriterFiles(
       IReadOnlyList<SevenZipArchiveWriterFile> files)
@@ -401,7 +401,7 @@ public static class SevenZipArchiveWriter
       if (file is null || file.Content is null)
         return false;
 
-      if (!IsSupportedSingleFileName(file.Name))
+      if (!IsSupportedEntryName(file.Name))
         return false;
 
       if (file.IsDirectory && file.Content.Length != 0)
@@ -412,7 +412,7 @@ public static class SevenZipArchiveWriter
   }
 
   /// <summary>
-  /// Проверяет, что все файлы пустые.
+  /// Проверяет, что все элементы не содержат файловых данных.
   /// </summary>
   private static bool AllEntriesHaveNoContent(
       IReadOnlyList<SevenZipArchiveWriterFile> files)
@@ -425,7 +425,7 @@ public static class SevenZipArchiveWriter
   }
 
   /// <summary>
-  /// Пишет bit-vector EmptyFile для набора empty stream элементов.
+  /// Пишет bit-vector EmptyFile для empty stream элементов.
   /// true означает пустой файл, false означает директорию.
   /// </summary>
   private static void WriteEmptyFileBitVector(
@@ -585,14 +585,14 @@ public static class SevenZipArchiveWriter
   }
 
   /// <summary>
-  /// Проверяет имя файла для первого минимального writer-сценария.
+  /// Проверяет имя элемента для текущих минимальных writer-сценариев.
   /// </summary>
-  private static bool IsSupportedSingleFileName(string fileName)
+  private static bool IsSupportedEntryName(string entryName)
   {
-    return !string.IsNullOrEmpty(fileName)
-        && fileName.IndexOf('\0') < 0
-        && fileName.IndexOf('/') < 0
-        && fileName.IndexOf('\\') < 0;
+    return !string.IsNullOrEmpty(entryName)
+        && entryName.IndexOf('\0') < 0
+        && entryName.IndexOf('/') < 0
+        && entryName.IndexOf('\\') < 0;
   }
 
   /// <summary>
