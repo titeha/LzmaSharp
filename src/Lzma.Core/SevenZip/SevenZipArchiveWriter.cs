@@ -49,7 +49,7 @@ public static class SevenZipArchiveWriter
   /// Строит 7z-архив для поддерживаемого набора элементов.
   /// </summary>
   public static SevenZipArchiveWriteResult BuildArchive(
-      IReadOnlyList<SevenZipArchiveWriterFile> files,
+      IReadOnlyList<SevenZipArchiveWriterEntry> files,
       out byte[] archive)
   {
     archive = [];
@@ -65,7 +65,7 @@ public static class SevenZipArchiveWriter
 
     if (files.Count == 1)
     {
-      SevenZipArchiveWriterFile file = files[0];
+      SevenZipArchiveWriterEntry file = files[0];
 
       if (file.IsDirectory)
         return BuildEmptyEntriesArchive(files, out archive);
@@ -286,7 +286,7 @@ public static class SevenZipArchiveWriter
   /// Строит 7z-архив с пустыми файлами и пустыми директориями.
   /// </summary>
   private static SevenZipArchiveWriteResult BuildEmptyEntriesArchive(
-      IReadOnlyList<SevenZipArchiveWriterFile> files,
+      IReadOnlyList<SevenZipArchiveWriterEntry> files,
       out byte[] archive)
   {
     archive = [];
@@ -303,7 +303,7 @@ public static class SevenZipArchiveWriter
   /// Строит next header для архива с пустыми файлами и пустыми директориями.
   /// </summary>
   private static bool TryBuildEmptyEntriesNextHeader(
-      IReadOnlyList<SevenZipArchiveWriterFile> files,
+      IReadOnlyList<SevenZipArchiveWriterEntry> files,
       out byte[] nextHeaderBytes)
   {
     nextHeaderBytes = [];
@@ -328,7 +328,7 @@ public static class SevenZipArchiveWriter
   /// </summary>
   private static bool TryWriteEmptyEntriesFilesInfo(
       List<byte> header,
-      IReadOnlyList<SevenZipArchiveWriterFile> files)
+      IReadOnlyList<SevenZipArchiveWriterEntry> files)
   {
     header.Add(SevenZipNid.FilesInfo);
 
@@ -362,7 +362,7 @@ public static class SevenZipArchiveWriter
   /// </summary>
   private static bool TryWriteFileNamesProperty(
       List<byte> header,
-      IReadOnlyList<SevenZipArchiveWriterFile> files)
+      IReadOnlyList<SevenZipArchiveWriterEntry> files)
   {
     header.Add(SevenZipNid.Name);
 
@@ -392,11 +392,11 @@ public static class SevenZipArchiveWriter
   /// Проверяет входные элементы writer-а.
   /// </summary>
   private static bool TryValidateWriterFiles(
-      IReadOnlyList<SevenZipArchiveWriterFile> files)
+      IReadOnlyList<SevenZipArchiveWriterEntry> files)
   {
     for (int i = 0; i < files.Count; i++)
     {
-      SevenZipArchiveWriterFile file = files[i];
+      SevenZipArchiveWriterEntry file = files[i];
 
       if (file is null || file.Content is null)
         return false;
@@ -415,7 +415,7 @@ public static class SevenZipArchiveWriter
   /// Проверяет, что все элементы не содержат файловых данных.
   /// </summary>
   private static bool AllEntriesHaveNoContent(
-      IReadOnlyList<SevenZipArchiveWriterFile> files)
+      IReadOnlyList<SevenZipArchiveWriterEntry> files)
   {
     for (int i = 0; i < files.Count; i++)
       if (files[i].Content.Length != 0)
@@ -430,7 +430,7 @@ public static class SevenZipArchiveWriter
   /// </summary>
   private static void WriteEmptyFileBitVector(
       List<byte> destination,
-      IReadOnlyList<SevenZipArchiveWriterFile> files)
+      IReadOnlyList<SevenZipArchiveWriterEntry> files)
   {
     int byteCount = GetBitVectorByteCount(files.Count);
 

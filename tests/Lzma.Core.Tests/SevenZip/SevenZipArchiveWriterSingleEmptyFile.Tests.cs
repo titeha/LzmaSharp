@@ -8,7 +8,7 @@ public sealed class SevenZipArchiveWriterSingleEmptyFileTests
   public void BuildSingleEmptyFileArchive_СоздаётАрхивКоторыйЧитаетсяDecoderPath()
   {
     SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
-    [new SevenZipArchiveWriterFile("empty.txt", []),],
+    [new SevenZipArchiveWriterEntry("empty.txt", []),],
     out byte[] archive);
 
     Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
@@ -34,7 +34,7 @@ public sealed class SevenZipArchiveWriterSingleEmptyFileTests
   public void BuildSingleEmptyFileArchive_НекорректноеИмяВозвращаетInvalidData(string fileName)
   {
     SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
-      [new SevenZipArchiveWriterFile(fileName, []),],
+      [new SevenZipArchiveWriterEntry(fileName, []),],
       out byte[] archive);
 
     Assert.Equal(SevenZipArchiveWriteResult.InvalidData, writeResult);

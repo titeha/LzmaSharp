@@ -8,7 +8,7 @@ public sealed class SevenZipArchiveWriterEmptyArchiveTests
   public void BuildArchive_БезФайловСоздаётПустойАрхивКоторыйЧитаетсяDecoderPath()
   {
     SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
-    Array.Empty<SevenZipArchiveWriterFile>(),
+    Array.Empty<SevenZipArchiveWriterEntry>(),
     out byte[] archive);
 
     Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);

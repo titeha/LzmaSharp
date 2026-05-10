@@ -10,8 +10,8 @@ public sealed class SevenZipArchiveWriterEmptyEntriesStructureTests
   {
     SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
         [
-                new SevenZipArchiveWriterFile("a.txt", []),
-                new SevenZipArchiveWriterFile("b.txt", []),
+                new SevenZipArchiveWriterEntry("a.txt", []),
+                new SevenZipArchiveWriterEntry("b.txt", []),
         ],
         out byte[] archive);
 
@@ -49,8 +49,8 @@ public sealed class SevenZipArchiveWriterEmptyEntriesStructureTests
   {
     SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
         [
-                new SevenZipArchiveWriterFile("a.txt", []),
-                new SevenZipArchiveWriterFile("dir", [], IsDirectory: true),
+                new SevenZipArchiveWriterEntry("a.txt", []),
+                new SevenZipArchiveWriterEntry("dir", [], IsDirectory: true),
         ],
         out byte[] archive);
 
@@ -91,15 +91,15 @@ public sealed class SevenZipArchiveWriterEmptyEntriesStructureTests
   {
     SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
         [
-            new SevenZipArchiveWriterFile("f1.txt", []),
-            new SevenZipArchiveWriterFile("f2.txt", []),
-            new SevenZipArchiveWriterFile("f3.txt", []),
-            new SevenZipArchiveWriterFile("f4.txt", []),
-            new SevenZipArchiveWriterFile("f5.txt", []),
-            new SevenZipArchiveWriterFile("f6.txt", []),
-            new SevenZipArchiveWriterFile("f7.txt", []),
-            new SevenZipArchiveWriterFile("f8.txt", []),
-            new SevenZipArchiveWriterFile("dir", [], IsDirectory: true),
+            new SevenZipArchiveWriterEntry("f1.txt", []),
+            new SevenZipArchiveWriterEntry("f2.txt", []),
+            new SevenZipArchiveWriterEntry("f3.txt", []),
+            new SevenZipArchiveWriterEntry("f4.txt", []),
+            new SevenZipArchiveWriterEntry("f5.txt", []),
+            new SevenZipArchiveWriterEntry("f6.txt", []),
+            new SevenZipArchiveWriterEntry("f7.txt", []),
+            new SevenZipArchiveWriterEntry("f8.txt", []),
+            new SevenZipArchiveWriterEntry("dir", [], IsDirectory: true),
         ],
         out byte[] archive);
 

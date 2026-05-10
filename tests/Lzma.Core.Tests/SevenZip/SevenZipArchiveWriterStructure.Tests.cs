@@ -12,7 +12,7 @@ public sealed class SevenZipArchiveWriterStructureTests
     uint contentCrc = Crc32.Compute(content);
 
     SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
-      [new SevenZipArchiveWriterFile("file.bin", content)],
+      [new SevenZipArchiveWriterEntry("file.bin", content)],
       out byte[] archive);
 
     Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);

@@ -9,7 +9,7 @@ public sealed class SevenZipArchiveWriterFilesTests
   public void BuildArchive_БезФайловСоздаётПустойАрхив()
   {
     SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
-        Array.Empty<SevenZipArchiveWriterFile>(),
+        Array.Empty<SevenZipArchiveWriterEntry>(),
         out byte[] archive);
 
     Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
@@ -29,7 +29,7 @@ public sealed class SevenZipArchiveWriterFilesTests
   public void BuildArchive_ОдинПустойФайлСоздаётАрхивКоторыйЧитаетсяDecoderPath()
   {
     SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
-        [new SevenZipArchiveWriterFile("empty.txt", [])],
+        [new SevenZipArchiveWriterEntry("empty.txt", [])],
         out byte[] archive);
 
     Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
@@ -53,7 +53,7 @@ public sealed class SevenZipArchiveWriterFilesTests
     byte[] content = [1, 2, 3, 4, 5];
 
     SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
-        [new SevenZipArchiveWriterFile("file.bin", content)],
+        [new SevenZipArchiveWriterEntry("file.bin", content)],
         out byte[] archive);
 
     Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
@@ -76,8 +76,8 @@ public sealed class SevenZipArchiveWriterFilesTests
   {
     SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
         [
-            new SevenZipArchiveWriterFile("a.txt", []),
-            new SevenZipArchiveWriterFile("b.txt", []),
+            new SevenZipArchiveWriterEntry("a.txt", []),
+            new SevenZipArchiveWriterEntry("b.txt", []),
         ],
         out byte[] archive);
 
@@ -123,7 +123,7 @@ public sealed class SevenZipArchiveWriterFilesTests
   public void BuildArchive_NullContentВозвращаетInvalidData()
   {
     SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
-        [new SevenZipArchiveWriterFile("file.txt", null!),],
+        [new SevenZipArchiveWriterEntry("file.txt", null!),],
         out byte[] archive);
 
     Assert.Equal(SevenZipArchiveWriteResult.InvalidData, writeResult);
@@ -136,7 +136,7 @@ public sealed class SevenZipArchiveWriterFilesTests
     byte[] content = [1, 2, 3, 4, 5];
 
     SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
-        [new SevenZipArchiveWriterFile("file.bin", content),],
+        [new SevenZipArchiveWriterEntry("file.bin", content),],
         out byte[] archive);
 
     Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
@@ -162,7 +162,7 @@ public sealed class SevenZipArchiveWriterFilesTests
     byte[] content = [1, 2, 3, 4, 5];
 
     SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
-        [new SevenZipArchiveWriterFile("file.bin", content),],
+        [new SevenZipArchiveWriterEntry("file.bin", content),],
         out byte[] archive);
 
     Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
@@ -192,7 +192,7 @@ public sealed class SevenZipArchiveWriterFilesTests
   public void BuildArchive_НекорректноеИмяНепустогоФайлаВозвращаетInvalidData(string fileName)
   {
     SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
-        [new SevenZipArchiveWriterFile(fileName, [1, 2, 3]),],
+        [new SevenZipArchiveWriterEntry(fileName, [1, 2, 3]),],
         out byte[] archive);
 
     Assert.Equal(SevenZipArchiveWriteResult.InvalidData, writeResult);
@@ -203,7 +203,7 @@ public sealed class SevenZipArchiveWriterFilesTests
   public void BuildArchive_NullИмяНепустогоФайлаВозвращаетInvalidData()
   {
     SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
-        [new SevenZipArchiveWriterFile(null!, [1, 2, 3]),],
+        [new SevenZipArchiveWriterEntry(null!, [1, 2, 3]),],
         out byte[] archive);
 
     Assert.Equal(SevenZipArchiveWriteResult.InvalidData, writeResult);
@@ -215,8 +215,8 @@ public sealed class SevenZipArchiveWriterFilesTests
   {
     SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
         [
-            new SevenZipArchiveWriterFile("a.txt", []),
-            new SevenZipArchiveWriterFile("b.txt", [1, 2, 3]),
+            new SevenZipArchiveWriterEntry("a.txt", []),
+            new SevenZipArchiveWriterEntry("b.txt", [1, 2, 3]),
         ],
         out byte[] archive);
 
@@ -229,8 +229,8 @@ public sealed class SevenZipArchiveWriterFilesTests
   {
     SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
         [
-            new SevenZipArchiveWriterFile("a.txt", []),
-            new SevenZipArchiveWriterFile("dir/b.txt", []),
+            new SevenZipArchiveWriterEntry("a.txt", []),
+            new SevenZipArchiveWriterEntry("dir/b.txt", []),
         ],
         out byte[] archive);
 
@@ -242,7 +242,7 @@ public sealed class SevenZipArchiveWriterFilesTests
   public void BuildArchive_ОднаПустаяДиректорияСоздаётАрхивКоторыйЧитаетсяDecoderPath()
   {
     SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
-        [new SevenZipArchiveWriterFile("dir", [], IsDirectory: true)],
+        [new SevenZipArchiveWriterEntry("dir", [], IsDirectory: true)],
         out byte[] archive);
 
     Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
@@ -268,8 +268,8 @@ public sealed class SevenZipArchiveWriterFilesTests
   {
     SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
         [
-            new SevenZipArchiveWriterFile("a.txt", []),
-            new SevenZipArchiveWriterFile("dir", [], IsDirectory: true),
+            new SevenZipArchiveWriterEntry("a.txt", []),
+            new SevenZipArchiveWriterEntry("dir", [], IsDirectory: true),
         ],
         out byte[] archive);
 
@@ -304,7 +304,7 @@ public sealed class SevenZipArchiveWriterFilesTests
   public void BuildArchive_ДиректорияСДаннымиВозвращаетInvalidData()
   {
     SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
-        [new SevenZipArchiveWriterFile("dir", [1, 2, 3], IsDirectory: true)],
+        [new SevenZipArchiveWriterEntry("dir", [1, 2, 3], IsDirectory: true)],
         out byte[] archive);
 
     Assert.Equal(SevenZipArchiveWriteResult.InvalidData, writeResult);
