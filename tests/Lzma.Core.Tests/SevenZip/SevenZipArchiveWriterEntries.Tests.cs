@@ -3,7 +3,7 @@ using Lzma.Core.SevenZip;
 
 namespace Lzma.Core.Tests.SevenZip;
 
-public sealed class SevenZipArchiveWriterFilesTests
+public sealed class SevenZipArchiveWriterEntriesTests
 {
   [Fact]
   public void BuildArchive_БезФайловСоздаётПустойАрхив()
