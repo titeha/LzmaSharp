@@ -593,7 +593,7 @@ public static class SevenZipArchiveWriter
   /// </summary>
   private static bool IsSupportedEntryName(string entryName)
   {
-    return !string.IsNullOrEmpty(entryName)
+    return !string.IsNullOrWhiteSpace(entryName)
         && entryName.IndexOf('\0') < 0
         && entryName.IndexOf('/') < 0
         && entryName.IndexOf('\\') < 0;

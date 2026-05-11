@@ -372,6 +372,54 @@ public sealed class SevenZipArchiveWriterEntriesTests
     Assert.Empty(archive);
   }
 
+  [Theory]
+  [InlineData(" ")]
+  [InlineData("\t")]
+  [InlineData("\r\n")]
+  public void BuildArchive_ИмяСостоящееТолькоИзПробельныхСимволовВозвращаетInvalidData(
+    string entryName)
+  {
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
+        [new SevenZipArchiveWriterEntry(entryName, [])],
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.InvalidData, writeResult);
+    Assert.Empty(archive);
+  }
+
+  [Fact]
+  public void BuildArchive_ДиректорияСИменемИзПробеловВозвращаетInvalidData()
+  {
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
+        [new SevenZipArchiveWriterEntry(" ", [], IsDirectory: true)],
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.InvalidData, writeResult);
+    Assert.Empty(archive);
+  }
+
+  [Fact]
+  public void BuildArchive_ИмяСПробеломВнутриРазрешено()
+  {
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
+        [new SevenZipArchiveWriterEntry("file name.txt", [])],
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
+    Assert.NotEmpty(archive);
+
+    SevenZipArchiveDecodeResult decodeResult = SevenZipArchiveDecoder.DecodeSingleFileToArray(
+        archive,
+        out byte[] fileBytes,
+        out string fileName,
+        out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, decodeResult);
+    Assert.Empty(fileBytes);
+    Assert.Equal("file name.txt", fileName);
+    Assert.Equal(archive.Length, bytesConsumed);
+  }
+
   private static void CorruptLastCrcPropertyInNextHeaderAndRefreshHeaderCrc(
     byte[] archive,
     int packedDataLength)
