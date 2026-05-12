@@ -527,6 +527,68 @@ public sealed class SevenZipArchiveWriterEntriesTests
     Assert.Equal(archive.Length, bytesConsumed);
   }
 
+  [Theory]
+  [InlineData("file:name.txt")]
+  [InlineData("file*name.txt")]
+  [InlineData("file?name.txt")]
+  [InlineData("file\"name.txt")]
+  [InlineData("file<name.txt")]
+  [InlineData("file>name.txt")]
+  [InlineData("file|name.txt")]
+  [InlineData("file\tname.txt")]
+  [InlineData("file\rname.txt")]
+  [InlineData("file\nname.txt")]
+  public void BuildArchive_ИмяСНедопустимымWindowsСимволомВозвращаетInvalidData(
+    string entryName)
+  {
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
+        [new SevenZipArchiveWriterEntry(entryName, [])],
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.InvalidData, writeResult);
+    Assert.Empty(archive);
+  }
+
+  [Theory]
+  [InlineData("dir:name")]
+  [InlineData("dir|name")]
+  [InlineData("dir\tname")]
+  public void BuildArchive_ДиректорияСНедопустимымWindowsСимволомВозвращаетInvalidData(
+    string entryName)
+  {
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
+        [new SevenZipArchiveWriterEntry(entryName, [], IsDirectory: true)],
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.InvalidData, writeResult);
+    Assert.Empty(archive);
+  }
+
+  [Theory]
+  [InlineData("file-name_01.txt")]
+  [InlineData("[draft] readme.md")]
+  [InlineData("name.with.many.dots.txt")]
+  public void BuildArchive_ДопустимыеWindowsСимволыВИмениРазрешены(string entryName)
+  {
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
+        [new SevenZipArchiveWriterEntry(entryName, [])],
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
+    Assert.NotEmpty(archive);
+
+    SevenZipArchiveDecodeResult decodeResult = SevenZipArchiveDecoder.DecodeSingleFileToArray(
+        archive,
+        out byte[] fileBytes,
+        out string fileName,
+        out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, decodeResult);
+    Assert.Empty(fileBytes);
+    Assert.Equal(entryName, fileName);
+    Assert.Equal(archive.Length, bytesConsumed);
+  }
+
   private static void CorruptLastCrcPropertyInNextHeaderAndRefreshHeaderCrc(
     byte[] archive,
     int packedDataLength)

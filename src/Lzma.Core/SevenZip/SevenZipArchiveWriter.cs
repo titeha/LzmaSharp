@@ -597,6 +597,7 @@ public static class SevenZipArchiveWriter
         && entryName.IndexOf('\0') < 0
         && entryName.IndexOf('/') < 0
         && entryName.IndexOf('\\') < 0
+        && !ContainsUnsupportedWindowsEntryCharacter(entryName)
         && !HasUnsupportedTrailingEntryCharacter(entryName)
         && !IsWindowsReservedEntryName(entryName);
   }
@@ -610,6 +611,25 @@ public static class SevenZipArchiveWriter
 
     return lastCharacter == '.'
         || char.IsWhiteSpace(lastCharacter);
+  }
+
+  /// <summary>
+  /// Проверяет наличие символов, недопустимых для имени Windows-файла.
+  /// </summary>
+  private static bool ContainsUnsupportedWindowsEntryCharacter(string entryName)
+  {
+    for (int i = 0; i < entryName.Length; i++)
+    {
+      char character = entryName[i];
+
+      if (character < ' ')
+        return true;
+
+      if (character is '<' or '>' or ':' or '"' or '|' or '?' or '*')
+        return true;
+    }
+
+    return false;
   }
 
   /// <summary>
