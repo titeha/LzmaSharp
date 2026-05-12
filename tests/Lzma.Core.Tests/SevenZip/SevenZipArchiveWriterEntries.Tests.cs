@@ -211,7 +211,7 @@ public sealed class SevenZipArchiveWriterEntriesTests
   }
 
   [Fact]
-  public void BuildArchive_НесколькоФайловСНепустымФайломПокаВозвращаетNotSupported()
+  public void BuildArchive_СмешанныйСценарийСПустымИНепустымФайломПокаВозвращаетNotSupported()
   {
     SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
         [
@@ -587,6 +587,46 @@ public sealed class SevenZipArchiveWriterEntriesTests
     Assert.Empty(fileBytes);
     Assert.Equal(entryName, fileName);
     Assert.Equal(archive.Length, bytesConsumed);
+  }
+
+  [Fact]
+  public void BuildArchive_НесколькоНепустыхCopyФайловСоздаётАрхивКоторыйЧитаетсяDecoderPath()
+  {
+    byte[] firstContent = [1, 2, 3];
+    byte[] secondContent = [4, 5, 6, 7];
+
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
+        [
+            new SevenZipArchiveWriterEntry("a.bin", firstContent),
+            new SevenZipArchiveWriterEntry("b.bin", secondContent),
+        ],
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
+    Assert.NotEmpty(archive);
+
+    SevenZipArchiveDecodeResult decodeResult = SevenZipArchiveDecoder.DecodeToEntries(
+        archive,
+        out SevenZipDecodedEntry[] entries,
+        out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, decodeResult);
+    Assert.Equal(archive.Length, bytesConsumed);
+
+    Assert.Collection(
+        entries,
+        [entry =>
+        {
+          Assert.Equal("a.bin", entry.Name);
+          Assert.Equal(firstContent, entry.Bytes);
+          Assert.False(entry.IsDirectory);
+        },
+        entry =>
+        {
+          Assert.Equal("b.bin", entry.Name);
+          Assert.Equal(secondContent, entry.Bytes);
+          Assert.False(entry.IsDirectory);
+        }]);
   }
 
   private static void CorruptLastCrcPropertyInNextHeaderAndRefreshHeaderCrc(
