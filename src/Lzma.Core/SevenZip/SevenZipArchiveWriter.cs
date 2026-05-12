@@ -82,7 +82,369 @@ public static class SevenZipArchiveWriter
     if (AllEntriesAreNonEmptyFiles(entries))
       return BuildCopyFilesArchive(entries, out archive);
 
+    if (HasNonEmptyFiles(entries))
+      return BuildMixedCopyEntriesArchive(entries, out archive);
+
     return SevenZipArchiveWriteResult.NotSupported;
+  }
+
+  /// <summary>
+  /// Проверяет, что среди entry есть хотя бы один непустой файл.
+  /// </summary>
+  private static bool HasNonEmptyFiles(
+      IReadOnlyList<SevenZipArchiveWriterEntry> entries)
+  {
+    for (int i = 0; i < entries.Count; i++)
+    {
+      SevenZipArchiveWriterEntry entry = entries[i];
+
+      if (!entry.IsDirectory && entry.Content.Length != 0)
+        return true;
+    }
+
+    return false;
+  }
+
+  /// <summary>
+  /// Строит 7z-архив со смесью empty entries и непустых Copy-файлов.
+  /// </summary>
+  private static SevenZipArchiveWriteResult BuildMixedCopyEntriesArchive(
+      IReadOnlyList<SevenZipArchiveWriterEntry> entries,
+      out byte[] archive)
+  {
+    archive = [];
+
+    if (!TryBuildMixedCopyEntriesPackedData(
+            entries,
+            out byte[] packedData,
+            out int[] sizes,
+            out uint[] crcs))
+      return SevenZipArchiveWriteResult.NotSupported;
+
+    if (!TryBuildMixedCopyEntriesNextHeader(
+            entries,
+            sizes,
+            crcs,
+            out byte[] nextHeaderBytes))
+      return SevenZipArchiveWriteResult.InternalError;
+
+    archive = BuildArchiveWithPackedData(packedData, nextHeaderBytes);
+
+    return SevenZipArchiveWriteResult.Ok;
+  }
+
+  /// <summary>
+  /// Строит packed data, размеры и CRC для непустых Copy-файлов из смешанного набора entry.
+  /// </summary>
+  private static bool TryBuildMixedCopyEntriesPackedData(
+      IReadOnlyList<SevenZipArchiveWriterEntry> entries,
+      out byte[] packedData,
+      out int[] sizes,
+      out uint[] crcs)
+  {
+    packedData = [];
+    sizes = [];
+    crcs = [];
+
+    int nonEmptyFileCount = CountNonEmptyFiles(entries);
+    long totalLength = 0;
+
+    for (int i = 0; i < entries.Count; i++)
+    {
+      SevenZipArchiveWriterEntry entry = entries[i];
+
+      if (entry.IsDirectory || entry.Content.Length == 0)
+        continue;
+
+      totalLength += entry.Content.Length;
+
+      if (totalLength > int.MaxValue)
+        return false;
+    }
+
+    packedData = new byte[(int)totalLength];
+    sizes = new int[nonEmptyFileCount];
+    crcs = new uint[nonEmptyFileCount];
+
+    int outputOffset = 0;
+    int streamIndex = 0;
+
+    for (int i = 0; i < entries.Count; i++)
+    {
+      SevenZipArchiveWriterEntry entry = entries[i];
+
+      if (entry.IsDirectory || entry.Content.Length == 0)
+        continue;
+
+      byte[] content = entry.Content;
+
+      sizes[streamIndex] = content.Length;
+      crcs[streamIndex] = Crc32.Compute(content);
+
+      content.CopyTo(packedData.AsSpan(outputOffset));
+
+      outputOffset += content.Length;
+      streamIndex++;
+    }
+
+    return true;
+  }
+
+  /// <summary>
+  /// Считает непустые файлы среди entry.
+  /// </summary>
+  private static int CountNonEmptyFiles(
+      IReadOnlyList<SevenZipArchiveWriterEntry> entries)
+  {
+    int count = 0;
+
+    for (int i = 0; i < entries.Count; i++)
+    {
+      SevenZipArchiveWriterEntry entry = entries[i];
+
+      if (!entry.IsDirectory && entry.Content.Length != 0)
+        count++;
+    }
+
+    return count;
+  }
+
+  /// <summary>
+  /// Строит next header для смешанного архива с empty entries и непустыми Copy-файлами.
+  /// </summary>
+  private static bool TryBuildMixedCopyEntriesNextHeader(
+      IReadOnlyList<SevenZipArchiveWriterEntry> entries,
+      int[] sizes,
+      uint[] crcs,
+      out byte[] nextHeaderBytes)
+  {
+    nextHeaderBytes = [];
+
+    List<byte> header = new(256)
+    {
+        SevenZipNid.Header,
+        SevenZipNid.MainStreamsInfo,
+    };
+
+    if (!TryWriteCopyFilesPackInfo(header, sizes, crcs))
+      return false;
+
+    if (!TryWriteCopyFilesUnpackInfo(header, sizes, crcs))
+      return false;
+
+    header.Add(SevenZipNid.End);
+
+    if (!TryWriteMixedCopyEntriesFilesInfo(header, entries))
+      return false;
+
+    header.Add(SevenZipNid.End);
+
+    nextHeaderBytes = [.. header];
+
+    return true;
+  }
+
+  /// <summary>
+  /// Пишет FilesInfo для смешанного набора empty entries и непустых Copy-файлов.
+  /// </summary>
+  private static bool TryWriteMixedCopyEntriesFilesInfo(
+      List<byte> header,
+      IReadOnlyList<SevenZipArchiveWriterEntry> entries)
+  {
+    header.Add(SevenZipNid.FilesInfo);
+
+    if (!TryWriteUInt64(header, (ulong)entries.Count))
+      return false;
+
+    header.Add(SevenZipNid.EmptyStream);
+
+    if (!TryWriteUInt64(header, (ulong)GetBitVectorByteCount(entries.Count)))
+      return false;
+
+    WriteEmptyStreamBitVector(header, entries);
+
+    header.Add(SevenZipNid.EmptyFile);
+
+    if (!TryWriteUInt64(header, (ulong)GetBitVectorByteCount(CountEmptyEntries(entries))))
+      return false;
+
+    WriteEmptyFileSubVector(header, entries);
+
+    if (!TryWriteFileNamesProperty(header, entries))
+      return false;
+
+    if (!TryWriteMixedCopyEntriesCrcProperty(header, entries))
+      return false;
+
+    header.Add(SevenZipNid.End);
+
+    return true;
+  }
+
+  /// <summary>
+  /// Считает empty entries.
+  /// </summary>
+  private static int CountEmptyEntries(
+      IReadOnlyList<SevenZipArchiveWriterEntry> entries)
+  {
+    int count = 0;
+
+    for (int i = 0; i < entries.Count; i++)
+    {
+      SevenZipArchiveWriterEntry entry = entries[i];
+
+      if (entry.IsDirectory || entry.Content.Length == 0)
+        count++;
+    }
+
+    return count;
+  }
+
+  /// <summary>
+  /// Пишет bit-vector EmptyStream для всех entry.
+  /// true означает, что у entry нет файловых данных.
+  /// </summary>
+  private static void WriteEmptyStreamBitVector(
+      List<byte> destination,
+      IReadOnlyList<SevenZipArchiveWriterEntry> entries)
+  {
+    int byteCount = GetBitVectorByteCount(entries.Count);
+
+    for (int byteIndex = 0; byteIndex < byteCount; byteIndex++)
+    {
+      byte value = 0;
+
+      for (int bitIndex = 0; bitIndex < 8; bitIndex++)
+      {
+        int itemIndex = byteIndex * 8 + bitIndex;
+
+        if (itemIndex >= entries.Count)
+          break;
+
+        SevenZipArchiveWriterEntry entry = entries[itemIndex];
+
+        if (entry.IsDirectory || entry.Content.Length == 0)
+          value |= (byte)(0x80 >> bitIndex);
+      }
+
+      destination.Add(value);
+    }
+  }
+
+  /// <summary>
+  /// Пишет EmptyFile sub-vector только для empty stream entries.
+  /// true означает пустой файл, false означает директорию.
+  /// </summary>
+  private static void WriteEmptyFileSubVector(
+      List<byte> destination,
+      IReadOnlyList<SevenZipArchiveWriterEntry> entries)
+  {
+    int emptyEntryCount = CountEmptyEntries(entries);
+    int byteCount = GetBitVectorByteCount(emptyEntryCount);
+
+    int emptyIndex = 0;
+
+    for (int byteIndex = 0; byteIndex < byteCount; byteIndex++)
+    {
+      byte value = 0;
+
+      for (int bitIndex = 0; bitIndex < 8; bitIndex++)
+      {
+        while (emptyIndex < entries.Count
+               && !entries[emptyIndex].IsDirectory
+               && entries[emptyIndex].Content.Length != 0)
+          emptyIndex++;
+
+        if (emptyIndex >= entries.Count)
+          break;
+
+        SevenZipArchiveWriterEntry entry = entries[emptyIndex];
+
+        if (!entry.IsDirectory)
+          value |= (byte)(0x80 >> bitIndex);
+
+        emptyIndex++;
+      }
+
+      destination.Add(value);
+    }
+  }
+
+  /// <summary>
+  /// Пишет CRC-свойство FilesInfo для смешанного набора entry.
+  /// CRC задаётся только для непустых файлов.
+  /// </summary>
+  private static bool TryWriteMixedCopyEntriesCrcProperty(
+      List<byte> header,
+      IReadOnlyList<SevenZipArchiveWriterEntry> entries)
+  {
+    bool[] defined = new bool[entries.Count];
+    uint[] crcs = new uint[entries.Count];
+
+    int definedCount = 0;
+
+    for (int i = 0; i < entries.Count; i++)
+    {
+      SevenZipArchiveWriterEntry entry = entries[i];
+
+      if (entry.IsDirectory || entry.Content.Length == 0)
+        continue;
+
+      defined[i] = true;
+      crcs[i] = Crc32.Compute(entry.Content);
+      definedCount++;
+    }
+
+    header.Add(SevenZipNid.Crc);
+
+    ulong propertySize =
+        1UL
+        + (ulong)GetBitVectorByteCount(entries.Count)
+        + ((ulong)definedCount * 4UL);
+
+    if (!TryWriteUInt64(header, propertySize))
+      return false;
+
+    header.Add(0x00);
+    WriteDefinedBitVector(header, defined);
+
+    for (int i = 0; i < entries.Count; i++)
+    {
+      if (!defined[i])
+        continue;
+
+      WriteUInt32LittleEndian(header, crcs[i]);
+    }
+
+    return true;
+  }
+
+  /// <summary>
+  /// Пишет bit-vector для массива defined-флагов.
+  /// </summary>
+  private static void WriteDefinedBitVector(
+      List<byte> destination,
+      bool[] defined)
+  {
+    int byteCount = GetBitVectorByteCount(defined.Length);
+
+    for (int byteIndex = 0; byteIndex < byteCount; byteIndex++)
+    {
+      byte value = 0;
+
+      for (int bitIndex = 0; bitIndex < 8; bitIndex++)
+      {
+        int itemIndex = byteIndex * 8 + bitIndex;
+
+        if (itemIndex >= defined.Length)
+          break;
+
+        if (defined[itemIndex])
+          value |= (byte)(0x80 >> bitIndex);
+      }
+
+      destination.Add(value);
+    }
   }
 
   /// <summary>
