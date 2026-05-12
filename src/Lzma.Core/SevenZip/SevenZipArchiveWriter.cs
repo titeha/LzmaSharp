@@ -596,7 +596,39 @@ public static class SevenZipArchiveWriter
     return !string.IsNullOrWhiteSpace(entryName)
         && entryName.IndexOf('\0') < 0
         && entryName.IndexOf('/') < 0
-        && entryName.IndexOf('\\') < 0;
+        && entryName.IndexOf('\\') < 0
+        && !IsWindowsReservedEntryName(entryName);
+  }
+
+  /// <summary>
+  /// Проверяет, является ли имя зарезервированным Windows-именем.
+  /// </summary>
+  private static bool IsWindowsReservedEntryName(string entryName)
+  {
+    int dotIndex = entryName.IndexOf('.');
+    string baseName = dotIndex >= 0
+        ? entryName[..dotIndex]
+        : entryName;
+
+    return baseName.Equals("CON", StringComparison.OrdinalIgnoreCase)
+        || baseName.Equals("PRN", StringComparison.OrdinalIgnoreCase)
+        || baseName.Equals("AUX", StringComparison.OrdinalIgnoreCase)
+        || baseName.Equals("NUL", StringComparison.OrdinalIgnoreCase)
+        || IsNumberedWindowsReservedEntryName(baseName, "COM")
+        || IsNumberedWindowsReservedEntryName(baseName, "LPT");
+  }
+
+  /// <summary>
+  /// Проверяет имена вида COM1..COM9 и LPT1..LPT9.
+  /// </summary>
+  private static bool IsNumberedWindowsReservedEntryName(
+      string baseName,
+      string prefix)
+  {
+    return baseName.Length == 4
+        && baseName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+        && baseName[3] >= '1'
+        && baseName[3] <= '9';
   }
 
   /// <summary>

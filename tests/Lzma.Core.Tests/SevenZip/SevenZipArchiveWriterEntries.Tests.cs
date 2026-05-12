@@ -420,6 +420,57 @@ public sealed class SevenZipArchiveWriterEntriesTests
     Assert.Equal(archive.Length, bytesConsumed);
   }
 
+  [Theory]
+  [InlineData("CON")]
+  [InlineData("con.txt")]
+  [InlineData("PRN")]
+  [InlineData("prn.log")]
+  [InlineData("AUX")]
+  [InlineData("aux.data")]
+  [InlineData("NUL")]
+  [InlineData("nul.bin")]
+  [InlineData("COM1")]
+  [InlineData("com9.log")]
+  [InlineData("LPT1")]
+  [InlineData("lpt9.tmp")]
+  public void BuildArchive_ЗарезервированноеWindowsИмяВозвращаетInvalidData(
+    string entryName)
+  {
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
+        [new SevenZipArchiveWriterEntry(entryName, [])],
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.InvalidData, writeResult);
+    Assert.Empty(archive);
+  }
+
+  [Theory]
+  [InlineData("COM10.txt")]
+  [InlineData("LPT10.txt")]
+  [InlineData("CONSOLE.txt")]
+  [InlineData("auxiliary.txt")]
+  public void BuildArchive_ПохожиеНоНеЗарезервированныеИменаРазрешены(
+    string entryName)
+  {
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
+        [new SevenZipArchiveWriterEntry(entryName, [])],
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
+    Assert.NotEmpty(archive);
+
+    SevenZipArchiveDecodeResult decodeResult = SevenZipArchiveDecoder.DecodeSingleFileToArray(
+        archive,
+        out byte[] fileBytes,
+        out string fileName,
+        out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, decodeResult);
+    Assert.Empty(fileBytes);
+    Assert.Equal(entryName, fileName);
+    Assert.Equal(archive.Length, bytesConsumed);
+  }
+
   private static void CorruptLastCrcPropertyInNextHeaderAndRefreshHeaderCrc(
     byte[] archive,
     int packedDataLength)
