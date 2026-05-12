@@ -597,7 +597,19 @@ public static class SevenZipArchiveWriter
         && entryName.IndexOf('\0') < 0
         && entryName.IndexOf('/') < 0
         && entryName.IndexOf('\\') < 0
+        && !HasUnsupportedTrailingEntryCharacter(entryName)
         && !IsWindowsReservedEntryName(entryName);
+  }
+
+  /// <summary>
+  /// Проверяет завершающий символ имени, который опасен для Windows-путей.
+  /// </summary>
+  private static bool HasUnsupportedTrailingEntryCharacter(string entryName)
+  {
+    char lastCharacter = entryName[^1];
+
+    return lastCharacter == '.'
+        || char.IsWhiteSpace(lastCharacter);
   }
 
   /// <summary>

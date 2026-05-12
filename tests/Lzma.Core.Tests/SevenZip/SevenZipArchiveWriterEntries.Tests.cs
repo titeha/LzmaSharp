@@ -471,6 +471,62 @@ public sealed class SevenZipArchiveWriterEntriesTests
     Assert.Equal(archive.Length, bytesConsumed);
   }
 
+  [Theory]
+  [InlineData("file.")]
+  [InlineData("file.txt.")]
+  [InlineData("file ")]
+  [InlineData("file.txt ")]
+  [InlineData("file\t")]
+  public void BuildArchive_ИмяСНедопустимымЗавершающимСимволомВозвращаетInvalidData(
+    string entryName)
+  {
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
+        [new SevenZipArchiveWriterEntry(entryName, [])],
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.InvalidData, writeResult);
+    Assert.Empty(archive);
+  }
+
+  [Theory]
+  [InlineData("dir.")]
+  [InlineData("dir ")]
+  public void BuildArchive_ДиректорияСНедопустимымЗавершающимСимволомВозвращаетInvalidData(
+    string entryName)
+  {
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
+        [new SevenZipArchiveWriterEntry(entryName, [], IsDirectory: true)],
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.InvalidData, writeResult);
+    Assert.Empty(archive);
+  }
+
+  [Theory]
+  [InlineData("file.name.txt")]
+  [InlineData("file name.txt")]
+  [InlineData(".config")]
+  public void BuildArchive_ТочкаИПробелВнутриИмениРазрешены(string entryName)
+  {
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
+        [new SevenZipArchiveWriterEntry(entryName, [])],
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
+    Assert.NotEmpty(archive);
+
+    SevenZipArchiveDecodeResult decodeResult = SevenZipArchiveDecoder.DecodeSingleFileToArray(
+        archive,
+        out byte[] fileBytes,
+        out string fileName,
+        out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, decodeResult);
+    Assert.Empty(fileBytes);
+    Assert.Equal(entryName, fileName);
+    Assert.Equal(archive.Length, bytesConsumed);
+  }
+
   private static void CorruptLastCrcPropertyInNextHeaderAndRefreshHeaderCrc(
     byte[] archive,
     int packedDataLength)
