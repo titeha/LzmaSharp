@@ -83,7 +83,8 @@ Writer реализуется снизу вверх:
 - архив с несколькими пустыми файлами;
 - архив с одной пустой директорией;
 - архив со смесью пустых файлов и пустых директорий;
-- архив с одним непустым файлом через `Copy`.
+- архив с одним непустым файлом через `Copy`;
+- архив с несколькими непустыми файлами через `Copy`.
 
 Для сценария одного непустого файла через `Copy` writer формирует:
 
@@ -95,6 +96,17 @@ Writer реализуется снизу вверх:
 - CRC packed stream-а;
 - CRC folder stream-а;
 - CRC файла.
+
+Для сценария нескольких непустых файлов через `Copy` writer формирует:
+
+- packed data как конкатенацию содержимого файлов;
+- `PackInfo` с несколькими packed stream-ами;
+- `UnpackInfo` с несколькими folder-ами;
+- отдельный `Copy` coder для каждого folder-а;
+- `FilesInfo` со списком имён файлов;
+- CRC для каждого packed stream-а;
+- CRC для каждого folder stream-а;
+- CRC для каждого файла.
 
 Для сценария пустых файлов и пустых директорий writer формирует:
 
@@ -125,13 +137,18 @@ Packed data, `MainStreamsInfo`, `PackInfo` и `UnpackInfo` для этого с�
 - round-trip одного непустого `Copy`-файла через decoder-path;
 - round-trip одной пустой директории через decoder-path;
 - round-trip смеси пустого файла и пустой директории через decoder-path;
+- round-trip нескольких непустых `Copy`-файлов через decoder-path;
+- структурная проверка multi-Copy writer-архива через `SevenZipArchiveReader`;
+- проверка нескольких packed stream-ов в `PackInfo`;
+- проверка нескольких folder-ов в `UnpackInfo`;
+- проверка CRC для нескольких packed stream-ов, folder stream-ов и файлов;
 - структурная проверка `EmptyFile` bit-vector для пустого файла и пустой директории;
 - директория с данными возвращает `InvalidData`;
 - структурная проверка `Copy` writer-архива через `SevenZipArchiveReader`;
 - структурная проверка `FilesInfo` для empty entries через `SevenZipArchiveReader`;
 - повреждение packed data возвращает `InvalidData`;
 - повреждение файлового CRC в header возвращает `InvalidData`;
-- несколько файлов с непустыми данными пока возвращают `NotSupported`;
+- смешанный multi-file сценарий с пустыми и непустыми entry пока возвращает `NotSupported`;
 - некорректные имена файлов возвращают `InvalidData`;
 - дублирующиеся имена entry возвращают `InvalidData`;
 - конфликт файла и директории с одинаковым именем возвращает `InvalidData`;
@@ -149,8 +166,7 @@ Packed data, `MainStreamsInfo`, `PackInfo` и `UnpackInfo` для этого с�
 
 Пока не поддержано:
 
-- несколько непустых файлов;
-- смешанный multi-file сценарий с пустыми и непустыми файлами;
+- смешанный multi-file сценарий с пустыми и непустыми entry;
 - вложенные пути и файлы внутри директорий;
 - директории с данными;
 - timestamps;
