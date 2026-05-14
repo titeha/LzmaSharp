@@ -76,11 +76,11 @@ public static class SevenZipArchiveWriter
         out uint[] crcs))
       return SevenZipArchiveWriteResult.NotSupported;
 
-    if (!TryBuildMixedCopyEntriesNextHeader(
-            entries,
-            sizes,
-            crcs,
-            out byte[] nextHeaderBytes))
+    if (!TryBuildCopyEntriesNextHeader(
+        entries,
+        sizes,
+        crcs,
+        out byte[] nextHeaderBytes))
       return SevenZipArchiveWriteResult.InternalError;
 
     archive = BuildArchiveWithPackedData(packedData, nextHeaderBytes);
@@ -104,9 +104,9 @@ public static class SevenZipArchiveWriter
   }
 
   /// <summary>
-  /// Строит next header для смешанного архива с empty entries и непустыми Copy-файлами.
+  /// Строит next header для Copy-сценария.
   /// </summary>
-  private static bool TryBuildMixedCopyEntriesNextHeader(
+  private static bool TryBuildCopyEntriesNextHeader(
       IReadOnlyList<SevenZipArchiveWriterEntry> entries,
       int[] sizes,
       uint[] crcs,
@@ -128,7 +128,12 @@ public static class SevenZipArchiveWriter
 
     header.Add(SevenZipNid.End);
 
-    if (!TryWriteMixedCopyEntriesFilesInfo(header, entries))
+    if (AllEntriesAreNonEmptyFiles(entries))
+    {
+      if (!TryWriteCopyFilesFilesInfo(header, entries, crcs))
+        return false;
+    }
+    else if (!TryWriteMixedCopyEntriesFilesInfo(header, entries))
       return false;
 
     header.Add(SevenZipNid.End);
@@ -291,11 +296,11 @@ public static class SevenZipArchiveWriter
         out uint[] crcs))
       return SevenZipArchiveWriteResult.NotSupported;
 
-    if (!TryBuildCopyFilesNextHeader(
-            entries,
-            sizes,
-            crcs,
-            out byte[] nextHeaderBytes))
+    if (!TryBuildCopyEntriesNextHeader(
+        entries,
+        sizes,
+        crcs,
+        out byte[] nextHeaderBytes))
       return SevenZipArchiveWriteResult.InternalError;
 
     archive = BuildArchiveWithPackedData(packedData, nextHeaderBytes);
@@ -364,41 +369,6 @@ public static class SevenZipArchiveWriter
   /// Проверяет, что entry является непустым файлом.
   /// </summary>
   private static bool IsNonEmptyFile(SevenZipArchiveWriterEntry entry) => !entry.IsDirectory && entry.Content.Length != 0;
-
-  /// <summary>
-  /// Строит next header для архива с несколькими непустыми файлами через Copy coder.
-  /// </summary>
-  private static bool TryBuildCopyFilesNextHeader(
-      IReadOnlyList<SevenZipArchiveWriterEntry> entries,
-      int[] sizes,
-      uint[] crcs,
-      out byte[] nextHeaderBytes)
-  {
-    nextHeaderBytes = [];
-
-    List<byte> header = new(256)
-    {
-        SevenZipNid.Header,
-        SevenZipNid.MainStreamsInfo,
-    };
-
-    if (!TryWriteCopyFilesPackInfo(header, sizes, crcs))
-      return false;
-
-    if (!TryWriteCopyFilesUnpackInfo(header, sizes, crcs))
-      return false;
-
-    header.Add(SevenZipNid.End);
-
-    if (!TryWriteCopyFilesFilesInfo(header, entries, crcs))
-      return false;
-
-    header.Add(SevenZipNid.End);
-
-    nextHeaderBytes = [.. header];
-
-    return true;
-  }
 
   /// <summary>
   /// Пишет PackInfo для нескольких packed stream-ов.
