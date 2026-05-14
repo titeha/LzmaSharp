@@ -269,49 +269,23 @@ public static class SevenZipArchiveWriter
   /// Пишет CRC-свойство FilesInfo для смешанного набора entry.
   /// CRC задаётся только для непустых файлов.
   /// </summary>
-  private static bool TryWriteMixedCopyEntriesCrcProperty(
-      List<byte> header,
-      IReadOnlyList<SevenZipArchiveWriterEntry> entries)
+  private static bool TryWriteMixedCopyEntriesCrcProperty(List<byte> header, IReadOnlyList<SevenZipArchiveWriterEntry> entries)
   {
     bool[] defined = new bool[entries.Count];
     uint[] crcs = new uint[entries.Count];
-
-    int definedCount = 0;
 
     for (int i = 0; i < entries.Count; i++)
     {
       SevenZipArchiveWriterEntry entry = entries[i];
 
-      if (entry.IsDirectory || entry.Content.Length == 0)
+      if (!IsNonEmptyFile(entry))
         continue;
 
       defined[i] = true;
       crcs[i] = Crc32.Compute(entry.Content);
-      definedCount++;
     }
 
-    header.Add(SevenZipNid.Crc);
-
-    ulong propertySize =
-        1UL
-        + (ulong)GetBitVectorByteCount(entries.Count)
-        + ((ulong)definedCount * 4UL);
-
-    if (!TryWriteUInt64(header, propertySize))
-      return false;
-
-    header.Add(0x00);
-    WriteDefinedBitVector(header, defined);
-
-    for (int i = 0; i < entries.Count; i++)
-    {
-      if (!defined[i])
-        continue;
-
-      WriteUInt32LittleEndian(header, crcs[i]);
-    }
-
-    return true;
+    return TryWriteFilesInfoCrcProperty(header, defined, crcs);
   }
 
   /// <summary>
@@ -566,22 +540,64 @@ public static class SevenZipArchiveWriter
   }
 
   /// <summary>
-  /// Пишет CRC-свойство FilesInfo для набора entry с allAreDefined.
+  /// Пишет CRC-свойство FilesInfo с defined bit-vector при необходимости.
   /// </summary>
-  private static bool TryWriteDefinedCrcProperty(
+  private static bool TryWriteFilesInfoCrcProperty(
       List<byte> header,
+      bool[] defined,
       uint[] crcs)
   {
+    if (defined.Length != crcs.Length)
+      return false;
+
+    bool allAreDefined = true;
+    int definedCount = 0;
+
+    for (int i = 0; i < defined.Length; i++)
+      if (defined[i])
+        definedCount++;
+      else
+        allAreDefined = false;
+
     header.Add(SevenZipNid.Crc);
 
-    ulong propertySize = 1UL + ((ulong)crcs.Length * 4UL);
+    ulong propertySize =
+        1UL
+        + (allAreDefined ? 0UL : (ulong)GetBitVectorByteCount(defined.Length))
+        + ((ulong)definedCount * 4UL);
 
     if (!TryWriteUInt64(header, propertySize))
       return false;
 
-    WriteAllDefinedCrcDigests(header, crcs);
+    header.Add(allAreDefined ? (byte)0x01 : (byte)0x00);
+
+    if (!allAreDefined)
+      WriteDefinedBitVector(header, defined);
+
+    for (int i = 0; i < crcs.Length; i++)
+    {
+      if (!defined[i])
+        continue;
+
+      WriteUInt32LittleEndian(header, crcs[i]);
+    }
 
     return true;
+  }
+
+  /// <summary>
+  /// Пишет CRC-свойство FilesInfo для набора entry с allAreDefined.
+  /// </summary>
+  private static bool TryWriteDefinedCrcProperty(
+    List<byte> header,
+    uint[] crcs)
+  {
+    bool[] defined = new bool[crcs.Length];
+
+    for (int i = 0; i < defined.Length; i++)
+      defined[i] = true;
+
+    return TryWriteFilesInfoCrcProperty(header, defined, crcs);
   }
 
   /// <summary>
@@ -1027,19 +1043,8 @@ public static class SevenZipArchiveWriter
   /// Пишет CRC-свойство для одного файла с allAreDefined.
   /// </summary>
   private static bool TryWriteSingleDefinedCrcProperty(
-      List<byte> header,
-      uint crc)
-  {
-    header.Add(SevenZipNid.Crc);
-
-    if (!TryWriteUInt64(header, 5))
-      return false;
-
-    header.Add(0x01);
-    WriteUInt32LittleEndian(header, crc);
-
-    return true;
-  }
+    List<byte> header,
+    uint crc) => TryWriteFilesInfoCrcProperty(header, [true], [crc]);
 
   /// <summary>
   /// Строит каркас 7z-архива из уже подготовленного next header.
