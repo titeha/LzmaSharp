@@ -91,19 +91,7 @@ public static class SevenZipArchiveWriter
   /// <summary>
   /// Проверяет, что среди entry есть хотя бы один непустой файл.
   /// </summary>
-  private static bool HasNonEmptyFiles(
-      IReadOnlyList<SevenZipArchiveWriterEntry> entries)
-  {
-    for (int i = 0; i < entries.Count; i++)
-    {
-      SevenZipArchiveWriterEntry entry = entries[i];
-
-      if (!entry.IsDirectory && entry.Content.Length != 0)
-        return true;
-    }
-
-    return false;
-  }
+  private static bool HasNonEmptyFiles(IReadOnlyList<SevenZipArchiveWriterEntry> entries) => CountNonEmptyFiles(entries) != 0;
 
   /// <summary>
   /// Строит 7z-архив со смесью empty entries и непустых Copy-файлов.
@@ -114,11 +102,11 @@ public static class SevenZipArchiveWriter
   {
     archive = [];
 
-    if (!TryBuildMixedCopyEntriesPackedData(
-            entries,
-            out byte[] packedData,
-            out int[] sizes,
-            out uint[] crcs))
+    if (!TryBuildCopyPackedData(
+        entries,
+        out byte[] packedData,
+        out int[] sizes,
+        out uint[] crcs))
       return SevenZipArchiveWriteResult.NotSupported;
 
     if (!TryBuildMixedCopyEntriesNextHeader(
@@ -134,63 +122,6 @@ public static class SevenZipArchiveWriter
   }
 
   /// <summary>
-  /// Строит packed data, размеры и CRC для непустых Copy-файлов из смешанного набора entry.
-  /// </summary>
-  private static bool TryBuildMixedCopyEntriesPackedData(
-      IReadOnlyList<SevenZipArchiveWriterEntry> entries,
-      out byte[] packedData,
-      out int[] sizes,
-      out uint[] crcs)
-  {
-    packedData = [];
-    sizes = [];
-    crcs = [];
-
-    int nonEmptyFileCount = CountNonEmptyFiles(entries);
-    long totalLength = 0;
-
-    for (int i = 0; i < entries.Count; i++)
-    {
-      SevenZipArchiveWriterEntry entry = entries[i];
-
-      if (entry.IsDirectory || entry.Content.Length == 0)
-        continue;
-
-      totalLength += entry.Content.Length;
-
-      if (totalLength > int.MaxValue)
-        return false;
-    }
-
-    packedData = new byte[(int)totalLength];
-    sizes = new int[nonEmptyFileCount];
-    crcs = new uint[nonEmptyFileCount];
-
-    int outputOffset = 0;
-    int streamIndex = 0;
-
-    for (int i = 0; i < entries.Count; i++)
-    {
-      SevenZipArchiveWriterEntry entry = entries[i];
-
-      if (entry.IsDirectory || entry.Content.Length == 0)
-        continue;
-
-      byte[] content = entry.Content;
-
-      sizes[streamIndex] = content.Length;
-      crcs[streamIndex] = Crc32.Compute(content);
-
-      content.CopyTo(packedData.AsSpan(outputOffset));
-
-      outputOffset += content.Length;
-      streamIndex++;
-    }
-
-    return true;
-  }
-
-  /// <summary>
   /// Считает непустые файлы среди entry.
   /// </summary>
   private static int CountNonEmptyFiles(
@@ -199,12 +130,8 @@ public static class SevenZipArchiveWriter
     int count = 0;
 
     for (int i = 0; i < entries.Count; i++)
-    {
-      SevenZipArchiveWriterEntry entry = entries[i];
-
-      if (!entry.IsDirectory && entry.Content.Length != 0)
+      if (IsNonEmptyFile(entries[i]))
         count++;
-    }
 
     return count;
   }
@@ -405,15 +332,8 @@ public static class SevenZipArchiveWriter
       IReadOnlyList<SevenZipArchiveWriterEntry> entries)
   {
     for (int i = 0; i < entries.Count; i++)
-    {
-      SevenZipArchiveWriterEntry entry = entries[i];
-
-      if (entry.IsDirectory)
+      if (!IsNonEmptyFile(entries[i]))
         return false;
-
-      if (entry.Content.Length == 0)
-        return false;
-    }
 
     return true;
   }
@@ -427,23 +347,19 @@ public static class SevenZipArchiveWriter
   {
     archive = [];
 
-    if (!TryBuildCopyFilesPackedData(
-            entries,
-            out byte[] packedData,
-            out int[] sizes,
-            out uint[] crcs))
-    {
+    if (!TryBuildCopyPackedData(
+        entries,
+        out byte[] packedData,
+        out int[] sizes,
+        out uint[] crcs))
       return SevenZipArchiveWriteResult.NotSupported;
-    }
 
     if (!TryBuildCopyFilesNextHeader(
             entries,
             sizes,
             crcs,
             out byte[] nextHeaderBytes))
-    {
       return SevenZipArchiveWriteResult.InternalError;
-    }
 
     archive = BuildArchiveWithPackedData(packedData, nextHeaderBytes);
 
@@ -451,9 +367,9 @@ public static class SevenZipArchiveWriter
   }
 
   /// <summary>
-  /// Строит packed data, размеры и CRC для нескольких Copy-файлов.
+  /// Строит packed data, размеры и CRC для непустых Copy-файлов из набора entry.
   /// </summary>
-  private static bool TryBuildCopyFilesPackedData(
+  private static bool TryBuildCopyPackedData(
       IReadOnlyList<SevenZipArchiveWriterEntry> entries,
       out byte[] packedData,
       out int[] sizes,
@@ -463,35 +379,54 @@ public static class SevenZipArchiveWriter
     sizes = [];
     crcs = [];
 
+    int nonEmptyFileCount = CountNonEmptyFiles(entries);
     long totalLength = 0;
 
     for (int i = 0; i < entries.Count; i++)
     {
-      totalLength += entries[i].Content.Length;
+      SevenZipArchiveWriterEntry entry = entries[i];
+
+      if (!IsNonEmptyFile(entry))
+        continue;
+
+      totalLength += entry.Content.Length;
 
       if (totalLength > int.MaxValue)
         return false;
     }
 
     packedData = new byte[(int)totalLength];
-    sizes = new int[entries.Count];
-    crcs = new uint[entries.Count];
+    sizes = new int[nonEmptyFileCount];
+    crcs = new uint[nonEmptyFileCount];
 
-    int offset = 0;
+    int outputOffset = 0;
+    int streamIndex = 0;
 
     for (int i = 0; i < entries.Count; i++)
     {
-      byte[] content = entries[i].Content;
+      SevenZipArchiveWriterEntry entry = entries[i];
 
-      sizes[i] = content.Length;
-      crcs[i] = Crc32.Compute(content);
+      if (!IsNonEmptyFile(entry))
+        continue;
 
-      content.CopyTo(packedData.AsSpan(offset));
-      offset += content.Length;
+      byte[] content = entry.Content;
+
+      sizes[streamIndex] = content.Length;
+      crcs[streamIndex] = Crc32.Compute(content);
+
+      content.CopyTo(packedData.AsSpan(outputOffset));
+
+      outputOffset += content.Length;
+      streamIndex++;
     }
 
     return true;
   }
+
+  /// <summary>
+  /// Проверяет, что entry является непустым файлом.
+  /// </summary>
+  private static bool IsNonEmptyFile(SevenZipArchiveWriterEntry entry) => !entry.IsDirectory && entry.Content.Length != 0;
 
   /// <summary>
   /// Строит next header для архива с несколькими непустыми файлами через Copy coder.
