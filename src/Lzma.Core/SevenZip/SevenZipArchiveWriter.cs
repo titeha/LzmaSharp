@@ -306,30 +306,14 @@ public static class SevenZipArchiveWriter
   /// </summary>
   private static void WriteEmptyStreamBitVector(
       List<byte> destination,
-      IReadOnlyList<SevenZipArchiveWriterEntry> entries)
-  {
-    int byteCount = GetBitVectorByteCount(entries.Count);
-
-    for (int byteIndex = 0; byteIndex < byteCount; byteIndex++)
-    {
-      byte value = 0;
-
-      for (int bitIndex = 0; bitIndex < 8; bitIndex++)
-      {
-        int itemIndex = byteIndex * 8 + bitIndex;
-
-        if (itemIndex >= entries.Count)
-          break;
-
-        SevenZipArchiveWriterEntry entry = entries[itemIndex];
-
-        if (entry.IsDirectory || entry.Content.Length == 0)
-          value |= (byte)(0x80 >> bitIndex);
-      }
-
-      destination.Add(value);
-    }
-  }
+      IReadOnlyList<SevenZipArchiveWriterEntry> entries) => WriteBitVector(
+        destination,
+        entries.Count,
+        index =>
+        {
+          SevenZipArchiveWriterEntry entry = entries[index];
+          return entry.IsDirectory || entry.Content.Length == 0;
+        });
 
   /// <summary>
   /// Пишет EmptyFile sub-vector только для empty stream entries.
@@ -340,34 +324,22 @@ public static class SevenZipArchiveWriter
       IReadOnlyList<SevenZipArchiveWriterEntry> entries)
   {
     int emptyEntryCount = CountEmptyEntries(entries);
-    int byteCount = GetBitVectorByteCount(emptyEntryCount);
+    bool[] bits = new bool[emptyEntryCount];
 
-    int emptyIndex = 0;
+    int outputIndex = 0;
 
-    for (int byteIndex = 0; byteIndex < byteCount; byteIndex++)
+    for (int i = 0; i < entries.Count; i++)
     {
-      byte value = 0;
+      SevenZipArchiveWriterEntry entry = entries[i];
 
-      for (int bitIndex = 0; bitIndex < 8; bitIndex++)
-      {
-        while (emptyIndex < entries.Count
-               && !entries[emptyIndex].IsDirectory
-               && entries[emptyIndex].Content.Length != 0)
-          emptyIndex++;
+      if (!entry.IsDirectory && entry.Content.Length != 0)
+        continue;
 
-        if (emptyIndex >= entries.Count)
-          break;
-
-        SevenZipArchiveWriterEntry entry = entries[emptyIndex];
-
-        if (!entry.IsDirectory)
-          value |= (byte)(0x80 >> bitIndex);
-
-        emptyIndex++;
-      }
-
-      destination.Add(value);
+      bits[outputIndex] = !entry.IsDirectory;
+      outputIndex++;
     }
+
+    WriteBitVector(destination, bits.Length, index => bits[index]);
   }
 
   /// <summary>
@@ -424,28 +396,7 @@ public static class SevenZipArchiveWriter
   /// </summary>
   private static void WriteDefinedBitVector(
       List<byte> destination,
-      bool[] defined)
-  {
-    int byteCount = GetBitVectorByteCount(defined.Length);
-
-    for (int byteIndex = 0; byteIndex < byteCount; byteIndex++)
-    {
-      byte value = 0;
-
-      for (int bitIndex = 0; bitIndex < 8; bitIndex++)
-      {
-        int itemIndex = byteIndex * 8 + bitIndex;
-
-        if (itemIndex >= defined.Length)
-          break;
-
-        if (defined[itemIndex])
-          value |= (byte)(0x80 >> bitIndex);
-      }
-
-      destination.Add(value);
-    }
-  }
+      bool[] defined) => WriteBitVector(destination, defined.Length, index => defined[index]);
 
   /// <summary>
   /// Проверяет, что все элементы являются непустыми файлами.
@@ -1060,43 +1011,20 @@ public static class SevenZipArchiveWriter
   /// </summary>
   private static void WriteEmptyFileBitVector(
       List<byte> destination,
-      IReadOnlyList<SevenZipArchiveWriterEntry> files)
-  {
-    int byteCount = GetBitVectorByteCount(files.Count);
-
-    for (int byteIndex = 0; byteIndex < byteCount; byteIndex++)
-    {
-      byte value = 0;
-
-      for (int bitIndex = 0; bitIndex < 8; bitIndex++)
-      {
-        int itemIndex = byteIndex * 8 + bitIndex;
-
-        if (itemIndex >= files.Count)
-          break;
-
-        if (!files[itemIndex].IsDirectory)
-          value |= (byte)(0x80 >> bitIndex);
-      }
-
-      destination.Add(value);
-    }
-  }
+      IReadOnlyList<SevenZipArchiveWriterEntry> entries) => WriteBitVector(destination, entries.Count, index => !entries[index].IsDirectory);
 
   /// <summary>
   /// Возвращает размер bit-vector в байтах.
   /// </summary>
-  private static int GetBitVectorByteCount(int bitCount)
-  {
-    return (bitCount + 7) / 8;
-  }
+  private static int GetBitVectorByteCount(int bitCount) => (bitCount + 7) / 8;
 
   /// <summary>
-  /// Пишет bit-vector, в котором все элементы установлены в true.
+  /// Пишет bit-vector в 7z-порядке битов.
   /// </summary>
-  private static void WriteAllTrueBitVector(
+  private static void WriteBitVector(
       List<byte> destination,
-      int bitCount)
+      int bitCount,
+      Func<int, bool> isBitSet)
   {
     int byteCount = GetBitVectorByteCount(bitCount);
 
@@ -1111,12 +1039,20 @@ public static class SevenZipArchiveWriter
         if (itemIndex >= bitCount)
           break;
 
-        value |= (byte)(0x80 >> bitIndex);
+        if (isBitSet(itemIndex))
+          value |= (byte)(0x80 >> bitIndex);
       }
 
       destination.Add(value);
     }
   }
+
+  /// <summary>
+  /// Пишет bit-vector, в котором все элементы установлены в true.
+  /// </summary>
+  private static void WriteAllTrueBitVector(
+      List<byte> destination,
+      int bitCount) => WriteBitVector(destination, bitCount, _ => true);
 
   /// <summary>
   /// Пишет FilesInfo для одного непустого файла Copy.
