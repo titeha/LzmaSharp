@@ -26,26 +26,6 @@ public static class SevenZipArchiveWriter
   }
 
   /// <summary>
-  /// Строит 7z-архив с одним пустым файлом.
-  /// </summary>
-  private static SevenZipArchiveWriteResult BuildSingleEmptyFileArchive(
-      string fileName,
-      out byte[] archive)
-  {
-    archive = [];
-
-    if (!IsSupportedEntryName(fileName))
-      return SevenZipArchiveWriteResult.InvalidData;
-
-    if (!TryBuildSingleEmptyFileNextHeader(fileName, out byte[] nextHeaderBytes))
-      return SevenZipArchiveWriteResult.InternalError;
-
-    archive = BuildArchiveWithNextHeader(nextHeaderBytes);
-
-    return SevenZipArchiveWriteResult.Ok;
-  }
-
-  /// <summary>
   /// Строит 7z-архив для поддерживаемого набора элементов.
   /// </summary>
   public static SevenZipArchiveWriteResult BuildArchive(
@@ -62,19 +42,6 @@ public static class SevenZipArchiveWriter
 
     if (!TryValidateWriterEntries(entries))
       return SevenZipArchiveWriteResult.InvalidData;
-
-    if (entries.Count == 1)
-    {
-      SevenZipArchiveWriterEntry entry = entries[0];
-
-      if (entry.IsDirectory)
-        return BuildEmptyEntriesArchive(entries, out archive);
-
-      if (entry.Content.Length == 0)
-        return BuildSingleEmptyFileArchive(entry.Name, out archive);
-
-      return BuildCopyFilesArchive(entries, out archive);
-    }
 
     if (AllEntriesHaveNoContent(entries))
       return BuildEmptyEntriesArchive(entries, out archive);
@@ -614,57 +581,6 @@ public static class SevenZipArchiveWriter
   }
 
   /// <summary>
-  /// Строит next header для архива с одним пустым файлом.
-  /// </summary>
-  private static bool TryBuildSingleEmptyFileNextHeader(
-      string fileName,
-      out byte[] nextHeaderBytes)
-  {
-    nextHeaderBytes = [];
-
-    List<byte> header = new(128) { SevenZipNid.Header };
-
-    if (!TryWriteSingleEmptyFileFilesInfo(header, fileName))
-      return false;
-
-    header.Add(SevenZipNid.End);
-
-    nextHeaderBytes = [.. header];
-
-    return true;
-  }
-
-  /// <summary>
-  /// Пишет FilesInfo для одного пустого файла.
-  /// </summary>
-  private static bool TryWriteSingleEmptyFileFilesInfo(List<byte> header, string fileName)
-  {
-    if (!TryWriteFilesInfoStart(header, 1))
-      return false;
-
-    header.Add(SevenZipNid.EmptyStream);
-
-    if (!TryWriteUInt64(header, 1))
-      return false;
-
-    header.Add(0x80);
-
-    header.Add(SevenZipNid.EmptyFile);
-
-    if (!TryWriteUInt64(header, 1))
-      return false;
-
-    header.Add(0x80);
-
-    if (!TryWriteSingleFileNameProperty(header, fileName))
-      return false;
-
-    header.Add(SevenZipNid.End);
-
-    return true;
-  }
-
-  /// <summary>
   /// Строит 7z-архив с пустыми файлами и пустыми директориями.
   /// </summary>
   private static SevenZipArchiveWriteResult BuildEmptyEntriesArchive(
@@ -854,26 +770,6 @@ public static class SevenZipArchiveWriter
   private static void WriteAllTrueBitVector(
       List<byte> destination,
       int bitCount) => WriteBitVector(destination, bitCount, _ => true);
-
-  /// <summary>
-  /// Пишет свойство имени для одного файла.
-  /// </summary>
-  private static bool TryWriteSingleFileNameProperty(
-      List<byte> header,
-      string fileName)
-  {
-    header.Add(SevenZipNid.Name);
-
-    byte[] nameBytes = Encoding.Unicode.GetBytes(fileName + "\0");
-
-    if (!TryWriteUInt64(header, (ulong)(1 + nameBytes.Length)))
-      return false;
-
-    header.Add(0x00);
-    header.AddRange(nameBytes);
-
-    return true;
-  }
 
   /// <summary>
   /// Строит каркас 7z-архива из уже подготовленного next header.
