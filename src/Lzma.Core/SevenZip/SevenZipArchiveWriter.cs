@@ -46,47 +46,43 @@ public static class SevenZipArchiveWriter
     if (AllEntriesHaveNoContent(entries))
       return BuildEmptyEntriesArchive(entries, out archive);
 
-    if (AllEntriesAreNonEmptyFiles(entries))
-      return BuildCopyFilesArchive(entries, out archive);
-
     if (HasNonEmptyFiles(entries))
-      return BuildMixedCopyEntriesArchive(entries, out archive);
+      return BuildCopyEntriesArchive(entries, out archive);
 
     return SevenZipArchiveWriteResult.NotSupported;
   }
 
   /// <summary>
-  /// Проверяет, что среди entry есть хотя бы один непустой файл.
+  /// Строит 7z-архив с непустыми Copy-файлами.
+  /// Поддерживает как набор только из непустых файлов, так и mixed-набор с empty entries.
   /// </summary>
-  private static bool HasNonEmptyFiles(IReadOnlyList<SevenZipArchiveWriterEntry> entries) => CountNonEmptyFiles(entries) != 0;
-
-  /// <summary>
-  /// Строит 7z-архив со смесью empty entries и непустых Copy-файлов.
-  /// </summary>
-  private static SevenZipArchiveWriteResult BuildMixedCopyEntriesArchive(
-      IReadOnlyList<SevenZipArchiveWriterEntry> entries,
-      out byte[] archive)
+  private static SevenZipArchiveWriteResult BuildCopyEntriesArchive(IReadOnlyList<SevenZipArchiveWriterEntry> entries, out byte[] archive)
   {
     archive = [];
 
     if (!TryBuildCopyPackedData(
-        entries,
-        out byte[] packedData,
-        out int[] sizes,
-        out uint[] crcs))
+            entries,
+            out byte[] packedData,
+            out int[] sizes,
+            out uint[] crcs))
       return SevenZipArchiveWriteResult.NotSupported;
 
     if (!TryBuildCopyEntriesNextHeader(
-        entries,
-        sizes,
-        crcs,
-        out byte[] nextHeaderBytes))
+            entries,
+            sizes,
+            crcs,
+            out byte[] nextHeaderBytes))
       return SevenZipArchiveWriteResult.InternalError;
 
     archive = BuildArchiveWithPackedData(packedData, nextHeaderBytes);
 
     return SevenZipArchiveWriteResult.Ok;
   }
+
+  /// <summary>
+  /// Проверяет, что среди entry есть хотя бы один непустой файл.
+  /// </summary>
+  private static bool HasNonEmptyFiles(IReadOnlyList<SevenZipArchiveWriterEntry> entries) => CountNonEmptyFiles(entries) != 0;
 
   /// <summary>
   /// Считает непустые файлы среди entry.
@@ -278,34 +274,6 @@ public static class SevenZipArchiveWriter
         return false;
 
     return true;
-  }
-
-  /// <summary>
-  /// Строит 7z-архив с несколькими непустыми файлами через Copy coder.
-  /// </summary>
-  private static SevenZipArchiveWriteResult BuildCopyFilesArchive(
-      IReadOnlyList<SevenZipArchiveWriterEntry> entries,
-      out byte[] archive)
-  {
-    archive = [];
-
-    if (!TryBuildCopyPackedData(
-        entries,
-        out byte[] packedData,
-        out int[] sizes,
-        out uint[] crcs))
-      return SevenZipArchiveWriteResult.NotSupported;
-
-    if (!TryBuildCopyEntriesNextHeader(
-        entries,
-        sizes,
-        crcs,
-        out byte[] nextHeaderBytes))
-      return SevenZipArchiveWriteResult.InternalError;
-
-    archive = BuildArchiveWithPackedData(packedData, nextHeaderBytes);
-
-    return SevenZipArchiveWriteResult.Ok;
   }
 
   /// <summary>
