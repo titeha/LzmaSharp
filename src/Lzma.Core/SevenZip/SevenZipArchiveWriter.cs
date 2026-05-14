@@ -174,13 +174,9 @@ public static class SevenZipArchiveWriter
   /// <summary>
   /// Пишет FilesInfo для смешанного набора empty entries и непустых Copy-файлов.
   /// </summary>
-  private static bool TryWriteMixedCopyEntriesFilesInfo(
-      List<byte> header,
-      IReadOnlyList<SevenZipArchiveWriterEntry> entries)
+  private static bool TryWriteMixedCopyEntriesFilesInfo(List<byte> header, IReadOnlyList<SevenZipArchiveWriterEntry> entries)
   {
-    header.Add(SevenZipNid.FilesInfo);
-
-    if (!TryWriteUInt64(header, (ulong)entries.Count))
+    if (!TryWriteFilesInfoStart(header, entries.Count))
       return false;
 
     header.Add(SevenZipNid.EmptyStream);
@@ -539,16 +535,23 @@ public static class SevenZipArchiveWriter
   }
 
   /// <summary>
-  /// Пишет FilesInfo для нескольких непустых Copy-файлов.
+  /// Пишет начало FilesInfo и количество entry.
   /// </summary>
-  private static bool TryWriteCopyFilesFilesInfo(
+  private static bool TryWriteFilesInfoStart(
       List<byte> header,
-      IReadOnlyList<SevenZipArchiveWriterEntry> entries,
-      uint[] crcs)
+      int entryCount)
   {
     header.Add(SevenZipNid.FilesInfo);
 
-    if (!TryWriteUInt64(header, (ulong)entries.Count))
+    return TryWriteUInt64(header, (ulong)entryCount);
+  }
+
+  /// <summary>
+  /// Пишет FilesInfo для нескольких непустых Copy-файлов.
+  /// </summary>
+  private static bool TryWriteCopyFilesFilesInfo(List<byte> header, IReadOnlyList<SevenZipArchiveWriterEntry> entries, uint[] crcs)
+  {
+    if (!TryWriteFilesInfoStart(header, entries.Count))
       return false;
 
     if (!TryWriteFileNamesProperty(header, entries))
@@ -763,13 +766,9 @@ public static class SevenZipArchiveWriter
   /// <summary>
   /// Пишет FilesInfo для одного пустого файла.
   /// </summary>
-  private static bool TryWriteSingleEmptyFileFilesInfo(
-      List<byte> header,
-      string fileName)
+  private static bool TryWriteSingleEmptyFileFilesInfo(List<byte> header, string fileName)
   {
-    header.Add(SevenZipNid.FilesInfo);
-
-    if (!TryWriteUInt64(header, 1))
+    if (!TryWriteFilesInfoStart(header, 1))
       return false;
 
     header.Add(SevenZipNid.EmptyStream);
@@ -838,30 +837,26 @@ public static class SevenZipArchiveWriter
   /// <summary>
   /// Пишет FilesInfo для пустых файлов и пустых директорий.
   /// </summary>
-  private static bool TryWriteEmptyEntriesFilesInfo(
-      List<byte> header,
-      IReadOnlyList<SevenZipArchiveWriterEntry> files)
+  private static bool TryWriteEmptyEntriesFilesInfo(List<byte> header, IReadOnlyList<SevenZipArchiveWriterEntry> entries)
   {
-    header.Add(SevenZipNid.FilesInfo);
-
-    if (!TryWriteUInt64(header, (ulong)files.Count))
+    if (!TryWriteFilesInfoStart(header, entries.Count))
       return false;
 
     header.Add(SevenZipNid.EmptyStream);
 
-    if (!TryWriteUInt64(header, (ulong)GetBitVectorByteCount(files.Count)))
+    if (!TryWriteUInt64(header, (ulong)GetBitVectorByteCount(entries.Count)))
       return false;
 
-    WriteAllTrueBitVector(header, files.Count);
+    WriteAllTrueBitVector(header, entries.Count);
 
     header.Add(SevenZipNid.EmptyFile);
 
-    if (!TryWriteUInt64(header, (ulong)GetBitVectorByteCount(files.Count)))
+    if (!TryWriteUInt64(header, (ulong)GetBitVectorByteCount(entries.Count)))
       return false;
 
-    WriteEmptyFileBitVector(header, files);
+    WriteEmptyFileBitVector(header, entries);
 
-    if (!TryWriteFileNamesProperty(header, files))
+    if (!TryWriteFileNamesProperty(header, entries))
       return false;
 
     header.Add(SevenZipNid.End);
@@ -992,14 +987,9 @@ public static class SevenZipArchiveWriter
   /// <summary>
   /// Пишет FilesInfo для одного непустого файла Copy.
   /// </summary>
-  private static bool TryWriteSingleFileCopyFilesInfo(
-      List<byte> header,
-      string fileName,
-      uint contentCrc)
+  private static bool TryWriteSingleFileCopyFilesInfo(List<byte> header, string fileName, uint contentCrc)
   {
-    header.Add(SevenZipNid.FilesInfo);
-
-    if (!TryWriteUInt64(header, 1))
+    if (!TryWriteFilesInfoStart(header, 1))
       return false;
 
     if (!TryWriteSingleFileNameProperty(header, fileName))
