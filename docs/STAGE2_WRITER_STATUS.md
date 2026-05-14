@@ -84,7 +84,8 @@ Writer реализуется снизу вверх:
 - архив с одной пустой директорией;
 - архив со смесью пустых файлов и пустых директорий;
 - архив с одним непустым файлом через `Copy`;
-- архив с несколькими непустыми файлами через `Copy`.
+- архив с несколькими непустыми файлами через `Copy`;
+- архив со смесью empty entries и непустых файлов через `Copy`.
 
 Для сценария одного непустого файла через `Copy` writer формирует:
 
@@ -107,6 +108,25 @@ Writer реализуется снизу вверх:
 - CRC для каждого packed stream-а;
 - CRC для каждого folder stream-а;
 - CRC для каждого файла.
+
+Для смешанного сценария с empty entries и непустыми файлами через `Copy` writer формирует:
+
+- packed data как конкатенацию содержимого только непустых файлов;
+- `PackInfo` только для непустых файлов;
+- `UnpackInfo` только для непустых файлов;
+- отдельный `Copy` coder для каждого непустого файла;
+- `FilesInfo` для всех entry;
+- `EmptyStream` bit-vector для всех entry;
+- `EmptyFile` sub-vector только для empty stream entry;
+- `FilesInfo.Crc` с defined bit-vector;
+- CRC только для непустых файлов.
+
+Для mixed-сценария:
+
+- пустой файл получает `EmptyStream = true` и `EmptyFile = true`;
+- пустая директория получает `EmptyStream = true` и `EmptyFile = false`;
+- непустой файл получает `EmptyStream = false`;
+- CRC файла задаётся только для непустых файлов.
 
 Для сценария пустых файлов и пустых директорий writer формирует:
 
@@ -138,6 +158,14 @@ Packed data, `MainStreamsInfo`, `PackInfo` и `UnpackInfo` для этого с�
 - round-trip одной пустой директории через decoder-path;
 - round-trip смеси пустого файла и пустой директории через decoder-path;
 - round-trip нескольких непустых `Copy`-файлов через decoder-path;
+- round-trip смешанного сценария с пустым файлом и непустым `Copy`-файлом через decoder-path;
+- round-trip смешанного сценария с пустой директорией и непустым `Copy`-файлом через decoder-path;
+- round-trip смешанного сценария с несколькими empty entries и несколькими `Copy`-файлами через decoder-path;
+- структурная проверка mixed Copy writer-архива через `SevenZipArchiveReader`;
+- проверка `EmptyStream` bit-vector для mixed-сценария;
+- проверка `EmptyFile` sub-vector для mixed-сценария;
+- проверка `FilesInfo.Crc` defined bit-vector для mixed-сценария;
+- проверка, что CRC в mixed-сценарии задан только для непустых файлов;
 - структурная проверка multi-Copy writer-архива через `SevenZipArchiveReader`;
 - проверка нескольких packed stream-ов в `PackInfo`;
 - проверка нескольких folder-ов в `UnpackInfo`;
@@ -166,7 +194,6 @@ Packed data, `MainStreamsInfo`, `PackInfo` и `UnpackInfo` для этого с�
 
 Пока не поддержано:
 
-- смешанный multi-file сценарий с пустыми и непустыми entry;
 - вложенные пути и файлы внутри директорий;
 - директории с данными;
 - timestamps;
