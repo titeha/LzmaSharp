@@ -292,7 +292,12 @@ GOST-сценарии тестируются synthetic-архивами.
 - корректность `EmptyStream` bit-vector для mixed-сценария;
 - корректность `EmptyFile` sub-vector для mixed-сценария;
 - корректность `FilesInfo.Crc` defined bit-vector для mixed-сценария;
-- CRC в mixed-сценарии задаётся только для непустых файлов.
+- CRC в mixed-сценарии задаётся только для непустых файлов;
+- граничная проверка bit-vector для mixed Copy на 12 entry;
+- проверка второго байта `EmptyStream` bit-vector для mixed Copy;
+- проверка второго байта `EmptyFile` sub-vector для mixed Copy;
+- проверка второго байта `FilesInfo.Crc` defined bit-vector для mixed Copy;
+- проверка, что `FilesInfo.Crc` defined bit-vector в mixed Copy отмечает только непустые файлы.
 
 Дальнейшие writer-тесты должны добавляться только под конкретный реализуемый сценарий.
 
