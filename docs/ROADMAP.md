@@ -229,7 +229,8 @@ Magma, полноценный KDF через Стрибог и остальны�
 - архив с одной пустой директорией;
 - архив со смесью пустых файлов и пустых директорий;
 - архив с одним непустым файлом через `Copy`;
-- архив с несколькими непустыми файлами через `Copy`.
+- архив с несколькими непустыми файлами через `Copy`ж
+- архив со смесью empty entries и непустых файлов через `Copy`.
 
 Для `Copy`-сценария writer формирует:
 
@@ -252,6 +253,12 @@ Magma, полноценный KDF через Стрибог и остальны�
 - структурным тестом `Copy` writer-а через `SevenZipArchiveReader`;
 - структурным тестом `FilesInfo` для empty entries через `SevenZipArchiveReader`;
 - структурной проверкой `EmptyFile` bit-vector для пустого файла и пустой директории;
+- round-trip смешанного сценария с empty entries и непустыми `Copy`-файлами через decoder-path;
+- структурный тест mixed Copy writer-а через `SevenZipArchiveReader`;
+- проверка `EmptyStream` bit-vector для mixed-сценария;
+- проверка `EmptyFile` sub-vector для mixed-сценария;
+- проверка `FilesInfo.Crc` defined bit-vector для mixed-сценария;
+- проверка CRC только для непустых файлов в mixed-сценарии.
 - negative-тестами для повреждённых данных и CRC;
 - explicit `NotSupported` для нескольких файлов с непустыми данными;
 - explicit `InvalidData` для некорректных входных данных;

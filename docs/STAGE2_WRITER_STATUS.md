@@ -176,7 +176,6 @@ Packed data, `MainStreamsInfo`, `PackInfo` и `UnpackInfo` для этого с�
 - структурная проверка `FilesInfo` для empty entries через `SevenZipArchiveReader`;
 - повреждение packed data возвращает `InvalidData`;
 - повреждение файлового CRC в header возвращает `InvalidData`;
-- смешанный multi-file сценарий с пустыми и непустыми entry пока возвращает `NotSupported`;
 - некорректные имена файлов возвращают `InvalidData`;
 - дублирующиеся имена entry возвращают `InvalidData`;
 - конфликт файла и директории с одинаковым именем возвращает `InvalidData`;

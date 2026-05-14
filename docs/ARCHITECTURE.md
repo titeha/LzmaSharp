@@ -288,7 +288,8 @@ Writer развивается отдельно от уже стабилизир�
 - архив с одной пустой директорией;
 - архив со смесью пустых файлов и пустых директорий;
 - архив с одним непустым файлом через `Copy`;
-- архив с несколькими непустыми файлами через `Copy`.
+- архив с несколькими непустыми файлами через `Copy`;
+- архив со смесью empty entries и непустых файлов через `Copy`.
 
 Для одного непустого файла через `Copy` writer формирует:
 
@@ -317,6 +318,28 @@ Writer развивается отдельно от уже стабилизир�
 - CRC для каждого packed stream-а;
 - CRC для каждого folder stream-а;
 - CRC для каждого файла.
+
+Для смешанного сценария с empty entries и непустыми файлами через `Copy` writer формирует:
+
+- packed data как конкатенацию содержимого только непустых файлов;
+- `SignatureHeader`;
+- `NextHeader`;
+- `MainStreamsInfo`;
+- `PackInfo` только для непустых файлов;
+- `UnpackInfo` только для непустых файлов;
+- отдельный `Copy` coder для каждого непустого файла;
+- `FilesInfo` для всех entry;
+- `EmptyStream` bit-vector для всех entry;
+- `EmptyFile` sub-vector только для empty stream entry;
+- `FilesInfo.Crc` с defined bit-vector;
+- CRC только для непустых файлов.
+
+Для mixed-сценария:
+
+- пустой файл получает `EmptyStream = true` и `EmptyFile = true`;
+- пустая директория получает `EmptyStream = true` и `EmptyFile = false`;
+- непустой файл получает `EmptyStream = false`;
+- CRC файла задаётся только для непустых файлов.
 
 Для пустых файлов и пустых директорий writer формирует:
 
@@ -349,7 +372,6 @@ Packed data, `MainStreamsInfo`, `PackInfo` и `UnpackInfo` для этого с�
 
 Writer-path пока не поддерживает:
 
-- смешанный multi-file сценарий с пустыми и непустыми entry;
 - вложенные пути и файлы внутри директорий;
 - timestamps;
 - file attributes;
