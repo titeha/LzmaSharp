@@ -71,6 +71,186 @@ public sealed class SevenZipArchiveWriterMixedCopyStructureTests
         expectedBytes: [0x80]);
   }
 
+  [Fact]
+  public void BuildArchive_СмешанныеEntryБольшеВосьмиФормируютОжидаемыеBitVector()
+  {
+    byte[] firstContent = [1];
+    byte[] secondContent = [2, 3];
+    byte[] thirdContent = [4, 5, 6];
+
+    uint firstCrc = Crc32.Compute(firstContent);
+    uint secondCrc = Crc32.Compute(secondContent);
+    uint thirdCrc = Crc32.Compute(thirdContent);
+
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
+        [
+            new SevenZipArchiveWriterEntry("empty1.txt", []),
+            new SevenZipArchiveWriterEntry("a.bin", firstContent),
+            new SevenZipArchiveWriterEntry("dir1", [], IsDirectory: true),
+            new SevenZipArchiveWriterEntry("empty2.txt", []),
+            new SevenZipArchiveWriterEntry("b.bin", secondContent),
+            new SevenZipArchiveWriterEntry("dir2", [], IsDirectory: true),
+            new SevenZipArchiveWriterEntry("empty3.txt", []),
+            new SevenZipArchiveWriterEntry("empty4.txt", []),
+            new SevenZipArchiveWriterEntry("c.bin", thirdContent),
+            new SevenZipArchiveWriterEntry("dir3", [], IsDirectory: true),
+            new SevenZipArchiveWriterEntry("empty5.txt", []),
+            new SevenZipArchiveWriterEntry("empty6.txt", []),
+        ],
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
+    Assert.NotEmpty(archive);
+
+    var reader = new SevenZipArchiveReader();
+
+    SevenZipArchiveReadResult readResult = reader.Read(
+        archive,
+        out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveReadResult.Ok, readResult);
+    Assert.Equal(archive.Length, bytesConsumed);
+
+    Assert.True(reader.Header.HasValue);
+
+    Assert.Equal(
+        [1, 2, 3, 4, 5, 6],
+        reader.PackedStreams.ToArray());
+
+    SevenZipFilesInfo filesInfo = reader.Header.Value.FilesInfo;
+
+    Assert.Equal(12UL, filesInfo.FileCount);
+
+    Assert.True(filesInfo.HasEmptyStreams);
+    Assert.NotNull(filesInfo.EmptyStreams);
+
+    Assert.Equal(
+        [
+            true,
+            false,
+            true,
+            true,
+            false,
+            true,
+            true,
+            true,
+            false,
+            true,
+            true,
+            true,
+        ],
+        filesInfo.EmptyStreams!);
+
+    Assert.True(filesInfo.HasEmptyFiles);
+    Assert.NotNull(filesInfo.EmptyFiles);
+
+    Assert.Equal(
+        [
+            true,
+            false,
+            false,
+            true,
+            false,
+            false,
+            true,
+            true,
+            false,
+            false,
+            true,
+            true,
+        ],
+        filesInfo.EmptyFiles!);
+
+    Assert.True(filesInfo.HasCrc);
+    Assert.NotNull(filesInfo.CrcDefined);
+    Assert.NotNull(filesInfo.Crc);
+
+    Assert.Equal(
+        [
+            false,
+            true,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+        ],
+        filesInfo.CrcDefined!);
+
+    Assert.Equal(
+        [
+            0U,
+            firstCrc,
+            0U,
+            0U,
+            secondCrc,
+            0U,
+            0U,
+            0U,
+            thirdCrc,
+            0U,
+            0U,
+            0U,
+        ],
+        filesInfo.Crc!);
+
+    AssertBitVectorProperty(
+        reader.NextHeaderBytes.Span,
+        SevenZipNid.EmptyStream,
+        expectedBytes: [0xB7, 0x70]);
+
+    AssertBitVectorProperty(
+        reader.NextHeaderBytes.Span,
+        SevenZipNid.EmptyFile,
+        expectedBytes: [0xAD, 0x80]);
+
+    AssertFilesInfoCrcDefinedBitVectorProperty(
+        reader.NextHeaderBytes.Span,
+        expectedBytes: [0x48, 0x80]);
+  }
+
+  private static void AssertFilesInfoCrcDefinedBitVectorProperty(
+    ReadOnlySpan<byte> nextHeader,
+    byte[] expectedBytes)
+  {
+    int propertyOffset = FindFilesInfoCrcPropertyOffset(nextHeader, expectedBytes.Length);
+
+    Assert.True(propertyOffset >= 0);
+
+    int propertySizeOffset = propertyOffset + 1;
+    int allAreDefinedOffset = propertySizeOffset + 1;
+    int bitVectorOffset = allAreDefinedOffset + 1;
+
+    Assert.Equal((byte)(1 + expectedBytes.Length + (3 * 4)), nextHeader[propertySizeOffset]);
+    Assert.Equal(0x00, nextHeader[allAreDefinedOffset]);
+
+    ReadOnlySpan<byte> actualBytes = nextHeader.Slice(
+        bitVectorOffset,
+        expectedBytes.Length);
+
+    Assert.Equal(expectedBytes, actualBytes.ToArray());
+  }
+
+  private static int FindFilesInfoCrcPropertyOffset(
+      ReadOnlySpan<byte> nextHeader,
+      int expectedBitVectorLength)
+  {
+    byte expectedPropertySize = (byte)(1 + expectedBitVectorLength + (3 * 4));
+
+    for (int i = 0; i <= nextHeader.Length - 3 - expectedBitVectorLength; i++)
+      if (nextHeader[i] == SevenZipNid.Crc
+                && nextHeader[i + 1] == expectedPropertySize
+                && nextHeader[i + 2] == 0x00)
+        return i;
+
+    return -1;
+  }
+
   private static void AssertPackInfo(
       SevenZipHeader header,
       int firstLength,
