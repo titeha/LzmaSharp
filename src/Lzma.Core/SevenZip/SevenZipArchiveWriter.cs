@@ -46,10 +46,7 @@ public static class SevenZipArchiveWriter
     if (AllEntriesHaveNoContent(entries))
       return BuildEmptyEntriesArchive(entries, out archive);
 
-    if (HasNonEmptyFiles(entries))
-      return BuildCopyEntriesArchive(entries, out archive);
-
-    return SevenZipArchiveWriteResult.NotSupported;
+    return BuildCopyEntriesArchive(entries, out archive);
   }
 
   /// <summary>
@@ -78,11 +75,6 @@ public static class SevenZipArchiveWriter
 
     return SevenZipArchiveWriteResult.Ok;
   }
-
-  /// <summary>
-  /// Проверяет, что среди entry есть хотя бы один непустой файл.
-  /// </summary>
-  private static bool HasNonEmptyFiles(IReadOnlyList<SevenZipArchiveWriterEntry> entries) => CountNonEmptyFiles(entries) != 0;
 
   /// <summary>
   /// Считает непустые файлы среди entry.
