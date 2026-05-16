@@ -522,12 +522,12 @@ public static class SevenZipArchiveWriter
   /// Строит 7z-архив с пустыми файлами и пустыми директориями.
   /// </summary>
   private static SevenZipArchiveWriteResult BuildEmptyEntriesArchive(
-      IReadOnlyList<SevenZipArchiveWriterEntry> files,
+      IReadOnlyList<SevenZipArchiveWriterEntry> entries,
       out byte[] archive)
   {
     archive = [];
 
-    if (!TryBuildEmptyEntriesNextHeader(files, out byte[] nextHeaderBytes))
+    if (!TryBuildEmptyEntriesNextHeader(entries, out byte[] nextHeaderBytes))
       return SevenZipArchiveWriteResult.InternalError;
 
     archive = BuildArchiveWithNextHeader(nextHeaderBytes);
@@ -539,7 +539,7 @@ public static class SevenZipArchiveWriter
   /// Строит next header для архива с пустыми файлами и пустыми директориями.
   /// </summary>
   private static bool TryBuildEmptyEntriesNextHeader(
-      IReadOnlyList<SevenZipArchiveWriterEntry> files,
+      IReadOnlyList<SevenZipArchiveWriterEntry> entries,
       out byte[] nextHeaderBytes)
   {
     nextHeaderBytes = [];
@@ -549,7 +549,7 @@ public static class SevenZipArchiveWriter
         SevenZipNid.Header,
     };
 
-    if (!TryWriteEmptyEntriesFilesInfo(header, files))
+    if (!TryWriteEmptyEntriesFilesInfo(header, entries))
       return false;
 
     header.Add(SevenZipNid.End);
@@ -594,16 +594,16 @@ public static class SevenZipArchiveWriter
   /// </summary>
   private static bool TryWriteFileNamesProperty(
       List<byte> header,
-      IReadOnlyList<SevenZipArchiveWriterEntry> files)
+      IReadOnlyList<SevenZipArchiveWriterEntry> entries)
   {
     header.Add(SevenZipNid.Name);
 
-    List<byte[]> encodedNames = new(files.Count);
+    List<byte[]> encodedNames = new(entries.Count);
     int nameBytesLength = 0;
 
-    for (int i = 0; i < files.Count; i++)
+    for (int i = 0; i < entries.Count; i++)
     {
-      byte[] nameBytes = Encoding.Unicode.GetBytes(files[i].Name + "\0");
+      byte[] nameBytes = Encoding.Unicode.GetBytes(entries[i].Name + "\0");
 
       encodedNames.Add(nameBytes);
       nameBytesLength += nameBytes.Length;
@@ -651,10 +651,10 @@ public static class SevenZipArchiveWriter
   /// Проверяет, что все элементы не содержат файловых данных.
   /// </summary>
   private static bool AllEntriesHaveNoContent(
-      IReadOnlyList<SevenZipArchiveWriterEntry> files)
+      IReadOnlyList<SevenZipArchiveWriterEntry> entries)
   {
-    for (int i = 0; i < files.Count; i++)
-      if (files[i].Content.Length != 0)
+    for (int i = 0; i < entries.Count; i++)
+      if (entries[i].Content.Length != 0)
         return false;
 
     return true;
