@@ -116,10 +116,10 @@ public static class SevenZipArchiveWriter
         SevenZipNid.MainStreamsInfo,
     };
 
-    if (!TryWriteCopyFilesPackInfo(header, sizes, crcs))
+    if (!TryWriteCopyStreamsPackInfo(header, sizes, crcs))
       return false;
 
-    if (!TryWriteCopyFilesUnpackInfo(header, sizes, crcs))
+    if (!TryWriteCopyFoldersUnpackInfo(header, sizes, crcs))
       return false;
 
     header.Add(SevenZipNid.End);
@@ -339,9 +339,9 @@ public static class SevenZipArchiveWriter
   private static bool IsNonEmptyFile(SevenZipArchiveWriterEntry entry) => !entry.IsDirectory && entry.Content.Length != 0;
 
   /// <summary>
-  /// Пишет PackInfo для нескольких packed stream-ов.
+  /// Пишет PackInfo для packed stream-ов Copy-сценария.
   /// </summary>
-  private static bool TryWriteCopyFilesPackInfo(
+  private static bool TryWriteCopyStreamsPackInfo(
       List<byte> header,
       int[] sizes,
       uint[] crcs)
@@ -371,9 +371,9 @@ public static class SevenZipArchiveWriter
   }
 
   /// <summary>
-  /// Пишет UnpackInfo для нескольких folder-ов с Copy coder.
+  /// Пишет UnpackInfo для folder-ов Copy-сценария.
   /// </summary>
-  private static bool TryWriteCopyFilesUnpackInfo(
+  private static bool TryWriteCopyFoldersUnpackInfo(
       List<byte> header,
       int[] sizes,
       uint[] crcs)
