@@ -126,7 +126,7 @@ public static class SevenZipArchiveWriter
 
     if (AllEntriesAreNonEmptyFiles(entries))
     {
-      if (!TryWriteCopyFilesFilesInfo(header, entries, crcs))
+      if (!TryWriteAllNonEmptyCopyEntriesFilesInfo(header, entries, crcs))
         return false;
     }
     else if (!TryWriteMixedCopyEntriesFilesInfo(header, entries))
@@ -426,9 +426,9 @@ public static class SevenZipArchiveWriter
   }
 
   /// <summary>
-  /// Пишет FilesInfo для нескольких непустых Copy-файлов.
+  /// Пишет FilesInfo для сценария, где все entry являются непустыми Copy-файлами.
   /// </summary>
-  private static bool TryWriteCopyFilesFilesInfo(List<byte> header, IReadOnlyList<SevenZipArchiveWriterEntry> entries, uint[] crcs)
+  private static bool TryWriteAllNonEmptyCopyEntriesFilesInfo(List<byte> header, IReadOnlyList<SevenZipArchiveWriterEntry> entries, uint[] crcs)
   {
     if (!TryWriteFilesInfoStart(header, entries.Count))
       return false;
