@@ -186,7 +186,6 @@ public sealed class SevenZipArchiveWriterEntriesTests
 
   [Theory]
   [InlineData("")]
-  [InlineData("dir/file.txt")]
   [InlineData("dir\\file.txt")]
   [InlineData("bad\0name.txt")]
   public void BuildArchive_НекорректноеИмяНепустогоФайлаВозвращаетInvalidData(string fileName)
@@ -250,12 +249,12 @@ public sealed class SevenZipArchiveWriterEntriesTests
   }
 
   [Fact]
-  public void BuildArchive_НесколькоПустыхФайловСНекорректнымИменемВозвращаетInvalidData()
+  public void BuildArchive_НесколькоПустыхФайловСНекорректнымPathВозвращаетInvalidData()
   {
     SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
         [
             new SevenZipArchiveWriterEntry("a.txt", []),
-            new SevenZipArchiveWriterEntry("dir/b.txt", []),
+            new SevenZipArchiveWriterEntry("dir//b.txt", []),
         ],
         out byte[] archive);
 
@@ -745,6 +744,114 @@ public sealed class SevenZipArchiveWriterEntriesTests
           Assert.Equal(secondContent, entry.Bytes);
           Assert.False(entry.IsDirectory);
         }]);
+  }
+
+  [Fact]
+  public void BuildArchive_ВложенныйПустойФайлСоздаётАрхивКоторыйЧитаетсяDecoderPath()
+  {
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
+        [new SevenZipArchiveWriterEntry("dir/empty.txt", [])],
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
+    Assert.NotEmpty(archive);
+
+    SevenZipArchiveDecodeResult decodeResult = SevenZipArchiveDecoder.DecodeToEntries(
+        archive,
+        out SevenZipDecodedEntry[] entries,
+        out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, decodeResult);
+    Assert.Equal(archive.Length, bytesConsumed);
+
+    SevenZipDecodedEntry entry = Assert.Single(entries);
+
+    Assert.Equal("dir/empty.txt", entry.Name);
+    Assert.Empty(entry.Bytes);
+    Assert.False(entry.IsDirectory);
+  }
+
+  [Fact]
+  public void BuildArchive_ЯвнаяДиректорияИФайлВнутриНеёСоздаютАрхивКоторыйЧитаетсяDecoderPath()
+  {
+    byte[] content = [4, 5, 6];
+
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
+        [
+            new SevenZipArchiveWriterEntry("dir", [], IsDirectory: true),
+            new SevenZipArchiveWriterEntry("dir/file.bin", content),
+        ],
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
+    Assert.NotEmpty(archive);
+
+    SevenZipArchiveDecodeResult decodeResult = SevenZipArchiveDecoder.DecodeToEntries(
+        archive,
+        out SevenZipDecodedEntry[] entries,
+        out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, decodeResult);
+    Assert.Equal(archive.Length, bytesConsumed);
+
+    Assert.Collection(
+        entries,
+        [entry =>
+        {
+          Assert.Equal("dir", entry.Name);
+          Assert.Empty(entry.Bytes);
+          Assert.True(entry.IsDirectory);
+        },
+        entry =>
+        {
+          Assert.Equal("dir/file.bin", entry.Name);
+          Assert.Equal(content, entry.Bytes);
+          Assert.False(entry.IsDirectory);
+        }]);
+  }
+
+  [Theory]
+  [InlineData("/file.txt")]
+  [InlineData("dir/")]
+  [InlineData("dir//file.txt")]
+  [InlineData("./file.txt")]
+  [InlineData("dir/./file.txt")]
+  [InlineData("../file.txt")]
+  [InlineData("dir/../file.txt")]
+  [InlineData("dir\\file.txt")]
+  public void BuildArchive_НекорректныйEntryPathВозвращаетInvalidData(string entryPath)
+  {
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
+        [new SevenZipArchiveWriterEntry(entryPath, [])],
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.InvalidData, writeResult);
+    Assert.Empty(archive);
+  }
+
+  [Fact]
+  public void BuildArchive_ВложенныйPathСЗарезервированнымСегментомВозвращаетInvalidData()
+  {
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
+        [new SevenZipArchiveWriterEntry("dir/con.txt", [])],
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.InvalidData, writeResult);
+    Assert.Empty(archive);
+  }
+
+  [Fact]
+  public void BuildArchive_ФайлКакРодительВложенногоEntryВозвращаетInvalidData()
+  {
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
+        [
+            new SevenZipArchiveWriterEntry("dir", []),
+            new SevenZipArchiveWriterEntry("dir/file.txt", []),
+        ],
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.InvalidData, writeResult);
+    Assert.Empty(archive);
   }
 
   private static void CorruptLastCrcPropertyInNextHeaderAndRefreshHeaderCrc(

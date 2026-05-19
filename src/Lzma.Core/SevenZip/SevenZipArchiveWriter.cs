@@ -615,7 +615,8 @@ public static class SevenZipArchiveWriter
   /// <summary>
   /// Проверяет входные элементы writer-а.
   /// </summary>
-  private static bool TryValidateWriterEntries(IReadOnlyList<SevenZipArchiveWriterEntry> entries)
+  private static bool TryValidateWriterEntries(
+      IReadOnlyList<SevenZipArchiveWriterEntry> entries)
   {
     HashSet<string> names = new(StringComparer.OrdinalIgnoreCase);
 
@@ -626,7 +627,7 @@ public static class SevenZipArchiveWriter
       if (entry is null || entry.Content is null)
         return false;
 
-      if (!IsSupportedEntryName(entry.Name))
+      if (!IsSupportedEntryPath(entry.Name))
         return false;
 
       if (!names.Add(entry.Name))
@@ -636,7 +637,7 @@ public static class SevenZipArchiveWriter
         return false;
     }
 
-    return true;
+    return !HasNonDirectoryParentConflict(entries);
   }
 
   /// <summary>
@@ -736,17 +737,77 @@ public static class SevenZipArchiveWriter
   }
 
   /// <summary>
-  /// Проверяет имя элемента для текущих минимальных writer-сценариев.
+  /// Проверяет путь entry для текущих writer-сценариев.
   /// </summary>
-  private static bool IsSupportedEntryName(string entryName)
+  private static bool IsSupportedEntryPath(string entryPath)
   {
-    return !string.IsNullOrWhiteSpace(entryName)
-        && entryName.IndexOf('\0') < 0
-        && entryName.IndexOf('/') < 0
-        && entryName.IndexOf('\\') < 0
-        && !ContainsUnsupportedWindowsEntryCharacter(entryName)
-        && !HasUnsupportedTrailingEntryCharacter(entryName)
-        && !IsWindowsReservedEntryName(entryName);
+    if (string.IsNullOrWhiteSpace(entryPath))
+      return false;
+
+    if (entryPath.Contains('\\'))
+      return false;
+
+    if (entryPath[0] == '/' || entryPath[^1] == '/')
+      return false;
+
+    string[] segments = entryPath.Split('/');
+
+    for (int i = 0; i < segments.Length; i++)
+      if (!IsSupportedEntryPathSegment(segments[i]))
+        return false;
+
+    return true;
+  }
+
+  /// <summary>
+  /// Проверяет один сегмент пути entry.
+  /// </summary>
+  private static bool IsSupportedEntryPathSegment(string segment)
+  {
+    return !string.IsNullOrWhiteSpace(segment)
+        && !IsSpecialEntryPathSegment(segment)
+        && !ContainsUnsupportedWindowsEntryCharacter(segment)
+        && !HasUnsupportedTrailingEntryCharacter(segment)
+        && !IsWindowsReservedEntryName(segment);
+  }
+
+  /// <summary>
+  /// Проверяет специальные сегменты пути.
+  /// </summary>
+  private static bool IsSpecialEntryPathSegment(string segment) => segment == "." || segment == "..";
+
+  /// <summary>
+  /// Проверяет конфликт, когда родительский путь существует как файл.
+  /// </summary>
+  private static bool HasNonDirectoryParentConflict(
+      IReadOnlyList<SevenZipArchiveWriterEntry> entries)
+  {
+    Dictionary<string, bool> directoryByPath = new(StringComparer.OrdinalIgnoreCase);
+
+    for (int i = 0; i < entries.Count; i++)
+    {
+      SevenZipArchiveWriterEntry entry = entries[i];
+
+      directoryByPath[entry.Name] = entry.IsDirectory;
+    }
+
+    for (int i = 0; i < entries.Count; i++)
+    {
+      string entryPath = entries[i].Name;
+      int slashIndex = entryPath.IndexOf('/');
+
+      while (slashIndex >= 0)
+      {
+        string parentPath = entryPath[..slashIndex];
+
+        if (directoryByPath.TryGetValue(parentPath, out bool isDirectory) && !isDirectory)
+          return true;
+
+        slashIndex = entryPath.IndexOf('/', slashIndex + 1);
+      }
+    }
+
+    return false;
   }
 
   /// <summary>

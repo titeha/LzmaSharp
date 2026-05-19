@@ -28,7 +28,6 @@ public sealed class SevenZipArchiveWriterSingleEmptyFileTests
 
   [Theory]
   [InlineData("")]
-  [InlineData("dir/file.txt")]
   [InlineData("dir\\file.txt")]
   [InlineData("bad\0name.txt")]
   public void BuildSingleEmptyFileArchive_НекорректноеИмяВозвращаетInvalidData(string fileName)
