@@ -9,6 +9,9 @@ namespace Lzma.Core.SevenZip;
 /// </summary>
 public static class SevenZipArchiveWriter
 {
+  private const uint WindowsFileAttributeDirectory = 0x00000010;
+  private const uint WindowsFileAttributeArchive = 0x00000020;
+
   /// <summary>
   /// Строит минимальный пустой 7z-архив без packed stream-ов и без файлов.
   /// </summary>
@@ -154,6 +157,9 @@ public static class SevenZipArchiveWriter
     WriteEmptyFileSubVector(header, entries);
 
     if (!TryWriteFileNamesProperty(header, entries))
+      return false;
+
+    if (!TryWriteWinAttributesProperty(header, entries))
       return false;
 
     if (!TryWriteMixedCopyEntriesCrcProperty(header, entries))
@@ -428,6 +434,9 @@ public static class SevenZipArchiveWriter
     if (!TryWriteFileNamesProperty(header, entries))
       return false;
 
+    if (!TryWriteWinAttributesProperty(header, entries))
+      return false;
+
     if (!TryWriteDefinedCrcProperty(header, crcs))
       return false;
 
@@ -574,6 +583,9 @@ public static class SevenZipArchiveWriter
     WriteEmptyFileBitVector(header, entries);
 
     if (!TryWriteFileNamesProperty(header, entries))
+      return false;
+
+    if (!TryWriteWinAttributesProperty(header, entries))
       return false;
 
     header.Add(SevenZipNid.End);
@@ -838,6 +850,42 @@ public static class SevenZipArchiveWriter
     }
 
     return false;
+  }
+
+  /// <summary>
+  /// Пишет WinAttrib для всех entry.
+  /// </summary>
+  private static bool TryWriteWinAttributesProperty(
+      List<byte> header,
+      IReadOnlyList<SevenZipArchiveWriterEntry> entries)
+  {
+    header.Add(SevenZipNid.WinAttrib);
+
+    ulong propertySize = 2UL + ((ulong)entries.Count * 4UL);
+
+    if (!TryWriteUInt64(header, propertySize))
+      return false;
+
+    // AllAreDefined = true.
+    header.Add(0x01);
+
+    // External = false.
+    header.Add(0x00);
+
+    for (int i = 0; i < entries.Count; i++)
+      WriteUInt32LittleEndian(header, GetDefaultWindowsAttributes(entries[i]));
+
+    return true;
+  }
+
+  /// <summary>
+  /// Возвращает базовые Windows attributes для entry.
+  /// </summary>
+  private static uint GetDefaultWindowsAttributes(SevenZipArchiveWriterEntry entry)
+  {
+    return entry.IsDirectory
+        ? WindowsFileAttributeDirectory
+        : WindowsFileAttributeArchive;
   }
 
   /// <summary>
