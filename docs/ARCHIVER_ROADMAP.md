@@ -79,10 +79,21 @@ Packed data, `MainStreamsInfo`, `PackInfo` и `UnpackInfo` для этого с�
 Покрыто:
 
 - round-trip тестами через существующий decoder-path;
-- структурным тестом через `SevenZipArchiveReader`;
+- round-trip тестами для empty-entry, multi-Copy и mixed Copy-сценариев;
+- структурными тестами через `SevenZipArchiveReader`;
+- проверкой `PackInfo`, `UnpackInfo`, `FilesInfo` и `Copy` coder-а;
+- проверкой `EmptyStream`, `EmptyFile` и `FilesInfo.Crc` bit-vector-ов;
 - negative-тестами для повреждённых данных и CRC;
-- explicit `NotSupported` для нескольких файлов;
 - explicit `InvalidData` для некорректных входных данных.
+
+Промежуточный итог flat writer-а:
+
+- writer поддерживает простые валидные entry без вложенных путей;
+- пустые файлы и пустые директории пишутся через empty-entry path;
+- непустые файлы пишутся через `Copy` path;
+- mixed Copy-сценарии поддерживают empty entries и непустые `Copy`-файлы в одном архиве;
+- `FilesInfo` описывает полный набор entry;
+- packed data, `PackInfo` и `UnpackInfo` формируются только для непустых файлов.
 
 Не входит в базовый объём writer-этапа:
 
@@ -171,8 +182,6 @@ Magma, Стрибог/KDF и остальные GOST-сценарии остаю
 Дальнейшие направления:
 
 - постепенно расширять `SevenZipArchiveWriter.BuildArchive(...)`;
-- поддержать несколько непустых файлов;
-- поддержать смешанный multi-file сценарий с пустыми и непустыми файлами;
 - поддержать вложенные пути и файлы внутри директорий;
 - поддержать file attributes;
 - поддержать timestamp-метаданные;
