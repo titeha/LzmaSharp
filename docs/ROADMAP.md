@@ -263,19 +263,35 @@ Magma, полноценный KDF через Стрибог и остальны�
 - проверкой CRC только для непустых файлов в mixed-сценарии;
 - negative-тестами для повреждённых данных и CRC;
 - explicit `InvalidData` для некорректных входных данных;
-- explicit `InvalidData` для директории с данными.
+- explicit `InvalidData` для директории с данными;
+- round-trip вложенного пустого файла через decoder-path;
+- round-trip вложенного непустого `Copy`-файла через decoder-path;
+- round-trip явной директории и файла внутри неё через decoder-path;
+- структурный тест nested path writer-а через `SevenZipArchiveReader`;
+- проверка сохранения `/` в `FilesInfo.Names`;
+- проверка `EmptyStream`, `EmptyFile` и `FilesInfo.Crc` для вложенных entry;
+- explicit `InvalidData` для absolute path;
+- explicit `InvalidData` для path с завершающим `/`;
+- explicit `InvalidData` для path с пустым сегментом;
+- explicit `InvalidData` для path с `.` или `..` сегментом;
+- explicit `InvalidData` для path с `\`;
+- explicit `InvalidData` для path с зарезервированным Windows-сегментом;
+- explicit `InvalidData` для parent-file conflict.
 
 Шифрование, GOST writer и расширенные криптографические сценарии не входят в базовый объём этапа 2.
 
 ### Промежуточный итог flat writer
 
-Writer сейчас покрывает flat-набор простых валидных entry без вложенных путей.
+Writer сейчас покрывает простые валидные entry, включая безопасные вложенные `/`-paths.
 
 Поддержанные типы entry:
 
 - пустой файл;
 - пустая директория;
-- непустой файл через `Copy`.
+- непустой файл через `Copy`;
+- вложенный пустой файл;
+- вложенный непустой файл через `Copy`;
+- явная пустая директория и файл внутри неё.
 
 Поддержанные комбинации:
 
@@ -291,6 +307,10 @@ Writer сейчас покрывает flat-набор простых валид
 - entry с непустыми файлами строятся через `Copy` path;
 - некорректные входные данные возвращают `InvalidData`.
 
+Вложенность задаётся через `/` внутри имени entry.
+
+`FilesInfo.Names` сохраняет path как имя entry, например `dir/file.bin`.
+
 Для `Copy` path packed data, `PackInfo` и `UnpackInfo` формируются только для непустых файлов.
 
 `FilesInfo` описывает полный набор entry.
@@ -299,7 +319,6 @@ Writer сейчас покрывает flat-набор простых валид
 
 - постепенно расширять уже добавленный `SevenZipArchiveWriter.BuildArchive(...)`;
 - развивать путь записи архивов 7z от flat `Copy`-writer-а к более полному writer-у;
-- поддержать вложенные пути и файлы внутри директорий;
 - поддержать file attributes;
 - поддержать timestamp-метаданные;
 - усилить и расширить энкодер `LZMA`;

@@ -235,16 +235,20 @@ GOST-сценарии тестируются synthetic-архивами.
 - архив со смесью пустых файлов и пустых директорий;
 - архив с одним непустым файлом через `Copy`;
 - архив с несколькими непустыми файлами через `Copy`;
-- архив со смесью empty entries и непустых файлов через `Copy`.
+- архив со смесью empty entries и непустых файлов через `Copy`;
+- вложенный пустой файл;
+- вложенный непустой файл через `Copy`;
+- явная пустая директория и файл внутри неё.
 
 Промежуточный итог покрытия writer-а:
 
-- flat writer покрывает валидные простые entry без вложенных путей;
+- writer покрывает простые валидные entry, включая безопасные вложенные `/`-paths;
 - empty-entry path покрывает пустые файлы и пустые директории;
 - `Copy` path покрывает один или несколько непустых файлов;
 - mixed Copy path покрывает архивы, где empty entries и непустые `Copy`-файлы находятся вместе;
 - `FilesInfo` описывает полный набор entry;
-- packed data, `PackInfo` и `UnpackInfo` формируются только для непустых файлов.
+- packed data, `PackInfo` и `UnpackInfo` формируются только для непустых файлов;
+- вложенные path сохраняются в `FilesInfo.Names`.
 
 Покрытые проверки:
 
@@ -306,13 +310,25 @@ GOST-сценарии тестируются synthetic-архивами.
 - проверка второго байта `EmptyStream` bit-vector для mixed Copy;
 - проверка второго байта `EmptyFile` sub-vector для mixed Copy;
 - проверка второго байта `FilesInfo.Crc` defined bit-vector для mixed Copy;
-- проверка, что `FilesInfo.Crc` defined bit-vector в mixed Copy отмечает только непустые файлы.
+- проверка, что `FilesInfo.Crc` defined bit-vector в mixed Copy отмечает только непустые файлы;
+- round-trip вложенного пустого файла через существующий decoder-path;
+- round-trip вложенного непустого `Copy`-файла через существующий decoder-path;
+- round-trip явной директории и файла внутри неё через существующий decoder-path;
+- структурная проверка nested path writer-а через `SevenZipArchiveReader`;
+- сохранение `/` в `FilesInfo.Names`;
+- корректность `EmptyStream`, `EmptyFile` и `FilesInfo.Crc` для вложенных entry;
+- absolute path возвращает `InvalidData`;
+- path с завершающим `/` возвращает `InvalidData`;
+- path с пустым сегментом возвращает `InvalidData`;
+- path с `.` или `..` сегментом возвращает `InvalidData`;
+- path с `\` возвращает `InvalidData`;
+- path с зарезервированным Windows-сегментом возвращает `InvalidData`;
+- parent-file conflict возвращает `InvalidData`.
 
 Дальнейшие writer-тесты должны добавляться только под конкретный реализуемый сценарий.
 
 Минимальный набор дальнейших направлений:
 
-- вложенные пути и файлы внутри директорий;
 - file attributes;
 - timestamp-метаданные;
 - LZMA writer;
