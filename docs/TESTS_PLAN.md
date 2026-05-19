@@ -323,7 +323,10 @@ GOST-сценарии тестируются synthetic-архивами.
 - path с `.` или `..` сегментом возвращает `InvalidData`;
 - path с `\` возвращает `InvalidData`;
 - path с зарезервированным Windows-сегментом возвращает `InvalidData`;
-- parent-file conflict возвращает `InvalidData`.
+- parent-file conflict возвращает `InvalidData`;
+- parent-directory другого регистра разрешает вложенный entry;
+- parent-file другого регистра возвращает `InvalidData`;
+- вложенные path, отличающиеся только регистром, возвращают `InvalidData`.
 
 Дальнейшие writer-тесты должны добавляться только под конкретный реализуемый сценарий.
 
