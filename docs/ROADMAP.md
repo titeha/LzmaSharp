@@ -276,7 +276,10 @@ Magma, полноценный KDF через Стрибог и остальны�
 - explicit `InvalidData` для path с `.` или `..` сегментом;
 - explicit `InvalidData` для path с `\`;
 - explicit `InvalidData` для path с зарезервированным Windows-сегментом;
-- explicit `InvalidData` для parent-file conflict.
+- explicit `InvalidData` для parent-file conflict;
+- parent-directory другого регистра разрешает вложенный entry;
+- parent-file другого регистра возвращает `InvalidData`;
+- вложенные path, отличающиеся только регистром, возвращают `InvalidData`.
 
 Шифрование, GOST writer и расширенные криптографические сценарии не входят в базовый объём этапа 2.
 
@@ -314,6 +317,20 @@ Writer сейчас покрывает простые валидные entry, в
 Для `Copy` path packed data, `PackInfo` и `UnpackInfo` формируются только для непустых файлов.
 
 `FilesInfo` описывает полный набор entry.
+
+Проверки вложенных path выполняются без учёта регистра.
+
+Writer разрешает вложенный entry, если parent-entry найден как директория даже при отличии регистра:
+
+- `Dir`;
+- `dir/file.txt`.
+
+Writer возвращает `InvalidData`, если parent-entry найден как файл даже при отличии регистра:
+
+- `Dir`;
+- `dir/file.txt`.
+
+Полные path, отличающиеся только регистром, также возвращают `InvalidData`.
 
 ### Основные направления
 
