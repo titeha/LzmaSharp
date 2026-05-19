@@ -195,6 +195,9 @@ Packed data, `MainStreamsInfo`, `PackInfo` и `UnpackInfo` для этого с�
 - round-trip вложенного непустого `Copy`-файла через decoder-path;
 - round-trip явной директории и файла внутри неё через decoder-path;
 - структурная проверка nested path writer-а через `SevenZipArchiveReader`;
+- parent-directory другого регистра разрешает вложенный entry;
+- parent-file другого регистра возвращает `InvalidData`;
+- вложенные path, отличающиеся только регистром, возвращают `InvalidData`;
 - проверка сохранения `/` в `FilesInfo.Names`;
 - проверка `EmptyStream`, `EmptyFile` и `FilesInfo.Crc` для вложенных entry;
 - absolute path возвращает `InvalidData`;
@@ -335,7 +338,8 @@ Writer отклоняет:
 - пути с `.` или `..` сегментами;
 - пути с `\`;
 - пути с некорректным сегментом;
-- путь, где parent-entry уже существует как файл.
+- путь, где parent-entry уже существует как файл;
+- вложенные path, отличающиеся только регистром.
 
 Примеры недопустимых entry path:
 
@@ -357,6 +361,23 @@ Writer отклоняет:
 
 - `dir`;
 - `dir/file.txt`.
+
+Проверка parent-entry выполняется без учёта регистра.
+
+Поэтому такой сценарий разрешён:
+
+- `Dir` как директория;
+- `dir/file.txt` как вложенный файл.
+
+А такой сценарий возвращает `InvalidData`:
+
+- `Dir` как файл;
+- `dir/file.txt` как вложенный entry.
+
+Полные path, отличающиеся только регистром, также возвращают `InvalidData`:
+
+- `dir/file.txt`;
+- `DIR/FILE.TXT`.
 
 Каждый сегмент path проходит тот же контракт имени entry: зарезервированные Windows-имена, недопустимые символы, завершающая точка и завершающий пробельный символ запрещены.
 
