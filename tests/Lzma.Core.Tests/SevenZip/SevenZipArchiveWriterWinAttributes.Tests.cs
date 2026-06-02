@@ -84,7 +84,77 @@ public sealed class SevenZipArchiveWriterWinAttributesTests
                 WindowsFileAttributeArchive,
                 WindowsFileAttributeArchive,
             ],
+        filesInfo.WinAttrib);
+  }
+
+  [Fact]
+  public void BuildArchive_ДевятьEntryПишетОжидаемыйWinAttributesPayload()
+  {
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
+        [
+            new SevenZipArchiveWriterEntry("dir1", [], IsDirectory: true),
+            new SevenZipArchiveWriterEntry("empty1.txt", []),
+            new SevenZipArchiveWriterEntry("file1.bin", [1]),
+            new SevenZipArchiveWriterEntry("dir2", [], IsDirectory: true),
+            new SevenZipArchiveWriterEntry("empty2.txt", []),
+            new SevenZipArchiveWriterEntry("file2.bin", [2, 3]),
+            new SevenZipArchiveWriterEntry("dir3", [], IsDirectory: true),
+            new SevenZipArchiveWriterEntry("empty3.txt", []),
+            new SevenZipArchiveWriterEntry("file3.bin", [4, 5, 6]),
+        ],
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
+    Assert.NotEmpty(archive);
+
+    var reader = new SevenZipArchiveReader();
+
+    SevenZipArchiveReadResult readResult = reader.Read(
+        archive,
+        out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveReadResult.Ok, readResult);
+    Assert.Equal(archive.Length, bytesConsumed);
+
+    Assert.True(reader.Header.HasValue);
+
+    SevenZipFilesInfo filesInfo = reader.Header.Value.FilesInfo;
+
+    Assert.True(filesInfo.HasWinAttrib);
+    Assert.NotNull(filesInfo.WinAttribDefined);
+    Assert.NotNull(filesInfo.WinAttrib);
+
+    Assert.Equal(
+        [true, true, true, true, true, true, true, true, true],
+        filesInfo.WinAttribDefined!);
+
+    Assert.Equal(
+        [
+            WindowsFileAttributeDirectory,
+            WindowsFileAttributeArchive,
+            WindowsFileAttributeArchive,
+            WindowsFileAttributeDirectory,
+            WindowsFileAttributeArchive,
+            WindowsFileAttributeArchive,
+            WindowsFileAttributeDirectory,
+            WindowsFileAttributeArchive,
+            WindowsFileAttributeArchive,
+        ],
         filesInfo.WinAttrib!);
+
+    AssertWinAttributesPayload(
+        reader.NextHeaderBytes.Span,
+        [
+            WindowsFileAttributeDirectory,
+            WindowsFileAttributeArchive,
+            WindowsFileAttributeArchive,
+            WindowsFileAttributeDirectory,
+            WindowsFileAttributeArchive,
+            WindowsFileAttributeArchive,
+            WindowsFileAttributeDirectory,
+            WindowsFileAttributeArchive,
+            WindowsFileAttributeArchive,
+        ]);
   }
 
   private static SevenZipFilesInfo ReadFilesInfo(byte[] archive)
@@ -100,5 +170,60 @@ public sealed class SevenZipArchiveWriterWinAttributesTests
     Assert.True(reader.Header.HasValue);
 
     return reader.Header.Value.FilesInfo;
+  }
+
+  private static void AssertWinAttributesPayload(
+    ReadOnlySpan<byte> nextHeader,
+    uint[] expectedAttributes)
+  {
+    int propertyOffset = FindWinAttributesPropertyOffset(
+        nextHeader,
+        expectedAttributes.Length);
+
+    Assert.True(propertyOffset >= 0);
+
+    int propertySizeOffset = propertyOffset + 1;
+    int allAreDefinedOffset = propertySizeOffset + 1;
+    int externalOffset = allAreDefinedOffset + 1;
+    int attributesOffset = externalOffset + 1;
+
+    Assert.Equal(
+        (byte)(2 + (expectedAttributes.Length * 4)),
+        nextHeader[propertySizeOffset]);
+
+    Assert.Equal(0x01, nextHeader[allAreDefinedOffset]);
+    Assert.Equal(0x00, nextHeader[externalOffset]);
+
+    for (int i = 0; i < expectedAttributes.Length; i++)
+    {
+      uint actualAttribute = ReadUInt32LittleEndian(
+          nextHeader.Slice(attributesOffset + (i * 4), 4));
+
+      Assert.Equal(expectedAttributes[i], actualAttribute);
+    }
+  }
+
+  private static int FindWinAttributesPropertyOffset(
+      ReadOnlySpan<byte> nextHeader,
+      int attributeCount)
+  {
+    byte expectedPropertySize = (byte)(2 + (attributeCount * 4));
+
+    for (int i = 0; i <= nextHeader.Length - 4; i++)
+      if (nextHeader[i] == SevenZipNid.WinAttrib
+                && nextHeader[i + 1] == expectedPropertySize
+                && nextHeader[i + 2] == 0x01
+                && nextHeader[i + 3] == 0x00)
+        return i;
+
+    return -1;
+  }
+
+  private static uint ReadUInt32LittleEndian(ReadOnlySpan<byte> source)
+  {
+    return source[0]
+        | ((uint)source[1] << 8)
+        | ((uint)source[2] << 16)
+        | ((uint)source[3] << 24);
   }
 }
