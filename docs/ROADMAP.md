@@ -221,74 +221,22 @@ Magma, полноценный KDF через Стрибог и остальны�
 - `SevenZipArchiveWriterEntry`;
 - `SevenZipArchiveWriteResult`.
 
-Поддержано:
+Первый writer-контур уже реализован и развивается как базовый путь `SevenZipArchiveWriter.BuildArchive(...)`.
+
+Поддержаны:
 
 - пустой архив;
-- архив с одним пустым файлом;
-- архив с несколькими пустыми файлами;
-- архив с одной пустой директорией;
-- архив со смесью пустых файлов и пустых директорий;
-- архив с одним непустым файлом через `Copy`;
-- архив с несколькими непустыми файлами через `Copy`;
-- архив со смесью empty entries и непустых файлов через `Copy`.
+- empty-entry архивы;
+- непустые файлы через `Copy`;
+- mixed Copy-сценарии;
+- безопасные вложенные `/`-paths;
+- базовые `FilesInfo.WinAttrib`.
 
-Для `Copy`-сценария writer формирует:
-
-- packed data;
-- `SignatureHeader`;
-- `NextHeader`;
-- `MainStreamsInfo`;
-- `PackInfo`;
-- `UnpackInfo`;
-- `FilesInfo`;
-- `Copy` coder;
-- CRC packed stream-а;
-- CRC folder stream-а;
-- CRC файла.
-
-Покрыто:
-
-- round-trip тестами через существующий decoder-path;
-- round-trip тестами для пустых файлов и пустых директорий;
-- round-trip тестами для одного и нескольких непустых `Copy`-файлов;
-- round-trip тестами для mixed Copy-сценариев;
-- структурным тестом `Copy` writer-а через `SevenZipArchiveReader`;
-- структурным тестом multi-Copy writer-а через `SevenZipArchiveReader`;
-- структурным тестом mixed Copy writer-а через `SevenZipArchiveReader`;
-- структурным тестом `FilesInfo` для empty entries через `SevenZipArchiveReader`;
-- структурной проверкой `EmptyFile` bit-vector для пустого файла и пустой директории;
-- проверкой `EmptyStream` bit-vector для mixed-сценария;
-- проверкой `EmptyFile` sub-vector для mixed-сценария;
-- проверкой `FilesInfo.Crc` defined bit-vector для mixed-сценария;
-- проверкой CRC только для непустых файлов в mixed-сценарии;
-- negative-тестами для повреждённых данных и CRC;
-- explicit `InvalidData` для некорректных входных данных;
-- explicit `InvalidData` для директории с данными;
-- round-trip вложенного пустого файла через decoder-path;
-- round-trip вложенного непустого `Copy`-файла через decoder-path;
-- round-trip явной директории и файла внутри неё через decoder-path;
-- структурный тест nested path writer-а через `SevenZipArchiveReader`;
-- проверка сохранения `/` в `FilesInfo.Names`;
-- проверка `EmptyStream`, `EmptyFile` и `FilesInfo.Crc` для вложенных entry;
-- explicit `InvalidData` для absolute path;
-- explicit `InvalidData` для path с завершающим `/`;
-- explicit `InvalidData` для path с пустым сегментом;
-- explicit `InvalidData` для path с `.` или `..` сегментом;
-- explicit `InvalidData` для path с `\`;
-- explicit `InvalidData` для path с зарезервированным Windows-сегментом;
-- explicit `InvalidData` для parent-file conflict;
-- parent-directory другого регистра разрешает вложенный entry;
-- parent-file другого регистра возвращает `InvalidData`;
-- вложенные path, отличающиеся только регистром, возвращают `InvalidData`;
-- проверка `FilesInfo.WinAttrib`;
-- проверка `Archive` attribute для файлов;
-- проверка `Directory` attribute для директорий;
-- структурная проверка `WinAttrib` payload для 9 entry;
-- проверка `AllAreDefined = true` и `External = false`.
+Детальный промежуточный итог writer-а описан ниже.
 
 Шифрование, GOST writer и расширенные криптографические сценарии не входят в базовый объём этапа 2.
 
-### Промежуточный итог flat writer
+### Промежуточный итог writer-а простых entry
 
 Writer сейчас покрывает простые валидные entry, включая безопасные вложенные `/`-paths.
 
@@ -298,6 +246,10 @@ Writer пишет базовые `FilesInfo.WinAttrib`:
 - `Directory = 0x10` для директорий;
 - `AllAreDefined = true`;
 - `External = false`.
+
+Attributes пока выбираются автоматически по типу entry.
+
+Произвольные file attributes через публичную модель writer-а пока не поддержаны.
 
 Поддержанные типы entry:
 
@@ -347,7 +299,7 @@ Writer возвращает `InvalidData`, если parent-entry найден к
 ### Основные направления
 
 - постепенно расширять уже добавленный `SevenZipArchiveWriter.BuildArchive(...)`;
-- развивать путь записи архивов 7z от flat `Copy`-writer-а к более полному writer-у;
+- развивать путь записи архивов 7z от текущего `Copy`-writer-а к более полному writer-у;
 - поддержать произвольные file attributes через публичную модель writer-а;
 - поддержать timestamp-метаданные;
 - усилить и расширить энкодер `LZMA`;
