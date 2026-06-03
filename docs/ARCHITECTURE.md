@@ -399,7 +399,7 @@ Packed data, `MainStreamsInfo`, `PackInfo` и `UnpackInfo` для этого с�
 Writer-path пока не поддерживает:
 
 - timestamps;
-- file attributes;
+- произвольные file attributes через публичную модель writer-а;
 - solid-группировку;
 - LZMA writer;
 - LZMA2 writer;
@@ -409,6 +409,25 @@ Writer-path пока не поддерживает:
 - streaming writer API.
 
 Директория с данными считается некорректным входом writer-а и возвращает `InvalidData`.
+
+### WinAttributes writer-а
+
+Writer пишет базовые Windows attributes через `FilesInfo.WinAttrib`.
+
+Текущий контракт:
+
+- файл получает `Archive` attribute: `0x20`;
+- директория получает `Directory` attribute: `0x10`;
+- `WinAttrib` пишется для всех entry;
+- `AllAreDefined = true`;
+- `External = false`.
+
+Attributes выбираются автоматически по типу entry:
+
+- `IsDirectory = false` → `Archive`;
+- `IsDirectory = true` → `Directory`.
+
+Публичная модель `SevenZipArchiveWriterEntry` пока не позволяет задавать произвольные attributes вручную.
 
 ## Контракт ошибок writer-а
 

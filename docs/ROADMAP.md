@@ -279,13 +279,25 @@ Magma, полноценный KDF через Стрибог и остальны�
 - explicit `InvalidData` для parent-file conflict;
 - parent-directory другого регистра разрешает вложенный entry;
 - parent-file другого регистра возвращает `InvalidData`;
-- вложенные path, отличающиеся только регистром, возвращают `InvalidData`.
+- вложенные path, отличающиеся только регистром, возвращают `InvalidData`;
+- проверка `FilesInfo.WinAttrib`;
+- проверка `Archive` attribute для файлов;
+- проверка `Directory` attribute для директорий;
+- структурная проверка `WinAttrib` payload для 9 entry;
+- проверка `AllAreDefined = true` и `External = false`.
 
 Шифрование, GOST writer и расширенные криптографические сценарии не входят в базовый объём этапа 2.
 
 ### Промежуточный итог flat writer
 
 Writer сейчас покрывает простые валидные entry, включая безопасные вложенные `/`-paths.
+
+Writer пишет базовые `FilesInfo.WinAttrib`:
+
+- `Archive = 0x20` для файлов;
+- `Directory = 0x10` для директорий;
+- `AllAreDefined = true`;
+- `External = false`.
 
 Поддержанные типы entry:
 
@@ -336,7 +348,7 @@ Writer возвращает `InvalidData`, если parent-entry найден к
 
 - постепенно расширять уже добавленный `SevenZipArchiveWriter.BuildArchive(...)`;
 - развивать путь записи архивов 7z от flat `Copy`-writer-а к более полному writer-у;
-- поддержать file attributes;
+- поддержать произвольные file attributes через публичную модель writer-а;
 - поддержать timestamp-метаданные;
 - усилить и расширить энкодер `LZMA`;
 - усилить и расширить энкодер `LZMA2`;

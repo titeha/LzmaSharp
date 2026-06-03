@@ -101,6 +101,14 @@ Packed data, `MainStreamsInfo`, `PackInfo` и `UnpackInfo` для этого с�
 
 Вложенность задаётся через `/` внутри имени entry.
 
+Writer уже пишет базовые Windows attributes:
+
+- `Archive = 0x20` для файлов;
+- `Directory = 0x10` для директорий;
+- attributes пишутся через `FilesInfo.WinAttrib`;
+- `AllAreDefined = true`;
+- `External = false`.
+
 Writer отклоняет небезопасные path-сценарии:
 
 - absolute path;
@@ -207,7 +215,7 @@ Magma, Стрибог/KDF и остальные GOST-сценарии остаю
 Дальнейшие направления:
 
 - постепенно расширять `SevenZipArchiveWriter.BuildArchive(...)`;
-- поддержать file attributes;
+- поддержать произвольные file attributes через публичную модель writer-а;
 - поддержать timestamp-метаданные;
 - развивать запись структуры 7z;
 - развивать `StreamsInfo`;

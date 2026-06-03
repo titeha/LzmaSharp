@@ -44,6 +44,14 @@
 
 Промежуточный итог writer-а: поддержаны простые валидные entry, включая безопасные вложенные `/`-paths.
 
+Writer также пишет базовые Windows attributes через `FilesInfo.WinAttrib`:
+
+- файл получает `Archive` attribute: `0x20`;
+- директория получает `Directory` attribute: `0x10`;
+- `WinAttrib` пишется для всех entry;
+- `AllAreDefined = true`;
+- `External = false`.
+
 Поддержанные типы entry:
 
 - пустой файл;
@@ -97,7 +105,7 @@ Writer отклоняет:
 Пока writer не поддерживает:
 
 - timestamps;
-- file attributes;
+- произвольные file attributes через публичную модель writer-а;
 - LZMA / LZMA2 writer;
 - AES writer;
 - GOST writer.
