@@ -332,7 +332,6 @@ GOST-сценарии тестируются synthetic-архивами.
 
 Минимальный набор дальнейших направлений:
 
-- произвольные file attributes через публичную модель writer-а;
 - timestamp-метаданные;
 - LZMA writer;
 - LZMA2 writer;

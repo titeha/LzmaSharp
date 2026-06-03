@@ -72,7 +72,8 @@ Writer реализуется снизу вверх:
 
 - имя;
 - содержимое;
-- признак директории.
+- признак директории;
+- опциональные Windows attributes.
 
 Основной публичный вход writer-а сейчас — `BuildArchive(...)`.
 
@@ -212,6 +213,10 @@ Packed data, `MainStreamsInfo`, `PackInfo` и `UnpackInfo` для этого с�
 - writer пишет `Directory` attribute для директорий;
 - writer пишет `Archive` attribute для непустых `Copy`-файлов;
 - writer пишет `WinAttrib` для всех entry в mixed-сценарии;
+- пользовательские `WindowsAttributes` файла пишутся в `FilesInfo.WinAttrib`;
+- пользовательские `WindowsAttributes` директории пишутся в `FilesInfo.WinAttrib`;
+- файл с `Directory` bit возвращает `InvalidData`;
+- директория без `Directory` bit возвращает `InvalidData`;
 - структурный тест проверяет `WinAttrib` payload для 9 entry;
 - структурный тест проверяет `AllAreDefined = true`;
 - структурный тест проверяет `External = false`;
@@ -220,7 +225,7 @@ Packed data, `MainStreamsInfo`, `PackInfo` и `UnpackInfo` для этого с�
 Пока не поддержано:
 
 - timestamps;
-- произвольные file attributes через публичную модель writer-а;
+- platform-specific attributes кроме текущего `WinAttrib` поля;
 - solid-группировка;
 - LZMA writer;
 - LZMA2 writer;
@@ -229,22 +234,35 @@ Packed data, `MainStreamsInfo`, `PackInfo` и `UnpackInfo` для этого с�
 
 ## WinAttributes
 
-Writer пишет базовые Windows attributes через `FilesInfo.WinAttrib`.
+Writer пишет Windows attributes через `FilesInfo.WinAttrib`.
 
 Текущий контракт:
 
-- файл получает `Archive` attribute: `0x20`;
-- директория получает `Directory` attribute: `0x10`;
 - `WinAttrib` пишется для всех entry;
 - `AllAreDefined = true`;
-- `External = false`.
+- `External = false`;
+- если attributes не заданы явно, writer выбирает базовые attributes по типу entry;
+- если attributes заданы явно, writer пишет переданное значение после validation.
 
-Публичная модель `SevenZipArchiveWriterEntry` пока не позволяет задавать произвольные attributes вручную.
+Default attributes:
 
-На текущем шаге writer сам выбирает минимальные attributes по типу entry:
+- файл получает `Archive` attribute: `0x20`;
+- директория получает `Directory` attribute: `0x10`.
 
-- `IsDirectory = false` → `Archive`;
-- `IsDirectory = true` → `Directory`.
+Публичная модель `SevenZipArchiveWriterEntry` позволяет задать attributes через `WindowsAttributes`.
+
+Validation attributes:
+
+- директория должна иметь `Directory` bit: `0x10`;
+- файл не должен иметь `Directory` bit;
+- несогласованные attributes возвращают `InvalidData`.
+
+Примеры:
+
+- файл с `Archive | ReadOnly` разрешён;
+- директория с `Directory | ReadOnly` разрешена;
+- директория без `Directory` bit возвращает `InvalidData`;
+- файл с `Directory` bit возвращает `InvalidData`.
 
 ## Промежуточный итог writer-а простых entry
 
