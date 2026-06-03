@@ -647,9 +647,28 @@ public static class SevenZipArchiveWriter
 
       if (entry.IsDirectory && entry.Content.Length != 0)
         return false;
+
+      if (!IsSupportedWindowsAttributes(entry))
+        return false;
     }
 
     return !HasNonDirectoryParentConflict(entries);
+  }
+
+  /// <summary>
+  /// Проверяет согласованность Windows attributes с типом entry.
+  /// </summary>
+  private static bool IsSupportedWindowsAttributes(SevenZipArchiveWriterEntry entry)
+  {
+    if (!entry.WindowsAttributes.HasValue)
+      return true;
+
+    bool hasDirectoryAttribute =
+        (entry.WindowsAttributes.Value & WindowsFileAttributeDirectory) != 0;
+
+    return entry.IsDirectory
+        ? hasDirectoryAttribute
+        : !hasDirectoryAttribute;
   }
 
   /// <summary>
@@ -873,9 +892,18 @@ public static class SevenZipArchiveWriter
     header.Add(0x00);
 
     for (int i = 0; i < entries.Count; i++)
-      WriteUInt32LittleEndian(header, GetDefaultWindowsAttributes(entries[i]));
+      WriteUInt32LittleEndian(header, GetWindowsAttributes(entries[i]));
 
     return true;
+  }
+
+  /// <summary>
+  /// Возвращает Windows attributes для entry.
+  /// </summary>
+  private static uint GetWindowsAttributes(SevenZipArchiveWriterEntry entry)
+  {
+    return entry.WindowsAttributes
+        ?? GetDefaultWindowsAttributes(entry);
   }
 
   /// <summary>

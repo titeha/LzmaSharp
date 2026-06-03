@@ -4,18 +4,18 @@ namespace Lzma.Core.Tests.SevenZip;
 
 public sealed class SevenZipArchiveWriterWinAttributesTests
 {
-  private const uint WindowsFileAttributeDirectory = 0x00000010;
-  private const uint WindowsFileAttributeArchive = 0x00000020;
+  private const uint _windowsFileAttributeDirectory = 0x00000010;
+  private const uint _windowsFileAttributeArchive = 0x00000020;
+  private const uint _windowsFileAttributeReadOnly = 0x00000001;
 
   [Fact]
   public void BuildArchive_EmptyEntriesПишетWinAttributesДляФайловИДиректорий()
   {
     SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
-        [
-            new SevenZipArchiveWriterEntry("empty.txt", []),
-                new SevenZipArchiveWriterEntry("dir", [], IsDirectory: true),
-            ],
-        out byte[] archive);
+    [
+      new SevenZipArchiveWriterEntry("empty.txt", []),
+      new SevenZipArchiveWriterEntry("dir", [], IsDirectory: true),
+    ], out byte[] archive);
 
     Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
     Assert.NotEmpty(archive);
@@ -28,7 +28,7 @@ public sealed class SevenZipArchiveWriterWinAttributesTests
 
     Assert.Equal([true, true], filesInfo.WinAttribDefined!);
     Assert.Equal(
-        [WindowsFileAttributeArchive, WindowsFileAttributeDirectory],
+        [_windowsFileAttributeArchive, _windowsFileAttributeDirectory],
         filesInfo.WinAttrib!);
   }
 
@@ -53,7 +53,7 @@ public sealed class SevenZipArchiveWriterWinAttributesTests
 
     Assert.Equal([true, true], filesInfo.WinAttribDefined!);
     Assert.Equal(
-        [WindowsFileAttributeArchive, WindowsFileAttributeArchive],
+        [_windowsFileAttributeArchive, _windowsFileAttributeArchive],
         filesInfo.WinAttrib!);
   }
 
@@ -80,9 +80,9 @@ public sealed class SevenZipArchiveWriterWinAttributesTests
     Assert.Equal([true, true, true], filesInfo.WinAttribDefined!);
     Assert.Equal(
         [
-            WindowsFileAttributeDirectory,
-                WindowsFileAttributeArchive,
-                WindowsFileAttributeArchive,
+            _windowsFileAttributeDirectory,
+                _windowsFileAttributeArchive,
+                _windowsFileAttributeArchive,
             ],
         filesInfo.WinAttrib);
   }
@@ -130,31 +130,108 @@ public sealed class SevenZipArchiveWriterWinAttributesTests
 
     Assert.Equal(
         [
-            WindowsFileAttributeDirectory,
-            WindowsFileAttributeArchive,
-            WindowsFileAttributeArchive,
-            WindowsFileAttributeDirectory,
-            WindowsFileAttributeArchive,
-            WindowsFileAttributeArchive,
-            WindowsFileAttributeDirectory,
-            WindowsFileAttributeArchive,
-            WindowsFileAttributeArchive,
+            _windowsFileAttributeDirectory,
+            _windowsFileAttributeArchive,
+            _windowsFileAttributeArchive,
+            _windowsFileAttributeDirectory,
+            _windowsFileAttributeArchive,
+            _windowsFileAttributeArchive,
+            _windowsFileAttributeDirectory,
+            _windowsFileAttributeArchive,
+            _windowsFileAttributeArchive,
         ],
         filesInfo.WinAttrib!);
 
     AssertWinAttributesPayload(
         reader.NextHeaderBytes.Span,
         [
-            WindowsFileAttributeDirectory,
-            WindowsFileAttributeArchive,
-            WindowsFileAttributeArchive,
-            WindowsFileAttributeDirectory,
-            WindowsFileAttributeArchive,
-            WindowsFileAttributeArchive,
-            WindowsFileAttributeDirectory,
-            WindowsFileAttributeArchive,
-            WindowsFileAttributeArchive,
+            _windowsFileAttributeDirectory,
+            _windowsFileAttributeArchive,
+            _windowsFileAttributeArchive,
+            _windowsFileAttributeDirectory,
+            _windowsFileAttributeArchive,
+            _windowsFileAttributeArchive,
+            _windowsFileAttributeDirectory,
+            _windowsFileAttributeArchive,
+            _windowsFileAttributeArchive,
         ]);
+  }
+
+  [Fact]
+  public void BuildArchive_ФайлСПользовательскимиWinAttributesПишетИхВFilesInfo()
+  {
+    uint attributes = _windowsFileAttributeArchive | _windowsFileAttributeReadOnly;
+
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
+        [new SevenZipArchiveWriterEntry("file.bin", [1, 2, 3], WindowsAttributes: attributes)],
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
+    Assert.NotEmpty(archive);
+
+    SevenZipFilesInfo filesInfo = ReadFilesInfo(archive);
+
+    Assert.True(filesInfo.HasWinAttrib);
+    Assert.NotNull(filesInfo.WinAttribDefined);
+    Assert.NotNull(filesInfo.WinAttrib);
+
+    Assert.Equal([true], filesInfo.WinAttribDefined!);
+    Assert.Equal([attributes], filesInfo.WinAttrib!);
+  }
+
+  [Fact]
+  public void BuildArchive_ДиректорияСПользовательскимиWinAttributesПишетИхВFilesInfo()
+  {
+    uint attributes = _windowsFileAttributeDirectory | _windowsFileAttributeReadOnly;
+
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
+        [new SevenZipArchiveWriterEntry("dir", [], IsDirectory: true, WindowsAttributes: attributes)],
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
+    Assert.NotEmpty(archive);
+
+    SevenZipFilesInfo filesInfo = ReadFilesInfo(archive);
+
+    Assert.True(filesInfo.HasWinAttrib);
+    Assert.NotNull(filesInfo.WinAttribDefined);
+    Assert.NotNull(filesInfo.WinAttrib);
+
+    Assert.Equal([true], filesInfo.WinAttribDefined!);
+    Assert.Equal([attributes], filesInfo.WinAttrib!);
+  }
+
+  [Fact]
+  public void BuildArchive_ДиректорияБезDirectoryAttributeВозвращаетInvalidData()
+  {
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
+        [
+            new SevenZipArchiveWriterEntry(
+                "dir",
+                [],
+                IsDirectory: true,
+                WindowsAttributes: _windowsFileAttributeArchive),
+        ],
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.InvalidData, writeResult);
+    Assert.Empty(archive);
+  }
+
+  [Fact]
+  public void BuildArchive_ФайлСDirectoryAttributeВозвращаетInvalidData()
+  {
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
+        [
+            new SevenZipArchiveWriterEntry(
+                "file.bin",
+                [1, 2, 3],
+                WindowsAttributes: _windowsFileAttributeDirectory),
+        ],
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.InvalidData, writeResult);
+    Assert.Empty(archive);
   }
 
   private static SevenZipFilesInfo ReadFilesInfo(byte[] archive)

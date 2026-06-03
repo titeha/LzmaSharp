@@ -6,4 +6,5 @@ namespace Lzma.Core.SevenZip;
 public sealed record SevenZipArchiveWriterEntry(
     string Name,
     byte[] Content,
-    bool IsDirectory = false);
+    bool IsDirectory = false,
+    uint? WindowsAttributes = null);
