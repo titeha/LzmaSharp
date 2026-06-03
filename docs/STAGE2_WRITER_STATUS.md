@@ -206,17 +206,45 @@ Packed data, `MainStreamsInfo`, `PackInfo` и `UnpackInfo` для этого с�
 - path с `.` или `..` сегментом возвращает `InvalidData`;
 - path с `\` возвращает `InvalidData`;
 - path с зарезервированным Windows-сегментом возвращает `InvalidData`;
-- parent-file conflict возвращает `InvalidData`.
+- parent-file conflict возвращает `InvalidData`;
+- writer пишет `FilesInfo.WinAttrib` для empty entries;
+- writer пишет `Archive` attribute для файлов;
+- writer пишет `Directory` attribute для директорий;
+- writer пишет `Archive` attribute для непустых `Copy`-файлов;
+- writer пишет `WinAttrib` для всех entry в mixed-сценарии;
+- структурный тест проверяет `WinAttrib` payload для 9 entry;
+- структурный тест проверяет `AllAreDefined = true`;
+- структурный тест проверяет `External = false`;
+- структурный тест проверяет порядок `UINT32` attributes в payload.
 
 Пока не поддержано:
 
 - timestamps;
-- file attributes;
+- произвольные file attributes через публичную модель writer-а;
 - solid-группировка;
 - LZMA writer;
 - LZMA2 writer;
 - AES writer;
 - GOST writer.
+
+## WinAttributes
+
+Writer пишет базовые Windows attributes через `FilesInfo.WinAttrib`.
+
+Текущий контракт:
+
+- файл получает `Archive` attribute: `0x20`;
+- директория получает `Directory` attribute: `0x10`;
+- `WinAttrib` пишется для всех entry;
+- `AllAreDefined = true`;
+- `External = false`.
+
+Публичная модель `SevenZipArchiveWriterEntry` пока не позволяет задавать произвольные attributes вручную.
+
+На текущем шаге writer сам выбирает минимальные attributes по типу entry:
+
+- `IsDirectory = false` → `Archive`;
+- `IsDirectory = true` → `Directory`.
 
 ## Промежуточный итог writer-а простых entry
 
