@@ -7,4 +7,5 @@ public sealed record SevenZipArchiveWriterEntry(
     string Name,
     byte[] Content,
     bool IsDirectory = false,
-    uint? WindowsAttributes = null);
+    uint? WindowsAttributes = null,
+    DateTime? LastWriteTimeUtc = null);

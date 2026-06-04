@@ -159,6 +159,9 @@ public static class SevenZipArchiveWriter
     if (!TryWriteFileNamesProperty(header, entries))
       return false;
 
+    if (!TryWriteMTimeProperty(header, entries))
+      return false;
+
     if (!TryWriteWinAttributesProperty(header, entries))
       return false;
 
@@ -434,6 +437,9 @@ public static class SevenZipArchiveWriter
     if (!TryWriteFileNamesProperty(header, entries))
       return false;
 
+    if (!TryWriteMTimeProperty(header, entries))
+      return false;
+
     if (!TryWriteWinAttributesProperty(header, entries))
       return false;
 
@@ -585,6 +591,9 @@ public static class SevenZipArchiveWriter
     if (!TryWriteFileNamesProperty(header, entries))
       return false;
 
+    if (!TryWriteMTimeProperty(header, entries))
+      return false;
+
     if (!TryWriteWinAttributesProperty(header, entries))
       return false;
 
@@ -649,6 +658,9 @@ public static class SevenZipArchiveWriter
         return false;
 
       if (!IsSupportedWindowsAttributes(entry))
+        return false;
+
+      if (!IsSupportedLastWriteTimeUtc(entry.LastWriteTimeUtc))
         return false;
     }
 
@@ -895,6 +907,106 @@ public static class SevenZipArchiveWriter
       WriteUInt32LittleEndian(header, GetWindowsAttributes(entries[i]));
 
     return true;
+  }
+
+  /// <summary>
+  /// Проверяет, что время последней записи задано как UTC и может быть представлено в FILETIME.
+  /// </summary>
+  private static bool IsSupportedLastWriteTimeUtc(DateTime? lastWriteTimeUtc)
+  {
+    if (!lastWriteTimeUtc.HasValue)
+      return true;
+
+    DateTime value = lastWriteTimeUtc.Value;
+
+    if (value.Kind != DateTimeKind.Utc)
+      return false;
+
+    try
+    {
+      _ = value.ToFileTimeUtc();
+      return true;
+    }
+    catch (ArgumentOutOfRangeException)
+    {
+      return false;
+    }
+  }
+
+  /// <summary>
+  /// Пишет MTime для entry, у которых задан LastWriteTimeUtc.
+  /// </summary>
+  private static bool TryWriteMTimeProperty(
+      List<byte> header,
+      IReadOnlyList<SevenZipArchiveWriterEntry> entries)
+  {
+    bool[] defined = new bool[entries.Count];
+    ulong[] times = new ulong[entries.Count];
+
+    int definedCount = 0;
+    bool allAreDefined = true;
+
+    for (int i = 0; i < entries.Count; i++)
+    {
+      DateTime? lastWriteTimeUtc = entries[i].LastWriteTimeUtc;
+
+      if (!lastWriteTimeUtc.HasValue)
+      {
+        allAreDefined = false;
+        continue;
+      }
+
+      defined[i] = true;
+      times[i] = (ulong)lastWriteTimeUtc.Value.ToFileTimeUtc();
+      definedCount++;
+    }
+
+    if (definedCount == 0)
+      return true;
+
+    header.Add(SevenZipNid.MTime);
+
+    ulong propertySize =
+        1UL
+        + (allAreDefined ? 0UL : (ulong)GetBitVectorByteCount(entries.Count))
+        + 1UL
+        + ((ulong)definedCount * 8UL);
+
+    if (!TryWriteUInt64(header, propertySize))
+      return false;
+
+    header.Add(allAreDefined ? (byte)0x01 : (byte)0x00);
+
+    if (!allAreDefined)
+      WriteDefinedBitVector(header, defined);
+
+    // External = false.
+    header.Add(0x00);
+
+    for (int i = 0; i < entries.Count; i++)
+    {
+      if (!defined[i])
+        continue;
+
+      WriteUInt64LittleEndian(header, times[i]);
+    }
+
+    return true;
+  }
+
+  /// <summary>
+  /// Пишет UInt64 в little-endian представлении.
+  /// </summary>
+  private static void WriteUInt64LittleEndian(List<byte> destination, ulong value)
+  {
+    destination.Add((byte)value);
+    destination.Add((byte)(value >> 8));
+    destination.Add((byte)(value >> 16));
+    destination.Add((byte)(value >> 24));
+    destination.Add((byte)(value >> 32));
+    destination.Add((byte)(value >> 40));
+    destination.Add((byte)(value >> 48));
+    destination.Add((byte)(value >> 56));
   }
 
   /// <summary>
