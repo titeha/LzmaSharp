@@ -272,9 +272,10 @@ Writer развивается отдельно от уже стабилизир�
 
 `SevenZipArchiveWriterEntry` сейчас содержит:
 
-- имя элемента;
+- имя entry;
 - содержимое;
-- признак директории.
+- признак директории;
+- опциональные Windows attributes.
 
 Результат операции:
 
@@ -412,22 +413,28 @@ Writer-path пока не поддерживает:
 
 ### WinAttributes writer-а
 
-Writer пишет базовые Windows attributes через `FilesInfo.WinAttrib`.
+Writer пишет Windows attributes через `FilesInfo.WinAttrib`.
 
 Текущий контракт:
 
-- файл получает `Archive` attribute: `0x20`;
-- директория получает `Directory` attribute: `0x10`;
 - `WinAttrib` пишется для всех entry;
 - `AllAreDefined = true`;
-- `External = false`.
+- `External = false`;
+- если attributes не заданы явно, writer выбирает базовые attributes по типу entry;
+- если attributes заданы явно, writer пишет переданное значение после validation.
 
-Attributes выбираются автоматически по типу entry:
+Default attributes:
 
-- `IsDirectory = false` → `Archive`;
-- `IsDirectory = true` → `Directory`.
+- `IsDirectory = false` → `Archive = 0x20`;
+- `IsDirectory = true` → `Directory = 0x10`.
 
-Публичная модель `SevenZipArchiveWriterEntry` пока не позволяет задавать произвольные attributes вручную.
+Публичная модель `SevenZipArchiveWriterEntry` позволяет задать attributes через `WindowsAttributes`.
+
+Validation attributes:
+
+- директория должна иметь `Directory` bit: `0x10`;
+- файл не должен иметь `Directory` bit;
+- несогласованные attributes возвращают `InvalidData`.
 
 ## Контракт ошибок writer-а
 
@@ -436,7 +443,7 @@ Writer использует явный результат операции че�
 Текущий контракт:
 
 - `Ok` — архив успешно построен;
-- `InvalidData` — некорректные входные данные: `null`, некорректное имя entry, директория с данными, дублирующееся имя или конфликт имён;
+- `InvalidData` — некорректные входные данные: `null`, некорректный entry path, директория с данными, дублирующееся имя, конфликт имён или несогласованные Windows attributes;
 - `NotSupported` — сценарий распознан, но пока не входит в поддержанный writer-path;
 - `InternalError` — неожиданное внутреннее состояние writer-а.
 

@@ -28,6 +28,13 @@
 - `SevenZipArchiveWriterEntry`;
 - `SevenZipArchiveWriteResult`.
 
+`SevenZipArchiveWriterEntry` сейчас описывает:
+
+- имя entry;
+- содержимое;
+- признак директории;
+- опциональные Windows attributes.
+
 Сейчас writer поддерживает:
 
 - пустой архив;
@@ -44,13 +51,25 @@
 
 Промежуточный итог writer-а: поддержаны простые валидные entry, включая безопасные вложенные `/`-paths.
 
-Writer также пишет базовые Windows attributes через `FilesInfo.WinAttrib`:
+Writer пишет Windows attributes через `FilesInfo.WinAttrib`.
 
-- файл получает `Archive` attribute: `0x20`;
-- директория получает `Directory` attribute: `0x10`;
-- `WinAttrib` пишется для всех entry;
-- `AllAreDefined = true`;
-- `External = false`.
+Если `WindowsAttributes` не заданы явно, writer выбирает базовые attributes:
+
+- файл получает `Archive`: `0x20`;
+- директория получает `Directory`: `0x10`.
+
+Если `WindowsAttributes` заданы явно, writer пишет переданное значение после validation.
+
+Validation attributes:
+
+- директория должна иметь `Directory` bit: `0x10`;
+- файл не должен иметь `Directory` bit;
+- несогласованные attributes возвращают `InvalidData`.
+
+Примеры допустимых attributes:
+
+- файл с `Archive | ReadOnly`;
+- директория с `Directory | ReadOnly`.
 
 Поддержанные типы entry:
 
@@ -105,7 +124,6 @@ Writer отклоняет:
 Пока writer не поддерживает:
 
 - timestamps;
-- произвольные file attributes через публичную модель writer-а;
 - LZMA / LZMA2 writer;
 - AES writer;
 - GOST writer.

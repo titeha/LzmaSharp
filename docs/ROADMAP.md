@@ -240,16 +240,26 @@ Magma, полноценный KDF через Стрибог и остальны�
 
 Writer сейчас покрывает простые валидные entry, включая безопасные вложенные `/`-paths.
 
-Writer пишет базовые `FilesInfo.WinAttrib`:
+Writer пишет `FilesInfo.WinAttrib`:
+
+- attributes пишутся для всех entry;
+- `AllAreDefined = true`;
+- `External = false`;
+- если `WindowsAttributes` не заданы явно, writer выбирает default attributes по типу entry;
+- если `WindowsAttributes` заданы явно, writer пишет переданное значение после validation.
+
+Default attributes:
 
 - `Archive = 0x20` для файлов;
-- `Directory = 0x10` для директорий;
-- `AllAreDefined = true`;
-- `External = false`.
+- `Directory = 0x10` для директорий.
 
-Attributes пока выбираются автоматически по типу entry.
+Validation attributes:
 
-Произвольные file attributes через публичную модель writer-а пока не поддержаны.
+- директория должна иметь `Directory` bit;
+- файл не должен иметь `Directory` bit;
+- несогласованные attributes возвращают `InvalidData`.
+
+Публичная модель `SevenZipArchiveWriterEntry` поддерживает произвольные Windows attributes через `WindowsAttributes`.
 
 Поддержанные типы entry:
 
@@ -300,7 +310,6 @@ Writer возвращает `InvalidData`, если parent-entry найден к
 
 - постепенно расширять уже добавленный `SevenZipArchiveWriter.BuildArchive(...)`;
 - развивать путь записи архивов 7z от текущего `Copy`-writer-а к более полному writer-у;
-- поддержать произвольные file attributes через публичную модель writer-а;
 - поддержать timestamp-метаданные;
 - усилить и расширить энкодер `LZMA`;
 - усилить и расширить энкодер `LZMA2`;
@@ -376,4 +385,3 @@ Writer возвращает `InvalidData`, если parent-entry найден к
 - при замене сохранять внешнее поведение и стабильность тестов.
 
 Цель — постепенно убрать зависимость от сторонних библиотек для критичных codec-веток и перевести эту логику внутрь проекта.
-

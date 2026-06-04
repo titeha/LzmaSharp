@@ -90,7 +90,7 @@ Packed data, `MainStreamsInfo`, `PackInfo` и `UnpackInfo` для этого с�
 - negative-тестами для повреждённых данных и CRC;
 - explicit `InvalidData` для некорректных входных данных.
 
-Промежуточный итог flat writer-а:
+Промежуточный итог writer-а простых entry:
 
 - writer поддерживает простые валидные entry, включая безопасные вложенные `/`-paths;
 - пустые файлы и пустые директории пишутся через empty-entry path;
@@ -101,13 +101,24 @@ Packed data, `MainStreamsInfo`, `PackInfo` и `UnpackInfo` для этого с�
 
 Вложенность задаётся через `/` внутри имени entry.
 
-Writer уже пишет базовые Windows attributes:
+Writer поддерживает Windows attributes через `FilesInfo.WinAttrib`:
+
+- attributes пишутся для всех entry;
+- `AllAreDefined = true`;
+- `External = false`;
+- если `WindowsAttributes` не заданы явно, writer выбирает default attributes по типу entry;
+- если `WindowsAttributes` заданы явно, writer пишет переданное значение после validation.
+
+Default attributes:
 
 - `Archive = 0x20` для файлов;
-- `Directory = 0x10` для директорий;
-- attributes пишутся через `FilesInfo.WinAttrib`;
-- `AllAreDefined = true`;
-- `External = false`.
+- `Directory = 0x10` для директорий.
+
+Validation attributes:
+
+- директория должна иметь `Directory` bit;
+- файл не должен иметь `Directory` bit;
+- несогласованные attributes возвращают `InvalidData`.
 
 Writer отклоняет небезопасные path-сценарии:
 
@@ -215,7 +226,6 @@ Magma, Стрибог/KDF и остальные GOST-сценарии остаю
 Дальнейшие направления:
 
 - постепенно расширять `SevenZipArchiveWriter.BuildArchive(...)`;
-- поддержать произвольные file attributes через публичную модель writer-а;
 - поддержать timestamp-метаданные;
 - развивать запись структуры 7z;
 - развивать `StreamsInfo`;
