@@ -120,6 +120,17 @@ Validation attributes:
 - файл не должен иметь `Directory` bit;
 - несогласованные attributes возвращают `InvalidData`.
 
+Writer поддерживает время последней модификации через `FilesInfo.MTime`.
+
+Контракт:
+
+- время задаётся через `SevenZipArchiveWriterEntry.LastWriteTimeUtc`;
+- writer пишет только `MTime`;
+- `CTime` и `ATime` пока не пишутся;
+- время должно быть UTC;
+- частично заданные значения пишутся через defined bit-vector;
+- `External = false`.
+
 Writer отклоняет небезопасные path-сценарии:
 
 - absolute path;
@@ -226,7 +237,7 @@ Magma, Стрибог/KDF и остальные GOST-сценарии остаю
 Дальнейшие направления:
 
 - постепенно расширять `SevenZipArchiveWriter.BuildArchive(...)`;
-- поддержать timestamp-метаданные;
+- поддержать `CTime` и `ATime`;
 - развивать запись структуры 7z;
 - развивать `StreamsInfo`;
 - развивать `FilesInfo`;

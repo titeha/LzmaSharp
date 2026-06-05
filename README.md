@@ -33,7 +33,8 @@
 - имя entry;
 - содержимое;
 - признак директории;
-- опциональные Windows attributes.
+- опциональные Windows attributes;
+- опциональное время последней записи UTC.
 
 Сейчас writer поддерживает:
 
@@ -70,6 +71,21 @@ Validation attributes:
 
 - файл с `Archive | ReadOnly`;
 - директория с `Directory | ReadOnly`.
+
+Writer поддерживает запись времени последней модификации через `FilesInfo.MTime`.
+
+`SevenZipArchiveWriterEntry` позволяет задать время через `LastWriteTimeUtc`.
+
+Текущий контракт `MTime`:
+
+- writer пишет только `MTime`;
+- `CTime` и `ATime` пока не пишутся;
+- время хранится в формате Windows FILETIME;
+- значение должно иметь `DateTimeKind.Utc`;
+- `DateTimeKind.Local` возвращает `InvalidData`;
+- `DateTimeKind.Unspecified` возвращает `InvalidData`;
+- если `LastWriteTimeUtc` не задан ни у одного entry, `FilesInfo.MTime` не пишется;
+- если время задано только у части entry, writer пишет defined bit-vector.
 
 Поддержанные типы entry:
 
@@ -123,7 +139,7 @@ Writer отклоняет:
 
 Пока writer не поддерживает:
 
-- timestamps;
+- `CTime` и `ATime`;
 - LZMA / LZMA2 writer;
 - AES writer;
 - GOST writer.

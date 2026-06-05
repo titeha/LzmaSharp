@@ -275,7 +275,8 @@ Writer развивается отдельно от уже стабилизир�
 - имя entry;
 - содержимое;
 - признак директории;
-- опциональные Windows attributes.
+- опциональные Windows attributes;
+- опциональное время последней записи UTC.
 
 Результат операции:
 
@@ -399,7 +400,7 @@ Packed data, `MainStreamsInfo`, `PackInfo` и `UnpackInfo` для этого с�
 
 Writer-path пока не поддерживает:
 
-- timestamps;
+- `CTime` и `ATime`;
 - произвольные file attributes через публичную модель writer-а;
 - solid-группировку;
 - LZMA writer;
@@ -436,6 +437,27 @@ Validation attributes:
 - файл не должен иметь `Directory` bit;
 - несогласованные attributes возвращают `InvalidData`.
 
+### MTime writer-а
+
+Writer поддерживает запись времени последней модификации через `FilesInfo.MTime`.
+
+Публичная модель `SevenZipArchiveWriterEntry` позволяет задать время через `LastWriteTimeUtc`.
+
+Текущий контракт:
+
+- writer пишет только `MTime`;
+- `CTime` и `ATime` пока не пишутся;
+- время хранится как Windows FILETIME;
+- время должно быть задано как `DateTimeKind.Utc`;
+- `DateTimeKind.Local` возвращает `InvalidData`;
+- `DateTimeKind.Unspecified` возвращает `InvalidData`;
+- если `LastWriteTimeUtc` не задан ни у одного entry, `FilesInfo.MTime` не пишется;
+- если `LastWriteTimeUtc` задан у всех entry, writer пишет `AllAreDefined = true`;
+- если `LastWriteTimeUtc` задан только у части entry, writer пишет defined bit-vector;
+- `External = false`.
+
+Timestamp payload пишется в порядке entry и содержит только defined timestamps.
+
 ## Контракт ошибок writer-а
 
 Writer использует явный результат операции через `SevenZipArchiveWriteResult`.
@@ -443,7 +465,7 @@ Writer использует явный результат операции че�
 Текущий контракт:
 
 - `Ok` — архив успешно построен;
-- `InvalidData` — некорректные входные данные: `null`, некорректный entry path, директория с данными, дублирующееся имя, конфликт имён или несогласованные Windows attributes;
+- `InvalidData` — некорректные входные данные: `null`, некорректный entry path, директория с данными, дублирующееся имя, конфликт имён, несогласованные Windows attributes или не-UTC `LastWriteTimeUtc`;
 - `NotSupported` — сценарий распознан, но пока не входит в поддержанный writer-path;
 - `InternalError` — неожиданное внутреннее состояние writer-а.
 

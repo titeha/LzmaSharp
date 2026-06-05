@@ -306,11 +306,22 @@ Writer возвращает `InvalidData`, если parent-entry найден к
 
 Полные path, отличающиеся только регистром, также возвращают `InvalidData`.
 
+Writer поддерживает `FilesInfo.MTime`:
+
+- время задаётся через `SevenZipArchiveWriterEntry.LastWriteTimeUtc`;
+- writer пишет только `MTime`;
+- `CTime` и `ATime` пока не пишутся;
+- значение должно иметь `DateTimeKind.Utc`;
+- `DateTimeKind.Local` и `DateTimeKind.Unspecified` возвращают `InvalidData`;
+- если время не задано ни у одного entry, `FilesInfo.MTime` не пишется;
+- если время задано частично, writer пишет defined bit-vector;
+- `External = false`.
+
 ### Основные направления
 
 - постепенно расширять уже добавленный `SevenZipArchiveWriter.BuildArchive(...)`;
 - развивать путь записи архивов 7z от текущего `Copy`-writer-а к более полному writer-у;
-- поддержать timestamp-метаданные;
+- поддержать `CTime` и `ATime`;
 - усилить и расширить энкодер `LZMA`;
 - усилить и расширить энкодер `LZMA2`;
 - добавить тесты совместимости в обе стороны:
