@@ -73,7 +73,8 @@ Writer реализуется снизу вверх:
 - имя;
 - содержимое;
 - признак директории;
-- опциональные Windows attributes.
+- опциональные Windows attributes;
+- опциональное время последней записи UTC.
 
 Основной публичный вход writer-а сейчас — `BuildArchive(...)`.
 
@@ -220,11 +221,21 @@ Packed data, `MainStreamsInfo`, `PackInfo` и `UnpackInfo` для этого с�
 - структурный тест проверяет `WinAttrib` payload для 9 entry;
 - структурный тест проверяет `AllAreDefined = true`;
 - структурный тест проверяет `External = false`;
-- структурный тест проверяет порядок `UINT32` attributes в payload.
+- структурный тест проверяет порядок `UINT32` attributes в payload;
+- entry без `LastWriteTimeUtc` не создаёт `FilesInfo.MTime`;
+- entry с `LastWriteTimeUtc` создаёт `FilesInfo.MTime`;
+- частично заданный `LastWriteTimeUtc` пишет defined bit-vector;
+- `DateTimeKind.Local` возвращает `InvalidData`;
+- `DateTimeKind.Unspecified` возвращает `InvalidData`;
+- структурный тест проверяет `MTime` payload;
+- структурный тест проверяет `AllAreDefined = false`;
+- структурный тест проверяет второй байт defined bit-vector для `MTime`;
+- структурный тест проверяет `External = false`;
+- структурный тест проверяет порядок `REAL_UINT64` timestamp payload.
 
 Пока не поддержано:
 
-- timestamps;
+- `CTime` и `ATime`;
 - platform-specific attributes кроме текущего `WinAttrib` поля;
 - solid-группировка;
 - LZMA writer;
@@ -263,6 +274,38 @@ Validation attributes:
 - директория с `Directory | ReadOnly` разрешена;
 - директория без `Directory` bit возвращает `InvalidData`;
 - файл с `Directory` bit возвращает `InvalidData`.
+
+## MTime
+
+Writer поддерживает запись времени последней модификации через `FilesInfo.MTime`.
+
+Публичная модель `SevenZipArchiveWriterEntry` позволяет задать время через `LastWriteTimeUtc`.
+
+Текущий контракт:
+
+- writer пишет только `MTime`;
+- `CTime` и `ATime` пока не пишутся;
+- время хранится в формате Windows FILETIME;
+- время должно быть задано как `DateTimeKind.Utc`;
+- `DateTimeKind.Local` возвращает `InvalidData`;
+- `DateTimeKind.Unspecified` возвращает `InvalidData`;
+- значение, которое нельзя представить как FILETIME, возвращает `InvalidData`.
+
+Если `LastWriteTimeUtc` не задан ни у одного entry, writer не пишет `FilesInfo.MTime`.
+
+Если `LastWriteTimeUtc` задан у всех entry:
+
+- `AllAreDefined = true`;
+- defined bit-vector не пишется;
+- `External = false`;
+- timestamps пишутся в порядке entry.
+
+Если `LastWriteTimeUtc` задан только у части entry:
+
+- `AllAreDefined = false`;
+- writer пишет defined bit-vector;
+- `External = false`;
+- timestamp payload содержит только значения для defined entry.
 
 ## Промежуточный итог writer-а простых entry
 

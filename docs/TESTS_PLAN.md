@@ -326,13 +326,24 @@ GOST-сценарии тестируются synthetic-архивами.
 - parent-file conflict возвращает `InvalidData`;
 - parent-directory другого регистра разрешает вложенный entry;
 - parent-file другого регистра возвращает `InvalidData`;
-- вложенные path, отличающиеся только регистром, возвращают `InvalidData`.
+- вложенные path, отличающиеся только регистром, возвращают `InvalidData`;
+- writer пишет `FilesInfo.MTime` для entry с `LastWriteTimeUtc`;
+- writer не пишет `FilesInfo.MTime`, если `LastWriteTimeUtc` не задан ни у одного entry;
+- частично заданный `LastWriteTimeUtc` пишет defined bit-vector;
+- `DateTimeKind.Utc` разрешён для `LastWriteTimeUtc`;
+- `DateTimeKind.Local` возвращает `InvalidData`;
+- `DateTimeKind.Unspecified` возвращает `InvalidData`;
+- структурная проверка `MTime` payload;
+- проверка `AllAreDefined = false` для частично заданного `MTime`;
+- проверка второго байта defined bit-vector для `MTime`;
+- проверка `External = false` для `MTime`;
+- проверка порядка `REAL_UINT64` timestamp payload.
 
 Дальнейшие writer-тесты должны добавляться только под конкретный реализуемый сценарий.
 
 Минимальный набор дальнейших направлений:
 
-- timestamp-метаданные;
+- `CTime` и `ATime`;
 - LZMA writer;
 - LZMA2 writer;
 - round-trip внутри собственных компонентов проекта;
