@@ -301,7 +301,8 @@ dotnet test
   - запись архива с одним непустым файлом через `Copy`;
   - запись архива с несколькими непустыми файлами через `Copy`;
   - запись архивов с безопасными вложенными `/`-paths;
-  - запись базовых `FilesInfo.WinAttrib` для файлов и директорий;
+  - запись `FilesInfo.WinAttrib` для default и пользовательских Windows attributes;
+  - запись `FilesInfo.MTime` для заданного `LastWriteTimeUtc`;
   - round-trip проверки writer-сценариев через существующий decoder-path.
 
 ### Поддерживаемые методы чтения 7z
@@ -541,7 +542,8 @@ Magma и остальные GOST-алгоритмы будут рассматр�
 - непустые файлы через `Copy`;
 - mixed Copy-сценарии с empty entries и непустыми файлами;
 - безопасные вложенные `/`-paths;
-- базовые `FilesInfo.WinAttrib` для файлов и директорий;
+- `FilesInfo.WinAttrib` для default и пользовательских Windows attributes;
+- `FilesInfo.MTime` для заданного `LastWriteTimeUtc`;
 - CRC для packed stream-ов, folder stream-ов и файлов в `Copy`-сценариях;
 - структурные тесты через `SevenZipArchiveReader`;
 - round-trip тесты через существующий decoder-path.

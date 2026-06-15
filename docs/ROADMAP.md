@@ -230,7 +230,8 @@ Magma, полноценный KDF через Стрибог и остальны�
 - непустые файлы через `Copy`;
 - mixed Copy-сценарии;
 - безопасные вложенные `/`-paths;
-- базовые `FilesInfo.WinAttrib`.
+- `FilesInfo.WinAttrib` с default и пользовательскими Windows attributes;
+- `FilesInfo.MTime` для заданного `LastWriteTimeUtc`.
 
 Детальный промежуточный итог writer-а описан ниже.
 
