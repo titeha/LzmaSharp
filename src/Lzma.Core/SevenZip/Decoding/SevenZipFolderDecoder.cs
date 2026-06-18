@@ -1,8 +1,8 @@
 using System.Buffers.Binary;
-using System.IO.Compression;
 
 using ICSharpCode.SharpZipLib.BZip2;
 
+using Lzma.Core.Deflate;
 using Lzma.Core.Lzma1;
 using Lzma.Core.Lzma2;
 
@@ -513,7 +513,7 @@ public static class SevenZipFolderDecoder
   }
 
   /// <summary>
-  /// Декодирует одиночный coder <c>Deflate</c> (method id { 04 01 08 }) через <see cref="DeflateStream"/>.
+  /// Декодирует одиночный coder <c>Deflate</c> (method id { 04 01 08 }) собственным DEFLATE-декодером.
   /// </summary>
   private static SevenZipFolderDecodeResult TryDecodeDeflateCoder(
       ReadOnlySpan<byte> input,
@@ -522,54 +522,27 @@ public static class SevenZipFolderDecoder
   {
     decoded = new byte[expectedUnpackSize];
 
-    try
-    {
-      // DeflateStream принимает Stream; делаем MemoryStream по входным байтам.
-      // (Да, тут есть копия input -> byte[]. Оптимизацию без копии можно сделать позже отдельным шагом.)
-      byte[] src = input.ToArray();
+    DeflateDecodeResult result = DeflateDecoder.Decode(
+        input,
+        decoded,
+        out int bytesConsumed,
+        out int bytesWritten);
 
-      using var ms = new MemoryStream(src, writable: false);
-      using var ds = new DeflateStream(ms, CompressionMode.Decompress, leaveOpen: true);
-
-      int written = 0;
-
-      while (written < decoded.Length)
-      {
-        int n = ds.Read(decoded, written, decoded.Length - written);
-        if (n == 0)
-          break;
-
-        written += n;
-      }
-
-      if (written != decoded.Length)
-      {
-        decoded = [];
-        return SevenZipFolderDecodeResult.InvalidData;
-      }
-
-      // Не должно быть лишних распакованных байт.
-      if (ds.ReadByte() != -1)
-      {
-        decoded = [];
-        return SevenZipFolderDecodeResult.InvalidData;
-      }
-
-      // Хвост в packed stream обычно недопустим. Но если он состоит только из нулей — допускаем,
-      // чтобы поведение было похоже на LZMA2 ветку (и не падать на возможном паддинге).
-      if (ms.Position < ms.Length && !IsZeroTail(input, (int)ms.Position))
-      {
-        decoded = [];
-        return SevenZipFolderDecodeResult.InvalidData;
-      }
-
-      return SevenZipFolderDecodeResult.Ok;
-    }
-    catch (InvalidDataException)
+    if (result != DeflateDecodeResult.Ok || bytesWritten != expectedUnpackSize)
     {
       decoded = [];
       return SevenZipFolderDecodeResult.InvalidData;
     }
+
+    // Хвост в packed stream обычно недопустим, но нулевое выравнивание допускаем
+    // (как в LZMA2/BZip2 ветках).
+    if (bytesConsumed < input.Length && !IsZeroTail(input, bytesConsumed))
+    {
+      decoded = [];
+      return SevenZipFolderDecodeResult.InvalidData;
+    }
+
+    return SevenZipFolderDecodeResult.Ok;
   }
 
   /// <summary>
