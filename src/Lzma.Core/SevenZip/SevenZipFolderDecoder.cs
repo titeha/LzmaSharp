@@ -338,103 +338,16 @@ public static class SevenZipFolderDecoder
       }
 
       if (IsSingleByteMethodId(coder.MethodId, _methodIdCopy))
-      {
-        decoded = input.ToArray();
-        return decoded.Length == expectedUnpackSize
-          ? SevenZipFolderDecodeResult.Ok
-          : SevenZipFolderDecodeResult.InvalidData;
-      }
+        return TryDecodeCopyCoder(input, expectedUnpackSize, out decoded);
 
       if (IsSingleByteMethodId(coder.MethodId, _methodIdDelta))
-      {
-        // Delta filter (0x03):
-        // Properties: 1 byte, prop = delta - 1 => delta = prop + 1, диапазон 1..256.
-        int delta;
-
-        if (coder.Properties is null || coder.Properties.Length == 0) // На всякий случай: если props отсутствуют, считаем delta=1.
-          delta = 1;
-        else if (coder.Properties.Length == 1)
-          delta = coder.Properties[0] + 1;
-        else
-        {
-          decoded = [];
-          return SevenZipFolderDecodeResult.InvalidData;
-        }
-
-        if ((uint)(delta - 1) > 255u) // delta must be 1..256
-        {
-          decoded = [];
-          return SevenZipFolderDecodeResult.InvalidData;
-        }
-
-        // Delta не меняет размер.
-        if (input.Length != expectedUnpackSize)
-        {
-          decoded = [];
-          return SevenZipFolderDecodeResult.InvalidData;
-        }
-
-        decoded = input.ToArray();
-
-        // Decode: out[i] = in[i] + out[i-delta] (mod 256), i>=delta.
-        // Первые delta байт остаются как есть (state=0).
-        Span<byte> dst = decoded;
-        for (int i = delta; i < dst.Length; i++)
-          dst[i] = unchecked((byte)(dst[i] + dst[i - delta]));
-
-        return SevenZipFolderDecodeResult.Ok;
-      }
+        return TryDecodeDeltaCoder(coder, input, expectedUnpackSize, out decoded);
 
       if (IsSwap2MethodId(coder.MethodId))
-      {
-        // Swap2: меняем местами байты в каждом 2-байтном слове.
-        // В 7-Zip фильтр обрабатывает только полные блоки; хвост < 2 байт остаётся как есть.
-        if (coder.Properties is not null && coder.Properties.Length != 0)
-        {
-          decoded = [];
-          return SevenZipFolderDecodeResult.InvalidData;
-        }
-
-        if (input.Length != expectedUnpackSize)
-        {
-          decoded = [];
-          return SevenZipFolderDecodeResult.InvalidData;
-        }
-
-        decoded = input.ToArray();
-
-        for (int i = 0; i + 2 <= decoded.Length; i += 2)
-          (decoded[i + 1], decoded[i]) = (decoded[i], decoded[i + 1]);
-
-        return SevenZipFolderDecodeResult.Ok;
-      }
+        return TryDecodeSwap2Coder(coder, input, expectedUnpackSize, out decoded);
 
       if (IsSwap4MethodId(coder.MethodId))
-      {
-        // Swap4: реверс байтов в каждом 4-байтном слове.
-        // Хвост < 4 байт остаётся как есть.
-        if (coder.Properties is not null && coder.Properties.Length != 0)
-        {
-          decoded = [];
-          return SevenZipFolderDecodeResult.InvalidData;
-        }
-
-        if (input.Length != expectedUnpackSize)
-        {
-          decoded = [];
-          return SevenZipFolderDecodeResult.InvalidData;
-        }
-
-        decoded = input.ToArray();
-
-        for (int i = 0; i + 4 <= decoded.Length; i += 4)
-        {
-          (decoded[i], decoded[i + 3]) = (decoded[i + 3], decoded[i]);
-          (decoded[i + 1], decoded[i + 2]) = (decoded[i + 2], decoded[i + 1]);
-        }
-
-        return SevenZipFolderDecodeResult.Ok;
-      }
+        return TryDecodeSwap4Coder(coder, input, expectedUnpackSize, out decoded);
 
       if (IsBcjX86MethodId(coder.MethodId))
       {
@@ -1135,6 +1048,129 @@ public static class SevenZipFolderDecoder
       return SevenZipFolderDecodeResult.NotSupported;
 
     output = lastDecoded;
+    return SevenZipFolderDecodeResult.Ok;
+  }
+
+  /// <summary>
+  /// Декодирует одиночный coder <c>Copy</c> (0x00): данные копируются как есть.
+  /// </summary>
+  private static SevenZipFolderDecodeResult TryDecodeCopyCoder(
+      ReadOnlySpan<byte> input,
+      int expectedUnpackSize,
+      out byte[] decoded)
+  {
+    decoded = input.ToArray();
+    return decoded.Length == expectedUnpackSize
+      ? SevenZipFolderDecodeResult.Ok
+      : SevenZipFolderDecodeResult.InvalidData;
+  }
+
+  /// <summary>
+  /// Декодирует одиночный coder <c>Delta</c> (0x03).
+  /// </summary>
+  private static SevenZipFolderDecodeResult TryDecodeDeltaCoder(
+      SevenZipCoderInfo coder,
+      ReadOnlySpan<byte> input,
+      int expectedUnpackSize,
+      out byte[] decoded)
+  {
+    // Properties: 1 byte, prop = delta - 1 => delta = prop + 1, диапазон 1..256.
+    int delta;
+
+    if (coder.Properties is null || coder.Properties.Length == 0) // На всякий случай: если props отсутствуют, считаем delta=1.
+      delta = 1;
+    else if (coder.Properties.Length == 1)
+      delta = coder.Properties[0] + 1;
+    else
+    {
+      decoded = [];
+      return SevenZipFolderDecodeResult.InvalidData;
+    }
+
+    if ((uint)(delta - 1) > 255u) // delta must be 1..256
+    {
+      decoded = [];
+      return SevenZipFolderDecodeResult.InvalidData;
+    }
+
+    // Delta не меняет размер.
+    if (input.Length != expectedUnpackSize)
+    {
+      decoded = [];
+      return SevenZipFolderDecodeResult.InvalidData;
+    }
+
+    decoded = input.ToArray();
+
+    // Decode: out[i] = in[i] + out[i-delta] (mod 256), i>=delta.
+    // Первые delta байт остаются как есть (state=0).
+    Span<byte> dst = decoded;
+    for (int i = delta; i < dst.Length; i++)
+      dst[i] = unchecked((byte)(dst[i] + dst[i - delta]));
+
+    return SevenZipFolderDecodeResult.Ok;
+  }
+
+  /// <summary>
+  /// Декодирует одиночный coder <c>Swap2</c>: обмен байтов в каждом 2-байтном слове.
+  /// </summary>
+  private static SevenZipFolderDecodeResult TryDecodeSwap2Coder(
+      SevenZipCoderInfo coder,
+      ReadOnlySpan<byte> input,
+      int expectedUnpackSize,
+      out byte[] decoded)
+  {
+    // В 7-Zip фильтр обрабатывает только полные блоки; хвост < 2 байт остаётся как есть.
+    if (coder.Properties is not null && coder.Properties.Length != 0)
+    {
+      decoded = [];
+      return SevenZipFolderDecodeResult.InvalidData;
+    }
+
+    if (input.Length != expectedUnpackSize)
+    {
+      decoded = [];
+      return SevenZipFolderDecodeResult.InvalidData;
+    }
+
+    decoded = input.ToArray();
+
+    for (int i = 0; i + 2 <= decoded.Length; i += 2)
+      (decoded[i + 1], decoded[i]) = (decoded[i], decoded[i + 1]);
+
+    return SevenZipFolderDecodeResult.Ok;
+  }
+
+  /// <summary>
+  /// Декодирует одиночный coder <c>Swap4</c>: реверс байтов в каждом 4-байтном слове.
+  /// </summary>
+  private static SevenZipFolderDecodeResult TryDecodeSwap4Coder(
+      SevenZipCoderInfo coder,
+      ReadOnlySpan<byte> input,
+      int expectedUnpackSize,
+      out byte[] decoded)
+  {
+    // Хвост < 4 байт остаётся как есть.
+    if (coder.Properties is not null && coder.Properties.Length != 0)
+    {
+      decoded = [];
+      return SevenZipFolderDecodeResult.InvalidData;
+    }
+
+    if (input.Length != expectedUnpackSize)
+    {
+      decoded = [];
+      return SevenZipFolderDecodeResult.InvalidData;
+    }
+
+    decoded = input.ToArray();
+
+    for (int i = 0; i + 4 <= decoded.Length; i += 4)
+    {
+      (decoded[i], decoded[i + 3]) = (decoded[i + 3], decoded[i]);
+      (decoded[i + 1], decoded[i + 2]) = (decoded[i + 2], decoded[i + 1]);
+    }
+
     return SevenZipFolderDecodeResult.Ok;
   }
 
