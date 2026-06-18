@@ -1,0 +1,83 @@
+using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
+
+using Lzma.Core.SevenZip;
+
+namespace Lzma.Core.Tests.SevenZip;
+
+public sealed class SevenZipReal7zBcj2Tests
+{
+  [Fact]
+  public void DecodeToArray_Real7z_7Zip_Bcj2_Ok()
+  {
+    byte[] archive = ReadTestDataBytes("../TestData/Real/bcj2_x86_lzma2_d1m_mhc.7z");
+
+    // 1) Парсинг header должен работать и показать BCJ2 coder.
+    var reader = new SevenZipArchiveReader();
+    Assert.Equal(SevenZipArchiveReadResult.Ok, reader.Read(archive, out int readConsumed));
+    Assert.Equal(archive.Length, readConsumed);
+
+    SevenZipHeader header = reader.Header!.Value;
+    SevenZipFolder folder = header.StreamsInfo.UnpackInfo!.Folders[0];
+
+    Assert.Contains(folder.Coders, c => IsBcj2(c.MethodId));
+
+    var bcj2 = folder.Coders.First(c => IsBcj2(c.MethodId));
+    Assert.True(bcj2.NumInStreams != 1 || bcj2.NumOutStreams != 1);
+
+    // 2) Декодирование BCJ2 уже поддержано и должно успешно вернуть файл.
+    SevenZipArchiveDecodeResult r = SevenZipArchiveDecoder.DecodeToArray(
+      archive,
+      out SevenZipDecodedFile[] files,
+      out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, r);
+    Assert.Equal(archive.Length, bytesConsumed);
+
+    Assert.Single(files);
+    Assert.EndsWith("bcj2_x86.bin", files[0].Name, StringComparison.Ordinal);
+
+    byte[] expected = BuildX86LikeBytes(4096);
+    Assert.Equal(expected, files[0].Bytes);
+  }
+
+  private static bool IsBcj2(byte[] methodId)
+  {
+    // BCJ2 обычно идёт как 4 байта 03 03 01 1B.
+    // На всякий случай допускаем и короткий 1B.
+    return
+      methodId.Length == 1 && methodId[0] == 0x1B ||
+      methodId.Length == 4 &&
+      methodId[0] == 0x03 &&
+      methodId[1] == 0x03 &&
+      methodId[2] == 0x01 &&
+      methodId[3] == 0x1B;
+  }
+
+  private static byte[] ReadTestDataBytes(string relativePathFromSevenZipFolder, [CallerFilePath] string callerFile = "")
+  {
+    string dir = Path.GetDirectoryName(callerFile)!;
+    string fullPath = Path.GetFullPath(Path.Combine(dir, relativePathFromSevenZipFolder));
+    return File.ReadAllBytes(fullPath);
+  }
+
+  private static byte[] BuildX86LikeBytes(int length)
+  {
+    var data = new byte[length];
+    for (int i = 0; i < data.Length; i++)
+      data[i] = 0x90;
+
+    WriteRel32(data, pos: 0x00, opcode: 0xE8, target: 0x200);
+    WriteRel32(data, pos: 0x40, opcode: 0xE9, target: 0x300);
+    WriteRel32(data, pos: 0x80, opcode: 0xE8, target: 0x180);
+
+    return data;
+  }
+
+  private static void WriteRel32(byte[] data, int pos, byte opcode, int target)
+  {
+    data[pos] = opcode;
+    int rel = target - (pos + 5);
+    BinaryPrimitives.WriteInt32LittleEndian(data.AsSpan(pos + 1, 4), rel);
+  }
+}
