@@ -58,7 +58,7 @@ public sealed class SevenZipArchiveWriterMixedCopyStructureTests
 
     AssertPackInfo(header, firstContent.Length, secondContent.Length, firstCrc, secondCrc);
     AssertUnpackInfo(header, firstContent.Length, secondContent.Length, firstCrc, secondCrc);
-    AssertFilesInfo(header, firstCrc, secondCrc);
+    AssertFilesInfo(header);
 
     AssertBitVectorProperty(
         reader.NextHeaderBytes.Span,
@@ -77,10 +77,6 @@ public sealed class SevenZipArchiveWriterMixedCopyStructureTests
     byte[] firstContent = [1];
     byte[] secondContent = [2, 3];
     byte[] thirdContent = [4, 5, 6];
-
-    uint firstCrc = Crc32.Compute(firstContent);
-    uint secondCrc = Crc32.Compute(secondContent);
-    uint thirdCrc = Crc32.Compute(thirdContent);
 
     SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
         [
@@ -161,43 +157,10 @@ public sealed class SevenZipArchiveWriterMixedCopyStructureTests
         ],
         filesInfo.EmptyFiles!);
 
-    Assert.True(filesInfo.HasCrc);
-    Assert.NotNull(filesInfo.CrcDefined);
-    Assert.NotNull(filesInfo.Crc);
-
-    Assert.Equal(
-        [
-            false,
-            true,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-        ],
-        filesInfo.CrcDefined!);
-
-    Assert.Equal(
-        [
-            0U,
-            firstCrc,
-            0U,
-            0U,
-            secondCrc,
-            0U,
-            0U,
-            0U,
-            thirdCrc,
-            0U,
-            0U,
-            0U,
-        ],
-        filesInfo.Crc!);
+    // CRC файлов в FilesInfo не пишем: целостность покрыта folder-CRC в UnpackInfo.
+    Assert.False(filesInfo.HasCrc);
+    Assert.Null(filesInfo.CrcDefined);
+    Assert.Null(filesInfo.Crc);
 
     AssertBitVectorProperty(
         reader.NextHeaderBytes.Span,
@@ -208,47 +171,6 @@ public sealed class SevenZipArchiveWriterMixedCopyStructureTests
         reader.NextHeaderBytes.Span,
         SevenZipNid.EmptyFile,
         expectedBytes: [0xAD, 0x80]);
-
-    AssertFilesInfoCrcDefinedBitVectorProperty(
-        reader.NextHeaderBytes.Span,
-        expectedBytes: [0x48, 0x80]);
-  }
-
-  private static void AssertFilesInfoCrcDefinedBitVectorProperty(
-    ReadOnlySpan<byte> nextHeader,
-    byte[] expectedBytes)
-  {
-    int propertyOffset = FindFilesInfoCrcPropertyOffset(nextHeader, expectedBytes.Length);
-
-    Assert.True(propertyOffset >= 0);
-
-    int propertySizeOffset = propertyOffset + 1;
-    int allAreDefinedOffset = propertySizeOffset + 1;
-    int bitVectorOffset = allAreDefinedOffset + 1;
-
-    Assert.Equal((byte)(1 + expectedBytes.Length + (3 * 4)), nextHeader[propertySizeOffset]);
-    Assert.Equal(0x00, nextHeader[allAreDefinedOffset]);
-
-    ReadOnlySpan<byte> actualBytes = nextHeader.Slice(
-        bitVectorOffset,
-        expectedBytes.Length);
-
-    Assert.Equal(expectedBytes, actualBytes.ToArray());
-  }
-
-  private static int FindFilesInfoCrcPropertyOffset(
-      ReadOnlySpan<byte> nextHeader,
-      int expectedBitVectorLength)
-  {
-    byte expectedPropertySize = (byte)(1 + expectedBitVectorLength + (3 * 4));
-
-    for (int i = 0; i <= nextHeader.Length - 3 - expectedBitVectorLength; i++)
-      if (nextHeader[i] == SevenZipNid.Crc
-                && nextHeader[i + 1] == expectedPropertySize
-                && nextHeader[i + 2] == 0x00)
-        return i;
-
-    return -1;
   }
 
   private static void AssertPackInfo(
@@ -319,10 +241,7 @@ public sealed class SevenZipArchiveWriterMixedCopyStructureTests
     Assert.Equal(1UL, coder.NumOutStreams);
   }
 
-  private static void AssertFilesInfo(
-      SevenZipHeader header,
-      uint firstCrc,
-      uint secondCrc)
+  private static void AssertFilesInfo(SevenZipHeader header)
   {
     SevenZipFilesInfo filesInfo = header.FilesInfo;
 
@@ -347,12 +266,10 @@ public sealed class SevenZipArchiveWriterMixedCopyStructureTests
     Assert.False(filesInfo.HasAnti);
     Assert.Null(filesInfo.Anti);
 
-    Assert.True(filesInfo.HasCrc);
-    Assert.NotNull(filesInfo.CrcDefined);
-    Assert.NotNull(filesInfo.Crc);
-
-    Assert.Equal([false, true, false, true], filesInfo.CrcDefined!);
-    Assert.Equal([0U, firstCrc, 0U, secondCrc], filesInfo.Crc!);
+    // CRC файлов в FilesInfo не пишем: целостность покрыта folder-CRC в UnpackInfo.
+    Assert.False(filesInfo.HasCrc);
+    Assert.Null(filesInfo.CrcDefined);
+    Assert.Null(filesInfo.Crc);
   }
 
   private static void AssertBitVectorProperty(

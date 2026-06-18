@@ -57,13 +57,18 @@ Windows attributes, опциональное `LastWriteTimeUtc`. Результ�
 
 Для empty-entry path формируется только header-структура (`FilesInfo`, `EmptyStream`,
 `EmptyFile`, имена). Для `Copy` path packed data, `PackInfo` и `UnpackInfo` формируются
-только для непустых файлов; `FilesInfo` описывает все entry. Для непустых файлов считаются
-CRC packed stream-а, folder stream-а и файла. Вложенный path сохраняется в `FilesInfo.Names`
-как имя entry (например, `dir/file.bin`).
+только для непустых файлов; `FilesInfo` описывает все entry. Для непустых файлов CRC
+считается в `PackInfo` (packed stream) и `UnpackInfo` (folder stream). Вложенный path
+сохраняется в `FilesInfo.Names` как имя entry (например, `dir/file.bin`).
+
+CRC файлов в блок `FilesInfo` **не** пишется: `kCRC` не входит в свойства `FilesInfo` по
+формату 7z, и настоящий 7-Zip помечает такой архив как «Unsupported feature». Целостность
+непустых файлов уже покрыта folder-CRC в `UnpackInfo` (в `Copy`-раскладке на каждый файл —
+свой folder). Архивы writer-а проверены на чтение настоящим 7-Zip (`7z t` / `7z x`) без
+предупреждений.
 
 В mixed-сценарии: пустой файл → `EmptyStream = true`, `EmptyFile = true`; пустая директория
-→ `EmptyStream = true`, `EmptyFile = false`; непустой файл → `EmptyStream = false`;
-`FilesInfo.Crc` задаётся через defined bit-vector только для непустых файлов.
+→ `EmptyStream = true`, `EmptyFile = false`; непустой файл → `EmptyStream = false`.
 
 ### Windows attributes (`FilesInfo.WinAttrib`)
 

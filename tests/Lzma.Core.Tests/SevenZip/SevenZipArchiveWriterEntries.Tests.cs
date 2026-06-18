@@ -157,7 +157,7 @@ public sealed class SevenZipArchiveWriterEntriesTests
   }
 
   [Fact]
-  public void BuildArchive_ПовреждениеФайловогоCrcВHeaderДаётInvalidData()
+  public void BuildArchive_ПовреждениеFolderCrcВHeaderДаётInvalidData()
   {
     byte[] content = [1, 2, 3, 4, 5];
 
@@ -168,7 +168,7 @@ public sealed class SevenZipArchiveWriterEntriesTests
     Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
     Assert.NotEmpty(archive);
 
-    CorruptLastCrcPropertyInNextHeaderAndRefreshHeaderCrc(
+    CorruptFolderCrcInNextHeaderAndRefreshHeaderCrc(
         archive,
         packedDataLength: content.Length);
 
@@ -921,7 +921,7 @@ public sealed class SevenZipArchiveWriterEntriesTests
     Assert.Empty(archive);
   }
 
-  private static void CorruptLastCrcPropertyInNextHeaderAndRefreshHeaderCrc(
+  private static void CorruptFolderCrcInNextHeaderAndRefreshHeaderCrc(
     byte[] archive,
     int packedDataLength)
   {
@@ -929,11 +929,12 @@ public sealed class SevenZipArchiveWriterEntriesTests
 
     Span<byte> nextHeader = archive.AsSpan(nextHeaderStart);
 
-    int crcPropertyOffset = FindLastCrcPropertyOffset(nextHeader);
+    int crcDigestOffset = FindSingleFolderCrcDigestOffset(nextHeader);
 
-    Assert.True(crcPropertyOffset >= 0);
+    Assert.True(crcDigestOffset >= 0);
 
-    nextHeader[crcPropertyOffset + 3] ^= 0xFF;
+    // Портим первый байт 4-байтного folder-CRC.
+    nextHeader[crcDigestOffset + 2] ^= 0xFF;
 
     uint nextHeaderCrc = Crc32.Compute(nextHeader);
 
@@ -945,20 +946,23 @@ public sealed class SevenZipArchiveWriterEntriesTests
     signatureHeader.Write(archive);
   }
 
-  private static int FindLastCrcPropertyOffset(ReadOnlySpan<byte> nextHeader)
+  // Находит folder-CRC digest для архива из одного folder-а.
+  // Это kCRC + AllAreDefined(0x01) + один 4-байтный CRC, после которого идёт
+  // конец UnpackInfo, конец MainStreamsInfo и начало FilesInfo: 00 00 05.
+  private static int FindSingleFolderCrcDigestOffset(ReadOnlySpan<byte> nextHeader)
   {
-    int result = -1;
-
-    for (int i = 0; i <= nextHeader.Length - 7; i++)
+    for (int i = 0; i + 8 < nextHeader.Length; i++)
     {
       if (nextHeader[i] == SevenZipNid.Crc
-          && nextHeader[i + 1] == 0x05
-          && nextHeader[i + 2] == 0x01)
+          && nextHeader[i + 1] == 0x01
+          && nextHeader[i + 6] == SevenZipNid.End
+          && nextHeader[i + 7] == SevenZipNid.End
+          && nextHeader[i + 8] == SevenZipNid.FilesInfo)
       {
-        result = i;
+        return i;
       }
     }
 
-    return result;
+    return -1;
   }
 }

@@ -50,7 +50,7 @@ public sealed class SevenZipArchiveWriterNestedPathStructureTests
 
     AssertPackInfo(header, content.Length, contentCrc);
     AssertUnpackInfo(header, content.Length, contentCrc);
-    AssertFilesInfo(header, contentCrc);
+    AssertFilesInfo(header);
 
     AssertBitVectorProperty(
         reader.NextHeaderBytes.Span,
@@ -61,10 +61,6 @@ public sealed class SevenZipArchiveWriterNestedPathStructureTests
         reader.NextHeaderBytes.Span,
         SevenZipNid.EmptyFile,
         expectedBytes: [0x40]);
-
-    AssertFilesInfoCrcDefinedBitVectorProperty(
-        reader.NextHeaderBytes.Span,
-        expectedBytes: [0x20]);
   }
 
   private static void AssertPackInfo(
@@ -126,9 +122,7 @@ public sealed class SevenZipArchiveWriterNestedPathStructureTests
     Assert.Equal([contentCrc], unpackInfo.FolderCrc!);
   }
 
-  private static void AssertFilesInfo(
-      SevenZipHeader header,
-      uint contentCrc)
+  private static void AssertFilesInfo(SevenZipHeader header)
   {
     SevenZipFilesInfo filesInfo = header.FilesInfo;
 
@@ -146,12 +140,10 @@ public sealed class SevenZipArchiveWriterNestedPathStructureTests
     Assert.NotNull(filesInfo.EmptyFiles);
     Assert.Equal([false, true, false], filesInfo.EmptyFiles!);
 
-    Assert.True(filesInfo.HasCrc);
-    Assert.NotNull(filesInfo.CrcDefined);
-    Assert.NotNull(filesInfo.Crc);
-
-    Assert.Equal([false, false, true], filesInfo.CrcDefined!);
-    Assert.Equal([0U, 0U, contentCrc], filesInfo.Crc!);
+    // CRC файлов в FilesInfo не пишем: целостность покрыта folder-CRC в UnpackInfo.
+    Assert.False(filesInfo.HasCrc);
+    Assert.Null(filesInfo.CrcDefined);
+    Assert.Null(filesInfo.Crc);
   }
 
   private static void AssertBitVectorProperty(
@@ -183,42 +175,4 @@ public sealed class SevenZipArchiveWriterNestedPathStructureTests
     return -1;
   }
 
-  private static void AssertFilesInfoCrcDefinedBitVectorProperty(
-      ReadOnlySpan<byte> nextHeader,
-      byte[] expectedBytes)
-  {
-    int propertyOffset = FindFilesInfoCrcPropertyOffset(nextHeader, expectedBytes.Length);
-
-    Assert.True(propertyOffset >= 0);
-
-    int propertySizeOffset = propertyOffset + 1;
-    int allAreDefinedOffset = propertySizeOffset + 1;
-    int bitVectorOffset = allAreDefinedOffset + 1;
-
-    Assert.Equal((byte)(1 + expectedBytes.Length + 4), nextHeader[propertySizeOffset]);
-    Assert.Equal(0x00, nextHeader[allAreDefinedOffset]);
-
-    ReadOnlySpan<byte> actualBytes = nextHeader.Slice(
-        bitVectorOffset,
-        expectedBytes.Length);
-
-    Assert.Equal(expectedBytes, actualBytes.ToArray());
-  }
-
-  private static int FindFilesInfoCrcPropertyOffset(
-      ReadOnlySpan<byte> nextHeader,
-      int expectedBitVectorLength)
-  {
-    byte expectedPropertySize = (byte)(1 + expectedBitVectorLength + 4);
-
-    for (int i = 0; i <= nextHeader.Length - 3 - expectedBitVectorLength; i++)
-    {
-      if (nextHeader[i] == SevenZipNid.Crc
-          && nextHeader[i + 1] == expectedPropertySize
-          && nextHeader[i + 2] == 0x00)
-        return i;
-    }
-
-    return -1;
-  }
 }

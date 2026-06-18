@@ -44,7 +44,7 @@ public sealed class SevenZipArchiveWriterStructureTests
 
     AssertPackInfo(header, content.Length, contentCrc);
     AssertUnpackInfo(header, content.Length, contentCrc);
-    AssertFilesInfo(header, contentCrc);
+    AssertFilesInfo(header);
   }
 
   private static void AssertPackInfo(
@@ -114,9 +114,7 @@ public sealed class SevenZipArchiveWriterStructureTests
     Assert.Equal(contentCrc, folderCrc);
   }
 
-  private static void AssertFilesInfo(
-      SevenZipHeader header,
-      uint contentCrc)
+  private static void AssertFilesInfo(SevenZipHeader header)
   {
     SevenZipFilesInfo filesInfo = header.FilesInfo;
 
@@ -132,14 +130,9 @@ public sealed class SevenZipArchiveWriterStructureTests
     Assert.False(filesInfo.HasEmptyStreams);
     Assert.False(filesInfo.HasEmptyFiles);
 
-    Assert.True(filesInfo.HasCrc);
-    Assert.NotNull(filesInfo.CrcDefined);
-    Assert.NotNull(filesInfo.Crc);
-
-    bool fileCrcDefined = Assert.Single(filesInfo.CrcDefined);
-    uint fileCrc = Assert.Single(filesInfo.Crc);
-
-    Assert.True(fileCrcDefined);
-    Assert.Equal(contentCrc, fileCrc);
+    // CRC файлов в FilesInfo не пишем: целостность покрыта folder-CRC в UnpackInfo.
+    Assert.False(filesInfo.HasCrc);
+    Assert.Null(filesInfo.CrcDefined);
+    Assert.Null(filesInfo.Crc);
   }
 }

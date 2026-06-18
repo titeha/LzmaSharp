@@ -121,7 +121,7 @@ public static class SevenZipArchiveWriter
 
     if (AllEntriesAreNonEmptyFiles(entries))
     {
-      if (!TryWriteAllNonEmptyCopyEntriesFilesInfo(header, entries, crcs))
+      if (!TryWriteAllNonEmptyCopyEntriesFilesInfo(header, entries))
         return false;
     }
     else if (!TryWriteMixedCopyEntriesFilesInfo(header, entries))
@@ -165,9 +165,9 @@ public static class SevenZipArchiveWriter
     if (!TryWriteWinAttributesProperty(header, entries))
       return false;
 
-    if (!TryWriteMixedCopyEntriesCrcProperty(header, entries))
-      return false;
-
+    // CRC файлов здесь не пишем: kCRC не входит в свойства FilesInfo по формату 7z
+    // (настоящий 7-Zip помечает такой архив как "Unsupported feature"). Целостность
+    // непустых файлов уже покрыта folder-CRC в UnpackInfo (на каждый файл — свой folder).
     header.Add(SevenZipNid.End);
 
     return true;
@@ -232,29 +232,6 @@ public static class SevenZipArchiveWriter
     }
 
     WriteBitVector(destination, bits.Length, index => bits[index]);
-  }
-
-  /// <summary>
-  /// Пишет CRC-свойство FilesInfo для смешанного набора entry.
-  /// CRC задаётся только для непустых файлов.
-  /// </summary>
-  private static bool TryWriteMixedCopyEntriesCrcProperty(List<byte> header, IReadOnlyList<SevenZipArchiveWriterEntry> entries)
-  {
-    bool[] defined = new bool[entries.Count];
-    uint[] crcs = new uint[entries.Count];
-
-    for (int i = 0; i < entries.Count; i++)
-    {
-      SevenZipArchiveWriterEntry entry = entries[i];
-
-      if (!IsNonEmptyFile(entry))
-        continue;
-
-      defined[i] = true;
-      crcs[i] = Crc32.Compute(entry.Content);
-    }
-
-    return TryWriteFilesInfoCrcProperty(header, defined, crcs);
   }
 
   /// <summary>
@@ -429,7 +406,7 @@ public static class SevenZipArchiveWriter
   /// <summary>
   /// Пишет FilesInfo для сценария, где все entry являются непустыми Copy-файлами.
   /// </summary>
-  private static bool TryWriteAllNonEmptyCopyEntriesFilesInfo(List<byte> header, IReadOnlyList<SevenZipArchiveWriterEntry> entries, uint[] crcs)
+  private static bool TryWriteAllNonEmptyCopyEntriesFilesInfo(List<byte> header, IReadOnlyList<SevenZipArchiveWriterEntry> entries)
   {
     if (!TryWriteFilesInfoStart(header, entries.Count))
       return false;
@@ -443,73 +420,12 @@ public static class SevenZipArchiveWriter
     if (!TryWriteWinAttributesProperty(header, entries))
       return false;
 
-    if (!TryWriteDefinedCrcProperty(header, crcs))
-      return false;
-
+    // CRC файлов здесь не пишем: kCRC не входит в свойства FilesInfo по формату 7z
+    // (настоящий 7-Zip помечает такой архив как "Unsupported feature"). Целостность
+    // файлов уже покрыта folder-CRC в UnpackInfo (на каждый файл — свой folder).
     header.Add(SevenZipNid.End);
 
     return true;
-  }
-
-  /// <summary>
-  /// Пишет CRC-свойство FilesInfo с defined bit-vector при необходимости.
-  /// </summary>
-  private static bool TryWriteFilesInfoCrcProperty(
-      List<byte> header,
-      bool[] defined,
-      uint[] crcs)
-  {
-    if (defined.Length != crcs.Length)
-      return false;
-
-    bool allAreDefined = true;
-    int definedCount = 0;
-
-    for (int i = 0; i < defined.Length; i++)
-      if (defined[i])
-        definedCount++;
-      else
-        allAreDefined = false;
-
-    header.Add(SevenZipNid.Crc);
-
-    ulong propertySize =
-        1UL
-        + (allAreDefined ? 0UL : (ulong)GetBitVectorByteCount(defined.Length))
-        + ((ulong)definedCount * 4UL);
-
-    if (!TryWriteUInt64(header, propertySize))
-      return false;
-
-    header.Add(allAreDefined ? (byte)0x01 : (byte)0x00);
-
-    if (!allAreDefined)
-      WriteDefinedBitVector(header, defined);
-
-    for (int i = 0; i < crcs.Length; i++)
-    {
-      if (!defined[i])
-        continue;
-
-      WriteUInt32LittleEndian(header, crcs[i]);
-    }
-
-    return true;
-  }
-
-  /// <summary>
-  /// Пишет CRC-свойство FilesInfo для набора entry с allAreDefined.
-  /// </summary>
-  private static bool TryWriteDefinedCrcProperty(
-    List<byte> header,
-    uint[] crcs)
-  {
-    bool[] defined = new bool[crcs.Length];
-
-    for (int i = 0; i < defined.Length; i++)
-      defined[i] = true;
-
-    return TryWriteFilesInfoCrcProperty(header, defined, crcs);
   }
 
   /// <summary>
