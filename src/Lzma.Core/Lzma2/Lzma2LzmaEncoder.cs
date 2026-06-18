@@ -1,3 +1,5 @@
+using System.Runtime.InteropServices;
+
 using Lzma.Core.Lzma1;
 
 namespace Lzma.Core.Lzma2;
@@ -65,6 +67,76 @@ public static class Lzma2LzmaEncoder
       controlBase: 0xE0, // сброс словаря + сброс состояния + props
       writeProps: true,
       propsByte: lzmaPropertiesByte);
+
+    ms.WriteByte(0x00);
+    return ms.ToArray();
+  }
+
+  /// <summary>
+  /// Кодирует данные в LZMA2 с реальным сжатием через match finder.
+  /// </summary>
+  /// <remarks>
+  /// <para>
+  /// MVP-режим: словарь сбрасывается на каждом чанке (каждый чанк независим — control 0xE0,
+  /// props в каждом LZMA-чанке). Это просто, надёжно и удобно для будущего распараллеливания.
+  /// Несущий словарь между чанками — отдельный поздний шаг.
+  /// </para>
+  /// <para>
+  /// Для каждого чанка выбирается меньший по размеру вариант: LZMA-чанк или COPY-чанк.
+  /// Размер чанка ограничен 64 КБ, потому что и COPY-чанк, и packSize LZMA-чанка хранят
+  /// размер в 16 битах — это гарантирует, что любой чанк представим.
+  /// </para>
+  /// </remarks>
+  public static byte[] Encode(
+    ReadOnlySpan<byte> data,
+    LzmaProperties lzmaProperties,
+    int dictionarySize,
+    int maxUnpackChunkSize = 65536)
+  {
+    ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxUnpackChunkSize);
+
+    if (maxUnpackChunkSize > 65536)
+      throw new ArgumentOutOfRangeException(
+        nameof(maxUnpackChunkSize),
+        "Размер чанка ограничен 64 КБ: COPY-чанк и packSize LZMA-чанка хранят размер в 16 битах.");
+
+    byte propsByte = lzmaProperties.ToByteOrThrow();
+
+    using var ms = new MemoryStream((data.Length / 2) + 64);
+
+    int offset = 0;
+
+    while (offset < data.Length)
+    {
+      int take = Math.Min(maxUnpackChunkSize, data.Length - offset);
+      ReadOnlySpan<byte> slice = data.Slice(offset, take);
+
+      // Сжимаем чанк независимо: match finder работает только в пределах чанка,
+      // потому что словарь сбрасывается на границе.
+      List<LzmaEncodeOp> ops = LzmaMatchFinder.Parse(slice, dictionarySize);
+
+      var encoder = new LzmaEncoder(lzmaProperties, dictionarySize);
+      byte[] payload = encoder.EncodeScript(CollectionsMarshal.AsSpan(ops));
+
+      // Заголовок LZMA-чанка с reset dict + props занимает 6 байт.
+      int lzmaTotalSize = 6 + payload.Length;
+      int copyTotalSize = 3 + take;
+
+      bool lzmaFits = payload.Length <= 65536;
+
+      if (lzmaFits && lzmaTotalSize < copyTotalSize)
+        WriteLzmaChunk(
+          ms,
+          payload,
+          unpackSize: take,
+          controlBase: 0xE0, // сброс словаря + сброс состояния + props
+          writeProps: true,
+          propsByte: propsByte);
+      else
+        WriteCopyChunk(ms, slice, resetDictionary: true);
+
+      offset += take;
+    }
 
     ms.WriteByte(0x00);
     return ms.ToArray();
