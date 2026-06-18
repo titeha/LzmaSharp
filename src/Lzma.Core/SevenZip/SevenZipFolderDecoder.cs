@@ -350,198 +350,25 @@ public static class SevenZipFolderDecoder
         return TryDecodeSwap4Coder(coder, input, expectedUnpackSize, out decoded);
 
       if (IsBcjX86MethodId(coder.MethodId))
-      {
-        // BCJ x86: props обычно нет. Иногда можно встретить startOffset (4 байта LE).
-        uint startOffset = 0;
-
-        if (coder.Properties is not null && coder.Properties.Length != 0)
-        {
-          if (coder.Properties.Length != 4)
-          {
-            decoded = [];
-            return SevenZipFolderDecodeResult.InvalidData;
-          }
-
-          startOffset = BinaryPrimitives.ReadUInt32LittleEndian(coder.Properties);
-        }
-
-        // Фильтр не меняет размер.
-        if (input.Length != expectedUnpackSize)
-        {
-          decoded = [];
-          return SevenZipFolderDecodeResult.InvalidData;
-        }
-
-        decoded = input.ToArray();
-        SevenZipBcjFilters.X86DecodeInPlace(decoded.AsSpan(), startOffset);
-        return SevenZipFolderDecodeResult.Ok;
-      }
+        return TryDecodeBcjCoder(coder, input, expectedUnpackSize, SevenZipBcjFilters.X86DecodeInPlace, out decoded);
 
       if (IsBcjArmMethodId(coder.MethodId))
-      {
-        // BCJ ARM: props обычно нет, но допускаем startOffset (4 байта LE), как и для других BCJ.
-        uint startOffset = 0;
-
-        if (coder.Properties is not null && coder.Properties.Length != 0)
-        {
-          if (coder.Properties.Length != 4)
-          {
-            decoded = [];
-            return SevenZipFolderDecodeResult.InvalidData;
-          }
-
-          startOffset = BinaryPrimitives.ReadUInt32LittleEndian(coder.Properties);
-        }
-
-        // Фильтр не меняет размер.
-        if (input.Length != expectedUnpackSize)
-        {
-          decoded = [];
-          return SevenZipFolderDecodeResult.InvalidData;
-        }
-
-        decoded = input.ToArray();
-        SevenZipBcjFilters.ArmDecodeInPlace(decoded.AsSpan(), startOffset);
-        return SevenZipFolderDecodeResult.Ok;
-      }
+        return TryDecodeBcjCoder(coder, input, expectedUnpackSize, SevenZipBcjFilters.ArmDecodeInPlace, out decoded);
 
       if (IsBcjArmtMethodId(coder.MethodId))
-      {
-        uint startOffset = 0;
-
-        if (coder.Properties is not null && coder.Properties.Length != 0)
-        {
-          if (coder.Properties.Length != 4)
-          {
-            decoded = [];
-            return SevenZipFolderDecodeResult.InvalidData;
-          }
-
-          startOffset = BinaryPrimitives.ReadUInt32LittleEndian(coder.Properties);
-        }
-
-        if (input.Length != expectedUnpackSize)
-        {
-          decoded = [];
-          return SevenZipFolderDecodeResult.InvalidData;
-        }
-
-        decoded = input.ToArray();
-        SevenZipBcjFilters.ArmtDecodeInPlace(decoded.AsSpan(), startOffset);
-        return SevenZipFolderDecodeResult.Ok;
-      }
+        return TryDecodeBcjCoder(coder, input, expectedUnpackSize, SevenZipBcjFilters.ArmtDecodeInPlace, out decoded);
 
       if (IsBcjPpcMethodId(coder.MethodId))
-      {
-        // PPC BCJ: props обычно нет, но допускаем startOffset (4 байта LE) как и в других BCJ.
-        uint startOffset = 0;
-
-        if (coder.Properties is not null && coder.Properties.Length != 0)
-        {
-          if (coder.Properties.Length != 4)
-          {
-            decoded = [];
-            return SevenZipFolderDecodeResult.InvalidData;
-          }
-
-          startOffset = BinaryPrimitives.ReadUInt32LittleEndian(coder.Properties);
-        }
-
-        // Фильтр не меняет размер.
-        if (input.Length != expectedUnpackSize)
-        {
-          decoded = [];
-          return SevenZipFolderDecodeResult.InvalidData;
-        }
-
-        decoded = input.ToArray();
-        SevenZipBcjFilters.PpcDecodeInPlace(decoded.AsSpan(), startOffset);
-        return SevenZipFolderDecodeResult.Ok;
-      }
+        return TryDecodeBcjCoder(coder, input, expectedUnpackSize, SevenZipBcjFilters.PpcDecodeInPlace, out decoded);
 
       if (IsBcjSparcMethodId(coder.MethodId))
-      {
-        // BCJ SPARC: props обычно нет. Иногда может встретиться startOffset (4 байта LE).
-        uint startOffset = 0;
-
-        if (coder.Properties is not null && coder.Properties.Length != 0)
-        {
-          if (coder.Properties.Length != 4)
-          {
-            decoded = [];
-            return SevenZipFolderDecodeResult.InvalidData;
-          }
-
-          startOffset = BinaryPrimitives.ReadUInt32LittleEndian(coder.Properties);
-        }
-
-        // Фильтр не меняет размер.
-        if (input.Length != expectedUnpackSize)
-        {
-          decoded = [];
-          return SevenZipFolderDecodeResult.InvalidData;
-        }
-
-        decoded = input.ToArray();
-        SevenZipBcjFilters.SparcDecodeInPlace(decoded.AsSpan(), startOffset);
-        return SevenZipFolderDecodeResult.Ok;
-      }
+        return TryDecodeBcjCoder(coder, input, expectedUnpackSize, SevenZipBcjFilters.SparcDecodeInPlace, out decoded);
 
       if (IsBcjIa64MethodId(coder.MethodId))
-      {
-        // BCJ IA64: props обычно нет. Иногда может встретиться startOffset (4 байта LE).
-        uint startOffset = 0;
-
-        if (coder.Properties is not null && coder.Properties.Length != 0)
-        {
-          if (coder.Properties.Length != 4)
-          {
-            decoded = [];
-            return SevenZipFolderDecodeResult.InvalidData;
-          }
-
-          startOffset = BinaryPrimitives.ReadUInt32LittleEndian(coder.Properties);
-        }
-
-        // Фильтр не меняет размер.
-        if (input.Length != expectedUnpackSize)
-        {
-          decoded = [];
-          return SevenZipFolderDecodeResult.InvalidData;
-        }
-
-        decoded = input.ToArray();
-        SevenZipBcjFilters.Ia64DecodeInPlace(decoded.AsSpan(), startOffset);
-        return SevenZipFolderDecodeResult.Ok;
-      }
+        return TryDecodeBcjCoder(coder, input, expectedUnpackSize, SevenZipBcjFilters.Ia64DecodeInPlace, out decoded);
 
       if (IsBcjArm64MethodId(coder.MethodId))
-      {
-        // BCJ ARM64: props обычно нет, но допускаем startOffset (4 байта LE), как и для других BCJ.
-        uint startOffset = 0;
-
-        if (coder.Properties is not null && coder.Properties.Length != 0)
-        {
-          if (coder.Properties.Length != 4)
-          {
-            decoded = [];
-            return SevenZipFolderDecodeResult.InvalidData;
-          }
-
-          startOffset = BinaryPrimitives.ReadUInt32LittleEndian(coder.Properties);
-        }
-
-        // Фильтр не меняет размер.
-        if (input.Length != expectedUnpackSize)
-        {
-          decoded = [];
-          return SevenZipFolderDecodeResult.InvalidData;
-        }
-
-        decoded = input.ToArray();
-        SevenZipBcjFilters.Arm64DecodeInPlace(decoded.AsSpan(), startOffset);
-        return SevenZipFolderDecodeResult.Ok;
-      }
+        return TryDecodeBcjCoder(coder, input, expectedUnpackSize, SevenZipBcjFilters.Arm64DecodeInPlace, out decoded);
 
       if (IsSingleByteMethodId(coder.MethodId, _methodIdLzma2))
       {
@@ -1048,6 +875,44 @@ public static class SevenZipFolderDecoder
       return SevenZipFolderDecodeResult.NotSupported;
 
     output = lastDecoded;
+    return SevenZipFolderDecodeResult.Ok;
+  }
+
+  /// <summary>BCJ branch-фильтр: decode-преобразование на месте.</summary>
+  private delegate void BcjFilter(Span<byte> data, uint startOffset);
+
+  /// <summary>
+  /// Декодирует одиночный BCJ-coder: общий путь для всех ветвлений (x86/ARM/ARMT/PPC/SPARC/IA64/ARM64).
+  /// Опциональный startOffset берётся из properties (4 байта LE), фильтр не меняет размер данных.
+  /// </summary>
+  private static SevenZipFolderDecodeResult TryDecodeBcjCoder(
+      SevenZipCoderInfo coder,
+      ReadOnlySpan<byte> input,
+      int expectedUnpackSize,
+      BcjFilter filter,
+      out byte[] decoded)
+  {
+    uint startOffset = 0;
+
+    if (coder.Properties is not null && coder.Properties.Length != 0)
+    {
+      if (coder.Properties.Length != 4)
+      {
+        decoded = [];
+        return SevenZipFolderDecodeResult.InvalidData;
+      }
+
+      startOffset = BinaryPrimitives.ReadUInt32LittleEndian(coder.Properties);
+    }
+
+    if (input.Length != expectedUnpackSize)
+    {
+      decoded = [];
+      return SevenZipFolderDecodeResult.InvalidData;
+    }
+
+    decoded = input.ToArray();
+    filter(decoded, startOffset);
     return SevenZipFolderDecodeResult.Ok;
   }
 
