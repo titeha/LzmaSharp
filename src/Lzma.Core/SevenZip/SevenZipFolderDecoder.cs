@@ -6,6 +6,8 @@ using ICSharpCode.SharpZipLib.BZip2;
 using Lzma.Core.Lzma1;
 using Lzma.Core.Lzma2;
 
+using static Lzma.Core.SevenZip.SevenZipCoderMethodIds;
+
 using SharpCompress.Common;
 using SharpCompress.Compressors.Deflate64;
 using SharpCompress.Compressors.PPMd;
@@ -1737,148 +1739,6 @@ public static class SevenZipFolderDecoder
     range <<= 8;
     code = (code << 8) | rangeStream[pos++];
     return true;
-  }
-
-  private static bool IsBcj2MethodId(byte[] methodId)
-  {
-    // BCJ2 обычно 03 03 01 1B, иногда короткий 1B.
-    return
-      methodId.Length == 1 && methodId[0] == 0x1B ||
-      methodId.Length == 4 &&
-      methodId[0] == 0x03 &&
-      methodId[1] == 0x03 &&
-      methodId[2] == 0x01 &&
-      methodId[3] == 0x1B;
-  }
-
-  private static bool IsSingleByteMethodId(byte[] methodId, byte expected)
-      => methodId.Length == 1 && methodId[0] == expected;
-
-  private static bool IsSwap2MethodId(byte[] methodId)
-  {
-    return methodId.Length == 3
-      && methodId[0] == 0x02
-      && methodId[1] == 0x03
-      && methodId[2] == 0x02;
-  }
-
-  private static bool IsSwap4MethodId(byte[] methodId)
-  {
-    return methodId.Length == 3
-      && methodId[0] == 0x02
-      && methodId[1] == 0x03
-      && methodId[2] == 0x04;
-  }
-
-  private static bool IsBcjArmMethodId(byte[] methodId)
-  {
-    // Methods.txt:
-    // 07 - ARM (little-endian)
-    // 03 03 05 01 - 7z Branch Codecs / ARM (little-endian)
-    return
-      methodId.Length == 1 && methodId[0] == 0x07 ||
-      methodId.Length == 4 &&
-      methodId[0] == 0x03 &&
-      methodId[1] == 0x03 &&
-      methodId[2] == 0x05 &&
-      methodId[3] == 0x01;
-  }
-
-  private static bool IsBcjX86MethodId(byte[] methodId)
-  {
-    // В 7z часто используется "длинный" ID для BCJ: { 03 03 01 03 }.
-    // Иногда может встретиться и короткий ID: { 04 }.
-    return
-      methodId.Length == 1 && methodId[0] == 0x04 ||
-      methodId.Length == 4 &&
-      methodId[0] == 0x03 &&
-      methodId[1] == 0x03 &&
-      methodId[2] == 0x01 &&
-      methodId[3] == 0x03;
-  }
-
-  private static bool IsBcjArmtMethodId(byte[] methodId)
-  {
-    // Methods.txt:
-    // 08 - ARMT (little-endian)
-    // 03 03 07 01 - 7z Branch Codecs / ARMT (little-endian)
-    return
-      (methodId.Length == 1 && methodId[0] == 0x08) ||
-      (methodId.Length == 4 &&
-       methodId[0] == 0x03 &&
-       methodId[1] == 0x03 &&
-       methodId[2] == 0x07 &&
-       methodId[3] == 0x01);
-  }
-
-  private static bool IsBcjPpcMethodId(byte[] methodId)
-  {
-    // Methods.txt:
-    // 05 - PPC (big-endian)
-    // 03 03 02 05 - 7z Branch Codecs / PPC (big-endian)
-    return
-      methodId.Length == 1 && methodId[0] == 0x05 ||
-      methodId.Length == 4 &&
-      methodId[0] == 0x03 &&
-      methodId[1] == 0x03 &&
-      methodId[2] == 0x02 &&
-      methodId[3] == 0x05;
-  }
-
-  private static bool IsBcjSparcMethodId(byte[] methodId)
-  {
-    // Methods.txt:
-    // 09 - SPARC
-    // 03 03 08 05 - 7z Branch Codecs / SPARC
-    return
-      methodId.Length == 1 && methodId[0] == 0x09 ||
-      methodId.Length == 4 &&
-      methodId[0] == 0x03 &&
-      methodId[1] == 0x03 &&
-      methodId[2] == 0x08 &&
-      methodId[3] == 0x05;
-  }
-
-  private static bool IsBcjIa64MethodId(byte[] methodId)
-  {
-    // Methods.txt:
-    // 06 - IA64
-    // 03 03 04 01 - 7z Branch Codecs / IA64
-    return
-      (methodId.Length == 1 && methodId[0] == 0x06) ||
-      (methodId.Length == 4 &&
-       methodId[0] == 0x03 &&
-       methodId[1] == 0x03 &&
-       methodId[2] == 0x04 &&
-       methodId[3] == 0x01);
-  }
-
-  private static bool IsBcjArm64MethodId(byte[] methodId)
-  {
-    // Methods.txt:
-    // 0A - ARM64
-    return methodId.Length == 1 && methodId[0] == 0x0A;
-  }
-
-  private static bool IsDeflateMethodId(byte[] methodId)
-  {
-    // Methods.txt: 04.. (Misc) / 01 (Zip) / 08 (Deflate) => { 04 01 08 }.
-    return methodId.Length == 3 && methodId[0] == 0x04 && methodId[1] == 0x01 && methodId[2] == 0x08;
-  }
-
-  private static bool IsBZip2MethodId(byte[] methodId)
-  {
-    // Methods.txt: 04.. (Misc) / 02 (BZip2) / 02 => { 04 02 02 }.
-    return methodId.Length == 3 && methodId[0] == 0x04 && methodId[1] == 0x02 && methodId[2] == 0x02;
-  }
-
-  private static bool IsDeflate64MethodId(byte[] methodId)
-  {
-    // Methods.txt: 04.. [Zip] / 01 / 09 => { 04 01 09 }.
-    return methodId.Length == 3
-        && methodId[0] == 0x04
-        && methodId[1] == 0x01
-        && methodId[2] == 0x09;
   }
 
   private static bool TryGetPackStream(
