@@ -1,7 +1,6 @@
 using System.Buffers.Binary;
 
-using ICSharpCode.SharpZipLib.BZip2;
-
+using Lzma.Core.BZip2;
 using Lzma.Core.Deflate;
 using Lzma.Core.Lzma1;
 using Lzma.Core.Lzma2;
@@ -386,66 +385,25 @@ public static class SevenZipFolderDecoder
   }
 
   /// <summary>
-  /// Декодирует одиночный coder <c>BZip2</c> (method id { 04 02 02 }) через bzip2 stream-декодер.
+  /// Декодирует одиночный coder <c>BZip2</c> (method id { 04 02 02 }) собственным BZip2-декодером.
   /// </summary>
   private static SevenZipFolderDecodeResult TryDecodeBZip2Coder(
       ReadOnlySpan<byte> input,
       int expectedUnpackSize,
       out byte[] decoded)
   {
-    decoded = new byte[expectedUnpackSize];
+    decoded = [];
 
-    try
-    {
-      byte[] src = input.ToArray();
-      using var ms = new MemoryStream(src, writable: false);
-      using var bs = new BZip2InputStream(ms)
-      {
-        IsStreamOwner = false,
-      };
+    BZip2DecodeResult result = BZip2Decoder.Decode(input, out byte[] output);
 
-      int written = 0;
-      while (written < decoded.Length)
-      {
-        int n = bs.Read(decoded, written, decoded.Length - written);
-        if (n == 0)
-          break;
+    if (result == BZip2DecodeResult.NotSupported)
+      return SevenZipFolderDecodeResult.NotSupported;
 
-        written += n;
-      }
-
-      if (written != decoded.Length)
-      {
-        decoded = [];
-        return SevenZipFolderDecodeResult.InvalidData;
-      }
-
-      // Лишних распакованных байт быть не должно.
-      if (bs.ReadByte() != -1)
-      {
-        decoded = [];
-        return SevenZipFolderDecodeResult.InvalidData;
-      }
-
-      // Как и для LZMA2/Deflate, допускаем хвост из нулей в packed stream.
-      if (ms.Position < ms.Length && !IsZeroTail(input, (int)ms.Position))
-      {
-        decoded = [];
-        return SevenZipFolderDecodeResult.InvalidData;
-      }
-
-      return SevenZipFolderDecodeResult.Ok;
-    }
-    catch (BZip2Exception)
-    {
-      decoded = [];
+    if (result != BZip2DecodeResult.Ok || output.Length != expectedUnpackSize)
       return SevenZipFolderDecodeResult.InvalidData;
-    }
-    catch (EndOfStreamException)
-    {
-      decoded = [];
-      return SevenZipFolderDecodeResult.InvalidData;
-    }
+
+    decoded = output;
+    return SevenZipFolderDecodeResult.Ok;
   }
 
   /// <summary>
