@@ -120,9 +120,10 @@ decoder-path, не переписывая его.
 ### Состояние writer-path
 
 Реализован базовый writer через `SevenZipArchiveWriter.BuildArchive(...)`: пустой архив,
-empty-entry архивы, непустые файлы через `Copy`, mixed-сценарии, безопасные вложенные
-`/`-paths, `FilesInfo.WinAttrib` и `FilesInfo.MTime`. Всё покрыто round-trip и
-структурными тестами через существующий decoder-path. Полный перечень — в
+empty-entry архивы, непустые файлы через `Copy` или `LZMA2`, mixed-сценарии, безопасные
+вложенные `/`-paths, `FilesInfo.WinAttrib` и `FilesInfo.MTime`. Метод сжатия выбирается через
+`SevenZipWriterCompressionMethod`. Сжатый `.7z` (LZMA2) читается и распаковывается настоящим
+7-Zip побайтово. Всё покрыто round-trip и структурными тестами. Полный перечень — в
 [`STAGE2_WRITER_STATUS.md`](STAGE2_WRITER_STATUS.md).
 
 ### Состояние энкодера
@@ -132,17 +133,18 @@ range encoder, энкодеры литералов / длин / дистанци
 инкрементальный вариант, `Lzma2LzmaEncoder` (нарезка на чанки + COPY-fallback),
 `Lzma2CopyEncoder`.
 
-Реальное сжатие LZMA реализовано: добавлен match finder (`LzmaMatchFinder`, хеш-цепочки +
-greedy-разбор), `LzmaAloneEncoder.Encode(...)` сжимает произвольные данные. Сжатый `.lzma`
-распаковывается настоящими 7-Zip и `xz` побайтово идентично. Пока только LZMA-Alone, без
-rep-дистанций и оптимального разбора.
+Реальное сжатие реализовано: match finder (`LzmaMatchFinder`, хеш-цепочки + greedy-разбор)
+питает `LzmaAloneEncoder.Encode(...)` (LZMA-Alone) и `Lzma2LzmaEncoder.Encode(...)` (LZMA2,
+нарезка на чанки + выбор LZMA/COPY, reset-per-chunk). LZMA2 подключён в 7z-writer как метод
+сжатия. Сжатые `.lzma` и `.7z` (LZMA2) распаковываются настоящими 7-Zip и `xz` побайтово.
+Пока без rep-дистанций и оптимального разбора (степень сжатия ниже эталона).
 
-Детальный план развития энкодера (LZMA2) — [`ENCODER_MVP_PLAN.md`](ENCODER_MVP_PLAN.md).
+Детальный план развития энкодера — [`ENCODER_MVP_PLAN.md`](ENCODER_MVP_PLAN.md).
 
 ### Направления этапа 2
 
-- интеграция LZMA-сжатия в `LZMA2`-writer и 7z-writer;
 - rep-дистанции и lazy/optimal parsing для лучшего сжатия;
+- несущий словарь между чанками LZMA2, чанки > 64 КБ;
 - доведение `LZMA` и `LZMA2` энкодеров до production-уровня;
 - расширение 7z writer-а: `CTime`/`ATime`, развитие `StreamsInfo`/`FilesInfo`, задел под solid;
 - тесты совместимости в обе стороны (наше кодирование ↔ эталонная реализация) и round-trip внутри проекта;

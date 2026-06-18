@@ -32,14 +32,15 @@ Decoder-path поддерживает методы и фильтры: `Copy`, `L
 ### Запись 7z (этап 2)
 
 Базовый writer через `SevenZipArchiveWriter.BuildArchive(...)` умеет писать пустой архив,
-пустые файлы и директории, непустые файлы через `Copy`, mixed-сценарии, безопасные
-вложенные `/`-paths, а также `FilesInfo.WinAttrib` и `FilesInfo.MTime`. Результаты
-проверяются round-trip и структурными тестами через существующий decoder-path.
+пустые файлы и директории, непустые файлы (метод `Copy` или **`LZMA2`** на выбор через
+`SevenZipWriterCompressionMethod`), mixed-сценарии, безопасные вложенные `/`-paths, а также
+`FilesInfo.WinAttrib` и `FilesInfo.MTime`.
 
-LZMA-энкодер уже даёт **реальное сжатие**: добавлен match finder, а `LzmaAloneEncoder.Encode(...)`
-пишет сжатый `.lzma`, который распаковывают настоящие 7-Zip и `xz`. Следующие шаги — интеграция
-LZMA-сжатия в LZMA2- и 7z-writer (см. [`docs/STAGE2_WRITER_STATUS.md`](docs/STAGE2_WRITER_STATUS.md)
-и [`docs/ENCODER_MVP_PLAN.md`](docs/ENCODER_MVP_PLAN.md)).
+Энкодер даёт **реальное сжатие**: match finder питает `LzmaAloneEncoder.Encode(...)` (`.lzma`)
+и LZMA2-writer. Сжатые `.lzma` и `.7z` (LZMA2) распаковываются настоящими **7-Zip** и **`xz`**
+побайтово. Дальнейшие шаги — rep-дистанции, lazy parsing и производительность
+(см. [`docs/STAGE2_WRITER_STATUS.md`](docs/STAGE2_WRITER_STATUS.md) и
+[`docs/ENCODER_MVP_PLAN.md`](docs/ENCODER_MVP_PLAN.md)).
 
 ## Принципы разработки
 

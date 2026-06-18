@@ -47,9 +47,14 @@ LZMA2 поверх LZMA тоже сжимает: `Lzma2LzmaEncoder.Encode(...)` 
 - не используются rep-дистанции (rep0..rep3) — кодируются только обычные matches;
 - LZMA2: словарь сбрасывается на каждом чанке (несущий режим между чанками — позже),
   размер чанка ограничен 64 КБ;
-- match finder подключён к LZMA-Alone и LZMA2; **интеграция в 7z-writer — следующий шаг**
-  (там же — внешняя сверка сжатого `.7z` настоящим 7-Zip);
 - оптимизация скорости/памяти — этап 3.
+
+LZMA2 подключён в 7z-writer как метод сжатия. `SevenZipArchiveWriter.BuildArchive(...)`
+принимает `SevenZipWriterCompressionMethod` (`Copy` по умолчанию или `Lzma2`). Для `Lzma2`
+непустые файлы сжимаются, в `UnpackInfo` пишется coder LZMA2 (method id `0x21` + байт размера
+словаря), folder-CRC считается по исходным данным. Проверено: сжатый `.7z` (LZMA2:16)
+читается, тестируется и распаковывается настоящим 7-Zip (`7z l` / `7z t` / `7z x`) без
+предупреждений, файлы и директории совпадают побайтово.
 
 Детальный план LZMA2 — [`ENCODER_MVP_PLAN.md`](ENCODER_MVP_PLAN.md).
 
@@ -160,10 +165,11 @@ Writer не должен молча создавать частично неко
 
 ## Пока не поддержано
 
-- реальное сжатие произвольных данных (нет match finder-а);
-- LZMA / LZMA2 как coder в writer-path 7z (writer пишет только `Copy`);
+- LZMA (LZMA1) как coder в writer-path 7z (для 7z поддержан `Copy` и `LZMA2`);
+- rep-дистанции и lazy/optimal parsing (хуже степень сжатия, чем у эталонного 7-Zip);
+- несущий словарь между чанками LZMA2; чанк > 64 КБ;
 - `CTime` / `ATime` и platform-specific attributes кроме `WinAttrib`;
-- solid-группировка;
+- solid-группировка (несколько файлов в одном folder);
 - AES / GOST writer.
 
 ## Критерий завершения этапа
