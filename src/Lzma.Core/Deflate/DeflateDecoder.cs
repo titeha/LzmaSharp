@@ -41,7 +41,7 @@ public static class DeflateDecoder
   ];
 
   // База и доп. биты для дистанций (коды 0..29).
-  private static readonly short[] DistBase =
+  private static readonly int[] DistBase =
   [
       1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193,
       257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145,
@@ -52,6 +52,21 @@ public static class DeflateDecoder
   [
       0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6,
       7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13
+  ];
+
+  // Deflate64 (Enhanced Deflate): добавлены дистанционные коды 30 и 31 (по 14 доп. бит),
+  // что расширяет максимальную дистанцию до 64 КБ.
+  private static readonly int[] Dist64Base =
+  [
+      1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193,
+      257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145,
+      8193, 12289, 16385, 24577, 32769, 49153
+  ];
+
+  private static readonly short[] Dist64Extra =
+  [
+      0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6,
+      7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13, 14, 14
   ];
 
   // Порядок чтения длин кодов для code-length алфавита (dynamic-блок).
@@ -72,8 +87,23 @@ public static class DeflateDecoder
       Span<byte> output,
       out int bytesConsumed,
       out int bytesWritten)
+      => Decode(input, output, deflate64: false, out bytesConsumed, out bytesWritten);
+
+  /// <summary>
+  /// Декодирует raw DEFLATE или Deflate64-поток в <paramref name="output"/>.
+  /// </summary>
+  /// <param name="deflate64">
+  /// <see langword="true"/> — режим Deflate64 (Enhanced Deflate): код длины 285 имеет 16 доп.
+  /// бит (база 3), доступны дистанционные коды 30/31 и окно до 64 КБ.
+  /// </param>
+  public static DeflateDecodeResult Decode(
+      ReadOnlySpan<byte> input,
+      Span<byte> output,
+      bool deflate64,
+      out int bytesConsumed,
+      out int bytesWritten)
   {
-    var state = new Inflater(input, output);
+    var state = new Inflater(input, output, deflate64);
 
     try
     {
@@ -112,6 +142,9 @@ public static class DeflateDecoder
   {
     private readonly ReadOnlySpan<byte> _input;
     private readonly Span<byte> _output;
+    private readonly bool _deflate64;
+    private readonly int[] _distBase;
+    private readonly short[] _distExtra;
 
     private int _inPos;
     private int _outPos;
@@ -119,10 +152,13 @@ public static class DeflateDecoder
     private int _bitBuffer;
     private int _bitCount;
 
-    public Inflater(ReadOnlySpan<byte> input, Span<byte> output)
+    public Inflater(ReadOnlySpan<byte> input, Span<byte> output, bool deflate64)
     {
       _input = input;
       _output = output;
+      _deflate64 = deflate64;
+      _distBase = deflate64 ? Dist64Base : DistBase;
+      _distExtra = deflate64 ? Dist64Extra : DistExtra;
       _inPos = 0;
       _outPos = 0;
       _bitBuffer = 0;
@@ -215,7 +251,8 @@ public static class DeflateDecoder
       int hdist = ReadBits(5) + 1;
       int hclen = ReadBits(4) + 4;
 
-      if (hlit > MaxLitLenCodes || hdist > MaxDistCodes)
+      int maxDistCodes = _deflate64 ? 32 : MaxDistCodes;
+      if (hlit > MaxLitLenCodes || hdist > maxDistCodes)
         throw new InvalidDeflateException();
 
       // Длины кодов для code-length алфавита (19 символов).
@@ -310,13 +347,16 @@ public static class DeflateDecoder
         if (symbol >= LengthBase.Length)
           throw new InvalidDeflateException();
 
-        int length = LengthBase[symbol] + ReadBits(LengthExtra[symbol]);
+        // Deflate64: код длины 285 (symbol == 28) переопределён на базу 3 + 16 доп. бит.
+        int length = _deflate64 && symbol == 28
+            ? 3 + ReadBits(16)
+            : LengthBase[symbol] + ReadBits(LengthExtra[symbol]);
 
         int distSymbol = Decode(distTable);
-        if (distSymbol >= DistBase.Length)
+        if (distSymbol >= _distBase.Length)
           throw new InvalidDeflateException();
 
-        int distance = DistBase[distSymbol] + ReadBits(DistExtra[distSymbol]);
+        int distance = _distBase[distSymbol] + ReadBits(_distExtra[distSymbol]);
 
         if (distance > _outPos)
           throw new InvalidDeflateException();
@@ -412,7 +452,9 @@ public static class DeflateDecoder
 
   private static HuffmanTable BuildFixedDistTable()
   {
-    short[] lengths = new short[30];
+    // 32 кода по 5 бит. Коды 30/31 валидны только в Deflate64; в обычном Deflate
+    // обращение к ним отсекается проверкой длины таблицы дистанций (_distBase).
+    short[] lengths = new short[32];
     for (int i = 0; i < lengths.Length; i++)
       lengths[i] = 5;
 

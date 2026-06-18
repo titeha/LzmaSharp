@@ -8,8 +8,6 @@ using Lzma.Core.Lzma2;
 
 using static Lzma.Core.SevenZip.SevenZipCoderMethodIds;
 
-using SharpCompress.Common;
-using SharpCompress.Compressors.Deflate64;
 using SharpCompress.Compressors.PPMd;
 
 namespace Lzma.Core.SevenZip;
@@ -546,7 +544,8 @@ public static class SevenZipFolderDecoder
   }
 
   /// <summary>
-  /// Декодирует одиночный coder <c>Deflate64</c> (method id { 04 01 09 }) через managed-реализацию SharpCompress.
+  /// Декодирует одиночный coder <c>Deflate64</c> (method id { 04 01 09 }) собственным
+  /// DEFLATE-декодером в режиме Deflate64.
   /// </summary>
   private static SevenZipFolderDecodeResult TryDecodeDeflate64Coder(
       ReadOnlySpan<byte> input,
@@ -555,59 +554,26 @@ public static class SevenZipFolderDecoder
   {
     decoded = new byte[expectedUnpackSize];
 
-    try
-    {
-      byte[] src = input.ToArray();
-      using var ms = new MemoryStream(src, writable: false);
-      using var ds = new Deflate64Stream(ms, SharpCompress.Compressors.CompressionMode.Decompress);
+    DeflateDecodeResult result = DeflateDecoder.Decode(
+        input,
+        decoded,
+        deflate64: true,
+        out int bytesConsumed,
+        out int bytesWritten);
 
-      int written = 0;
-      while (written < decoded.Length)
-      {
-        int n = ds.Read(decoded, written, decoded.Length - written);
-        if (n == 0)
-          break;
-
-        written += n;
-      }
-
-      if (written != decoded.Length)
-      {
-        decoded = [];
-        return SevenZipFolderDecodeResult.InvalidData;
-      }
-
-      // Лишних распакованных байт быть не должно.
-      if (ds.ReadByte() != -1)
-      {
-        decoded = [];
-        return SevenZipFolderDecodeResult.InvalidData;
-      }
-
-      // Как и для Deflate/BZip2, допускаем хвост из нулей в packed stream.
-      if (ms.Position < ms.Length && !IsZeroTail(input, (int)ms.Position))
-      {
-        decoded = [];
-        return SevenZipFolderDecodeResult.InvalidData;
-      }
-
-      return SevenZipFolderDecodeResult.Ok;
-    }
-    catch (InvalidFormatException)
+    if (result != DeflateDecodeResult.Ok || bytesWritten != expectedUnpackSize)
     {
       decoded = [];
       return SevenZipFolderDecodeResult.InvalidData;
     }
-    catch (InvalidDataException)
+
+    if (bytesConsumed < input.Length && !IsZeroTail(input, bytesConsumed))
     {
       decoded = [];
       return SevenZipFolderDecodeResult.InvalidData;
     }
-    catch (EndOfStreamException)
-    {
-      decoded = [];
-      return SevenZipFolderDecodeResult.InvalidData;
-    }
+
+    return SevenZipFolderDecodeResult.Ok;
   }
 
   /// <summary>
