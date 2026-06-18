@@ -4,10 +4,9 @@ using Lzma.Core.BZip2;
 using Lzma.Core.Deflate;
 using Lzma.Core.Lzma1;
 using Lzma.Core.Lzma2;
+using Lzma.Core.Ppmd;
 
 using static Lzma.Core.SevenZip.SevenZipCoderMethodIds;
-
-using SharpCompress.Compressors.PPMd;
 
 namespace Lzma.Core.SevenZip;
 
@@ -421,51 +420,21 @@ public static class SevenZipFolderDecoder
     if (coder.Properties is null || coder.Properties.Length != 5)
       return SevenZipFolderDecodeResult.InvalidData;
 
-    decoded = new byte[expectedUnpackSize];
+    int order = coder.Properties[0];
+    uint memSize = BinaryPrimitives.ReadUInt32LittleEndian(coder.Properties.AsSpan(1, 4));
 
-    try
-    {
-      // PpmdStream работает со Stream, поэтому делаем MemoryStream по входным байтам.
-      // (Да, тут есть копия input -> byte[]. Оптимизацию без копии сделаем позже отдельным шагом.)
-      byte[] src = input.ToArray();
-      using var ms = new MemoryStream(src, writable: false);
+    byte[] output = new byte[expectedUnpackSize];
 
-      // Важно: создаём свойства ИЗ массива properties.
-      // SharpCompress по props.Length==5 переключается в PPMdVersion.H7Z.
-      var ppmdProps = new PpmdProperties(coder.Properties);
-      using var ps = PpmdStream.Create(ppmdProps, ms, compress: false);
+    Ppmd7DecodeResult result = Ppmd7Decoder.Decode(input, order, memSize, output);
 
-      int written = 0;
-      while (written < decoded.Length)
-      {
-        int n = ps.Read(decoded, written, decoded.Length - written);
-        if (n == 0)
-          break;
-        written += n;
-      }
-
-      if (written != decoded.Length)
-      {
-        decoded = [];
-        return SevenZipFolderDecodeResult.InvalidData;
-      }
-
-      // Важно:
-      // Для PPMd (7z) не пытаемся читать "ещё байт" из распакованного потока
-      // и не валидируем хвост packed stream. В 7z распакованный размер задан контейнером,
-      // а EndMarker может отсутствовать.
-      return SevenZipFolderDecodeResult.Ok;
-    }
-    catch (NotSupportedException)
-    {
-      decoded = [];
+    if (result == Ppmd7DecodeResult.NotSupported)
       return SevenZipFolderDecodeResult.NotSupported;
-    }
-    catch (InvalidDataException)
-    {
-      decoded = [];
+
+    if (result != Ppmd7DecodeResult.Ok)
       return SevenZipFolderDecodeResult.InvalidData;
-    }
+
+    decoded = output;
+    return SevenZipFolderDecodeResult.Ok;
   }
 
   /// <summary>

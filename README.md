@@ -92,18 +92,15 @@ dotnet build
 dotnet test
 ```
 
-## Временные внешние зависимости
+## Внешние зависимости
 
-Собственные управляемые декодеры уже заменили часть внешних библиотек:
+У `Lzma.Core` **нет внешних codec-зависимостей** — все методы декодируются собственными
+управляемыми реализациями:
 
-- `Deflate`, `Deflate64` — свой `DeflateDecoder` (RFC 1951 + режим Deflate64);
-- `BZip2` — свой `BZip2Decoder` (`SharpZipLib` убран из production).
+- `Deflate`, `Deflate64` — `DeflateDecoder` (RFC 1951 + режим Deflate64);
+- `BZip2` — `BZip2Decoder`;
+- `PPMd` — `Ppmd7Decoder` (PPMd var.H / 7z).
 
-Осталась одна временная зависимость в `Lzma.Core`:
-
-- `SharpCompress` — декодирование `PPMd` (последний метод на сторонней библиотеке).
-
-Долгосрочная цель — заменить и её собственной реализацией (см. этап 2 в
-[`docs/ROADMAP.md`](docs/ROADMAP.md)). `SharpZipLib` оставлен только в тестах как эталон
-для round-trip сверки. Сторонние компоненты и их лицензии перечислены в
-[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+`SharpZipLib` и `SharpCompress` полностью удалены из production. `SharpZipLib` оставлен только
+в тест-проекте как эталон для round-trip сверки BZip2. Сторонние компоненты и их лицензии
+перечислены в [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

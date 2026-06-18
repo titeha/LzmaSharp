@@ -10,10 +10,7 @@
     <InternalsVisibleTo Include="$(MSBuildProjectName).Tests" />
   </ItemGroup>
 
-  <ItemGroup>
-    <!-- SharpCompress пока нужен для PPMd-декодера; SharpZipLib (BZip2) больше не используется
-         в production — собственный BZip2-декодер в Lzma.Core/BZip2. -->
-    <PackageReference Include="SharpCompress" Version="0.46.2" />
-  </ItemGroup>
+  <!-- Внешних codec-зависимостей больше нет: Deflate/Deflate64/BZip2/PPMd реализованы
+       собственными управляемыми декодерами в Lzma.Core. -->
 
 </Project>
