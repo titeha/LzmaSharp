@@ -1,488 +1,149 @@
 # Статус этапа 2 — encoder / writer
 
-Этап 2 начат.
+Этап 2 в работе. Это авторитетный документ о текущем состоянии writer / encoder-направления.
+Карта этапов и общий план — в [`ROADMAP.md`](ROADMAP.md).
 
-Цель этапа — постепенно реализовать путь записи данных и архивов без шифрования.
-
-Этап 2 не должен переписывать уже стабилизированный decoder-path. Writer развивается маленькими проверяемыми шагами рядом с существующим чтением и декодированием.
+Цель этапа — production-ориентированная запись данных и архивов без шифрования. Writer
+развивается маленькими проверяемыми шагами рядом с уже стабилизированным decoder-path и не
+переписывает его.
 
 ## Границы этапа
 
-В этап входит:
+Входит: развитие LZMA и LZMA2 энкодеров, базовый 7z writer, запись простых архивов,
+round-trip тесты и тесты совместимости с декодером (по возможности — с эталонными
+инструментами).
 
-- развитие LZMA encoder;
-- развитие LZMA2 encoder;
-- базовый 7z writer;
-- запись простых архивов 7z;
-- round-trip тесты внутри проекта;
-- тесты совместимости с декодером LzmaSharp;
-- по возможности тесты совместимости с эталонными инструментами.
+Не входит: AES/GOST writer, Magma, полноценный GOST KDF через Стрибог, encrypted header
+writer, UI, CLI, тяжёлая оптимизация, streaming writer API, поддержка всех возможностей 7z.
 
-В этап не входит:
+## Состояние энкодера
 
-- AES writer;
-- GOST writer;
-- Magma;
-- полноценный GOST KDF через Стрибог;
-- запись encrypted header;
-- UI;
-- CLI;
-- production-ready приложение;
-- тяжёлая оптимизация;
-- streaming writer API;
-- поддержка всех возможностей 7z.
+Низкоуровневая машинерия LZMA-кодирования реализована и покрыта round-trip тестами через
+собственный декодер: `LzmaRangeEncoder`, энкодеры литералов / длин / дистанций / bit-tree,
+`LzmaAloneEncoder` и `LzmaAloneIncrementalEncoder`, `Lzma2LzmaEncoder` (нарезка на чанки +
+COPY-fallback, режимы literal-only и script), `Lzma2CopyEncoder` и инкрементальный вариант.
 
-## Принцип этапа
+Ключевое ограничение: **match finder отсутствует**. `LzmaEncoder` сейчас «скриптовый» —
+кодирует литералы (literal-only) и matches по явно заданным `(distance, length)`, но сам
+совпадения не ищет. Поэтому:
 
-Writer реализуется снизу вверх:
+- произвольные данные пока не сжимаются содержательно;
+- literal-only LZMA2 и `Copy` дают валидный поток, который читает стандартный 7-Zip, но без
+  выигрыша по размеру.
 
-1. Сначала минимальный контракт записи.
-2. Затем простейшие writer-сценарии.
-3. Затем round-trip тесты.
-4. Затем постепенное расширение поддерживаемых методов.
-5. Только после функциональной стабилизации — оптимизация.
+Ближайшая цель — добавить match finder и довести LZMA-энкодер до реального сжатия,
+читаемого 7-Zip. План — [`ENCODER_MVP_PLAN.md`](ENCODER_MVP_PLAN.md).
 
-Каждый новый writer-сценарий должен иметь тест, который фиксирует внешний контракт.
+## Состояние writer-path
 
-## Первый целевой результат
+Основной вход — `SevenZipArchiveWriter.BuildArchive(...)`. Входная модель
+`SevenZipArchiveWriterEntry` описывает: имя, содержимое, признак директории, опциональные
+Windows attributes, опциональное `LastWriteTimeUtc`. Результат — `SevenZipArchiveWriteResult`.
 
-Первый целевой результат этапа 2 — минимальный управляемый путь записи, который позволяет создать архив и затем прочитать его существующим decoder-path проекта.
-
-Минимальный допустимый сценарий для старта:
-
-- один файл;
-- без шифрования;
-- без solid-группировки;
-- без сложных фильтров;
-- без вложенной файловой структуры;
-- без timestamp-метаданных, если они не нужны для корректного чтения;
-- с round-trip проверкой через `SevenZipArchiveReader` / `SevenZipArchiveDecoder`.
-
-Первый метод записи выбран и реализован: один непустой файл через `Copy`.
-
-## Первый реализованный результат
-
-На старте этапа 2 добавлен минимальный writer API:
-
-- `SevenZipArchiveWriter.BuildArchive(...)`;
-- `SevenZipArchiveWriterEntry`;
-- `SevenZipArchiveWriteResult`.
-
-`SevenZipArchiveWriterEntry` описывает элемент архива:
-
-- имя;
-- содержимое;
-- признак директории;
-- опциональные Windows attributes;
-- опциональное время последней записи UTC.
-
-Основной публичный вход writer-а сейчас — `BuildArchive(...)`.
-
-Поддержанные сценарии:
+### Поддержанные сценарии
 
 - пустой архив;
-- архив с одним пустым файлом;
-- архив с несколькими пустыми файлами;
-- архив с одной пустой директорией;
-- архив со смесью пустых файлов и пустых директорий;
-- архив с одним непустым файлом через `Copy`;
-- архив с несколькими непустыми файлами через `Copy`;
-- архив со смесью empty entries и непустых файлов через `Copy`.
+- пустой файл, пустая директория и их смесь;
+- один и несколько непустых файлов через `Copy`;
+- mixed-набор: empty entries и непустые `Copy`-файлы в одном архиве;
+- безопасные вложенные `/`-paths (включая явную директорию + файл внутри неё).
 
-Для сценария одного непустого файла через `Copy` writer формирует:
+Маршрутизация после входной validation:
 
-- packed data между signature header и next header;
-- `PackInfo`;
-- `UnpackInfo`;
-- `FilesInfo`;
-- `Copy` coder;
-- CRC packed stream-а;
-- CRC folder stream-а;
-- CRC файла.
+- нет entry → пустой архив;
+- все entry без файловых данных → empty-entry path;
+- есть непустой файл → `Copy` path;
+- некорректные входные данные → `InvalidData`.
 
-Для сценария нескольких непустых файлов через `Copy` writer формирует:
+Для empty-entry path формируется только header-структура (`FilesInfo`, `EmptyStream`,
+`EmptyFile`, имена). Для `Copy` path packed data, `PackInfo` и `UnpackInfo` формируются
+только для непустых файлов; `FilesInfo` описывает все entry. Для непустых файлов считаются
+CRC packed stream-а, folder stream-а и файла. Вложенный path сохраняется в `FilesInfo.Names`
+как имя entry (например, `dir/file.bin`).
 
-- packed data как конкатенацию содержимого файлов;
-- `PackInfo` с несколькими packed stream-ами;
-- `UnpackInfo` с несколькими folder-ами;
-- отдельный `Copy` coder для каждого folder-а;
-- `FilesInfo` со списком имён файлов;
-- CRC для каждого packed stream-а;
-- CRC для каждого folder stream-а;
-- CRC для каждого файла.
+В mixed-сценарии: пустой файл → `EmptyStream = true`, `EmptyFile = true`; пустая директория
+→ `EmptyStream = true`, `EmptyFile = false`; непустой файл → `EmptyStream = false`;
+`FilesInfo.Crc` задаётся через defined bit-vector только для непустых файлов.
 
-Для смешанного сценария с empty entries и непустыми файлами через `Copy` writer формирует:
+### Windows attributes (`FilesInfo.WinAttrib`)
 
-- packed data как конкатенацию содержимого только непустых файлов;
-- `PackInfo` только для непустых файлов;
-- `UnpackInfo` только для непустых файлов;
-- отдельный `Copy` coder для каждого непустого файла;
-- `FilesInfo` для всех entry;
-- `EmptyStream` bit-vector для всех entry;
-- `EmptyFile` sub-vector только для empty stream entry;
-- `FilesInfo.Crc` с defined bit-vector;
-- CRC только для непустых файлов.
+- пишутся для всех entry, `AllAreDefined = true`, `External = false`;
+- если `WindowsAttributes` не заданы явно — default по типу entry: файл → `Archive` (0x20),
+  директория → `Directory` (0x10);
+- если заданы явно — пишется переданное значение после validation;
+- validation: директория должна иметь `Directory` bit, файл — не должен; иначе `InvalidData`.
 
-Для mixed-сценария:
+### Время модификации (`FilesInfo.MTime`)
 
-- пустой файл получает `EmptyStream = true` и `EmptyFile = true`;
-- пустая директория получает `EmptyStream = true` и `EmptyFile = false`;
-- непустой файл получает `EmptyStream = false`;
-- CRC файла задаётся только для непустых файлов.
+- задаётся через `SevenZipArchiveWriterEntry.LastWriteTimeUtc`, хранится как Windows FILETIME;
+- пишется только `MTime`; `CTime` и `ATime` пока не пишутся;
+- значение должно иметь `DateTimeKind.Utc`; `Local` / `Unspecified` и непредставимое в
+  FILETIME значение → `InvalidData`;
+- не задано ни у одного entry → `MTime` не пишется;
+- задано у всех → `AllAreDefined = true`; задано частично → пишется defined bit-vector;
+- `External = false`, timestamps — в порядке entry, только для defined entry.
 
-Для сценария пустых файлов и пустых директорий writer формирует:
+### Контракт имён и путей entry
 
-- `SignatureHeader`;
-- `NextHeader`;
-- `FilesInfo`;
-- `EmptyStream`;
-- `EmptyFile`;
-- список имён файлов и директорий.
+Полный path состоит из сегментов, разделённых `/`. Каждый сегмент должен быть непустым, не
+из одних пробелов, без `\0` и `\`, без недопустимых Windows-символов (`< > : " | ? *`), без
+управляющих символов `0x00..0x1F`, не зарезервированным Windows-именем, не заканчиваться
+точкой или пробелом. `/` — только разделитель сегментов.
 
-Packed data, `MainStreamsInfo`, `PackInfo` и `UnpackInfo` для этого сценария не формируются, потому что файловые данные отсутствуют.
+Writer дополнительно отклоняет: абсолютные пути; завершающий `/`; пустые сегменты;
+сегменты `.` / `..`; точные дубли имён и имена, отличающиеся только регистром; конфликт
+файла и директории (в т.ч. по регистру); директорию с данными; path, где parent-entry
+существует как файл. Проверка parent-entry — без учёта регистра, поэтому `Dir` (директория)
++ `dir/file.txt` разрешено, а `Dir` (файл) + `dir/file.txt` → `InvalidData`.
 
-Для пустого файла writer пишет:
+Зарезервированные Windows-имена (без учёта регистра, в т.ч. с расширением): `CON`, `PRN`,
+`AUX`, `NUL`, `COM1`…`COM9`, `LPT1`…`LPT9`. Похожие, но не зарезервированные (`COM10.txt`,
+`CONSOLE.txt`, `auxiliary.txt`) разрешены. Точка и пробел внутри имени разрешены
+(`file.name.txt`, `file name.txt`, `.config`).
 
-- `EmptyStream = true`;
-- `EmptyFile = true`.
+Это сделано намеренно, чтобы writer не создавал архивы с конфликтами при безопасной
+распаковке на case-insensitive файловых системах.
 
-Для пустой директории writer пишет:
+### Контракт ошибок
 
-- `EmptyStream = true`;
-- `EmptyFile = false`.
+- `Ok` — архив построен;
+- `InvalidData` — некорректные входные данные (см. контракты выше);
+- `NotSupported` — сценарий распознан, но не входит в текущий writer-path;
+- `InternalError` — неожиданное внутреннее состояние.
 
-Покрыто тестами:
+Writer не должен молча создавать частично некорректный архив.
 
-- round-trip пустого архива через decoder-path;
-- round-trip одного пустого файла через decoder-path;
-- round-trip нескольких пустых файлов через decoder-path;
-- round-trip одного непустого `Copy`-файла через decoder-path;
-- round-trip одной пустой директории через decoder-path;
-- round-trip смеси пустого файла и пустой директории через decoder-path;
-- round-trip нескольких непустых `Copy`-файлов через decoder-path;
-- round-trip смешанного сценария с пустым файлом и непустым `Copy`-файлом через decoder-path;
-- round-trip смешанного сценария с пустой директорией и непустым `Copy`-файлом через decoder-path;
-- round-trip смешанного сценария с несколькими empty entries и несколькими `Copy`-файлами через decoder-path;
-- структурная проверка mixed Copy writer-архива через `SevenZipArchiveReader`;
-- проверка `EmptyStream` bit-vector для mixed-сценария;
-- проверка `EmptyFile` sub-vector для mixed-сценария;
-- проверка `FilesInfo.Crc` defined bit-vector для mixed-сценария;
-- проверка, что CRC в mixed-сценарии задан только для непустых файлов;
-- структурная проверка multi-Copy writer-архива через `SevenZipArchiveReader`;
-- проверка нескольких packed stream-ов в `PackInfo`;
-- проверка нескольких folder-ов в `UnpackInfo`;
-- проверка CRC для нескольких packed stream-ов, folder stream-ов и файлов;
-- структурная проверка `EmptyFile` bit-vector для пустого файла и пустой директории;
-- директория с данными возвращает `InvalidData`;
-- структурная проверка `Copy` writer-архива через `SevenZipArchiveReader`;
-- структурная проверка `FilesInfo` для empty entries через `SevenZipArchiveReader`;
-- повреждение packed data возвращает `InvalidData`;
-- повреждение файлового CRC в header возвращает `InvalidData`;
-- некорректные имена файлов возвращают `InvalidData`;
-- дублирующиеся имена entry возвращают `InvalidData`;
-- конфликт файла и директории с одинаковым именем возвращает `InvalidData`;
-- flat writer покрывает валидные простые entry: пустые файлы, пустые директории и непустые `Copy`-файлы;
-- имена, отличающиеся только регистром, возвращают `InvalidData`;
-- конфликт файла и директории с именами, отличающимися только регистром, возвращает `InvalidData`;
-- `null`-входные данные возвращают `InvalidData`;
-- имена entry с завершающей точкой возвращают `InvalidData`;
-- имена entry с завершающим пробельным символом возвращают `InvalidData`;
-- директории с завершающей точкой или пробелом в имени возвращают `InvalidData`;
-- точка и пробел внутри имени entry разрешены;
-- имена entry с недопустимыми Windows-символами возвращают `InvalidData`;
-- имена entry с управляющими символами возвращают `InvalidData`;
-- директории с недопустимыми Windows-символами в имени возвращают `InvalidData`;
-- обычные безопасные символы в имени entry разрешены;
-- round-trip вложенного пустого файла через decoder-path;
-- round-trip вложенного непустого `Copy`-файла через decoder-path;
-- round-trip явной директории и файла внутри неё через decoder-path;
-- структурная проверка nested path writer-а через `SevenZipArchiveReader`;
-- parent-directory другого регистра разрешает вложенный entry;
-- parent-file другого регистра возвращает `InvalidData`;
-- вложенные path, отличающиеся только регистром, возвращают `InvalidData`;
-- проверка сохранения `/` в `FilesInfo.Names`;
-- проверка `EmptyStream`, `EmptyFile` и `FilesInfo.Crc` для вложенных entry;
-- absolute path возвращает `InvalidData`;
-- path с завершающим `/` возвращает `InvalidData`;
-- path с пустым сегментом возвращает `InvalidData`;
-- path с `.` или `..` сегментом возвращает `InvalidData`;
-- path с `\` возвращает `InvalidData`;
-- path с зарезервированным Windows-сегментом возвращает `InvalidData`;
-- parent-file conflict возвращает `InvalidData`;
-- writer пишет `FilesInfo.WinAttrib` для empty entries;
-- writer пишет `Archive` attribute для файлов;
-- writer пишет `Directory` attribute для директорий;
-- writer пишет `Archive` attribute для непустых `Copy`-файлов;
-- writer пишет `WinAttrib` для всех entry в mixed-сценарии;
-- пользовательские `WindowsAttributes` файла пишутся в `FilesInfo.WinAttrib`;
-- пользовательские `WindowsAttributes` директории пишутся в `FilesInfo.WinAttrib`;
-- файл с `Directory` bit возвращает `InvalidData`;
-- директория без `Directory` bit возвращает `InvalidData`;
-- структурный тест проверяет `WinAttrib` payload для 9 entry;
-- структурный тест проверяет `AllAreDefined = true`;
-- структурный тест проверяет `External = false`;
-- структурный тест проверяет порядок `UINT32` attributes в payload;
-- entry без `LastWriteTimeUtc` не создаёт `FilesInfo.MTime`;
-- entry с `LastWriteTimeUtc` создаёт `FilesInfo.MTime`;
-- частично заданный `LastWriteTimeUtc` пишет defined bit-vector;
-- `DateTimeKind.Local` возвращает `InvalidData`;
-- `DateTimeKind.Unspecified` возвращает `InvalidData`;
-- структурный тест проверяет `MTime` payload;
-- структурный тест проверяет `AllAreDefined = false`;
-- структурный тест проверяет второй байт defined bit-vector для `MTime`;
-- структурный тест проверяет `External = false`;
-- структурный тест проверяет порядок `REAL_UINT64` timestamp payload.
+## Тестовое покрытие
 
-Пока не поддержано:
+Каждый поддержанный сценарий закреплён тестом; источник правды по конкретным тестам — код
+в `tests/Lzma.Core.Tests` (`Lzma1`, `Lzma2`, `SevenZip`). Покрытие по группам:
 
-- `CTime` и `ATime`;
-- platform-specific attributes кроме текущего `WinAttrib` поля;
+- **round-trip через decoder-path** — пустой архив, пустые файлы/директории и их смесь,
+  один и несколько `Copy`-файлов, mixed-сценарии, вложенные entry;
+- **структурные проверки через `SevenZipArchiveReader`** — `SignatureHeader`, packed data,
+  `PackInfo` / `UnpackInfo` (включая несколько packed stream-ов и folder-ов), `Copy` coder,
+  `FilesInfo`, `EmptyStream` / `EmptyFile` / `Crc` bit-vector-ы (включая граничные размеры и
+  второй байт), `WinAttrib` payload, `MTime` payload;
+- **CRC** — packed stream, folder stream и файл, в т.ч. для нескольких потоков;
+- **negative / `InvalidData`** — `null`, повреждённые packed data и CRC, директория с
+  данными, некорректные имена и пути (см. контракт), дубли и конфликты имён, несогласованные
+  attributes, не-UTC `LastWriteTimeUtc`;
+- **энкодер** — literal-only и script-кодирование LZMA, LZMA-Alone (обычный и
+  инкрементальный), LZMA2 (`Copy` и LZMA-чанки) с round-trip проверкой.
+
+Новые writer-тесты добавляются только под конкретный реализуемый сценарий — без
+заблаговременного перебора synthetic edge-case комбинаций.
+
+## Пока не поддержано
+
+- реальное сжатие произвольных данных (нет match finder-а);
+- LZMA / LZMA2 как coder в writer-path 7z (writer пишет только `Copy`);
+- `CTime` / `ATime` и platform-specific attributes кроме `WinAttrib`;
 - solid-группировка;
-- LZMA writer;
-- LZMA2 writer;
-- AES writer;
-- GOST writer.
+- AES / GOST writer.
 
-## WinAttributes
+## Критерий завершения этапа
 
-Writer пишет Windows attributes через `FilesInfo.WinAttrib`.
-
-Текущий контракт:
-
-- `WinAttrib` пишется для всех entry;
-- `AllAreDefined = true`;
-- `External = false`;
-- если attributes не заданы явно, writer выбирает базовые attributes по типу entry;
-- если attributes заданы явно, writer пишет переданное значение после validation.
-
-Default attributes:
-
-- файл получает `Archive` attribute: `0x20`;
-- директория получает `Directory` attribute: `0x10`.
-
-Публичная модель `SevenZipArchiveWriterEntry` позволяет задать attributes через `WindowsAttributes`.
-
-Validation attributes:
-
-- директория должна иметь `Directory` bit: `0x10`;
-- файл не должен иметь `Directory` bit;
-- несогласованные attributes возвращают `InvalidData`.
-
-Примеры:
-
-- файл с `Archive | ReadOnly` разрешён;
-- директория с `Directory | ReadOnly` разрешена;
-- директория без `Directory` bit возвращает `InvalidData`;
-- файл с `Directory` bit возвращает `InvalidData`.
-
-## MTime
-
-Writer поддерживает запись времени последней модификации через `FilesInfo.MTime`.
-
-Публичная модель `SevenZipArchiveWriterEntry` позволяет задать время через `LastWriteTimeUtc`.
-
-Текущий контракт:
-
-- writer пишет только `MTime`;
-- `CTime` и `ATime` пока не пишутся;
-- время хранится в формате Windows FILETIME;
-- время должно быть задано как `DateTimeKind.Utc`;
-- `DateTimeKind.Local` возвращает `InvalidData`;
-- `DateTimeKind.Unspecified` возвращает `InvalidData`;
-- значение, которое нельзя представить как FILETIME, возвращает `InvalidData`.
-
-Если `LastWriteTimeUtc` не задан ни у одного entry, writer не пишет `FilesInfo.MTime`.
-
-Если `LastWriteTimeUtc` задан у всех entry:
-
-- `AllAreDefined = true`;
-- defined bit-vector не пишется;
-- `External = false`;
-- timestamps пишутся в порядке entry.
-
-Если `LastWriteTimeUtc` задан только у части entry:
-
-- `AllAreDefined = false`;
-- writer пишет defined bit-vector;
-- `External = false`;
-- timestamp payload содержит только значения для defined entry.
-
-## Промежуточный итог writer-а простых entry
-
-Writer сейчас поддерживает простые валидные entry, включая безопасные вложенные `/`-paths.
-
-Поддерживаются:
-
-- простые имена entry;
-- вложенные пути через `/`;
-- пустые файлы;
-- пустые директории;
-- непустые файлы через `Copy`;
-- explicit parent directory + файл внутри неё.
-
-Поддержанные комбинации:
-
-- пустой архив;
-- один пустой файл;
-- несколько пустых файлов;
-- одна пустая директория;
-- смесь пустых файлов и пустых директорий;
-- один непустой файл через `Copy`;
-- несколько непустых файлов через `Copy`;
-- смесь empty entries и непустых файлов через `Copy`;
-- вложенный пустой файл;
-- вложенный непустой файл через `Copy`;
-- явная пустая директория и файл внутри неё.
-
-После входной validation маршрутизация writer-а устроена так:
-
-- если entry нет — строится пустой архив;
-- если все entry не содержат файловых данных — строится empty-entry архив;
-- если есть хотя бы один непустой файл — строится Copy-архив;
-- некорректные входные данные возвращают `InvalidData`.
-
-Директория с данными относится к некорректным входным данным и возвращает `InvalidData`.
-
-Для mixed Copy-сценария packed data, `PackInfo` и `UnpackInfo` формируются только для непустых файлов, а `FilesInfo` описывает все entry.
-
-## Контракт ошибок
-
-Для writer-кода используется явное поведение.
-
-Если сценарий ещё не поддержан, он должен возвращать явный результат или выбрасывать понятное исключение только там, где это соответствует уже принятому стилю API.
-
-Нельзя молча создавать частично некорректный архив.
-
-## Тестовый контракт
-
-Для этапа 2 обязательны:
-
-- round-trip тесты;
-- negative-тесты для неподдерживаемых сценариев;
-- проверки структуры архива на уровне чтения;
-- проверки, что созданный архив можно декодировать существующим decoder-path.
-
-Тесты добавляются только под конкретный реализуемый сценарий.
-
-## Контракт имён entry
-
-Writer сейчас поддерживает простые имена entry и вложенные entry path через `/`.
-
-Полный path состоит из сегментов, разделённых `/`.
-
-Каждый сегмент path должен быть:
-
-- непустым;
-- не состоять только из пробельных символов;
-- не содержать `\0`;
-- не содержать `\`;
-- не содержать недопустимые Windows-символы: `<`, `>`, `:`, `"`, `|`, `?`, `*`;
-- не содержать управляющие символы `0x00..0x1F`;
-- не быть зарезервированным Windows-именем;
-- не заканчиваться точкой;
-- не заканчиваться пробельным символом.
-
-Символ `/` разрешён только как разделитель между сегментами path.
-
-Writer также отклоняет:
-
-- точные дубли имён;
-- имена, отличающиеся только регистром;
-- конфликт файла и директории с одинаковым именем;
-- конфликт файла и директории с именами, отличающимися только регистром;
-- директорию с данными.
-
-Зарезервированные Windows-имена отклоняются без учёта регистра:
-
-- `CON`;
-- `PRN`;
-- `AUX`;
-- `NUL`;
-- `COM1` … `COM9`;
-- `LPT1` … `LPT9`.
-
-Имена с расширением тоже считаются зарезервированными, например `con.txt`, `COM1.log`, `lpt9.tmp`.
-
-Похожие, но не зарезервированные имена разрешены, например `COM10.txt`, `LPT10.txt`, `CONSOLE.txt`, `auxiliary.txt`.
-
-Точка и пробел внутри имени разрешены, например `file.name.txt`, `file name.txt` и `.config`.
-
-Имена с завершающей точкой или завершающим пробельным символом отклоняются, например `file.`, `file.txt.`, `file<space>`, `file.txt<space>`.
-
-Такие ошибки возвращают `InvalidData`.
-
-Это сделано намеренно, чтобы writer не создавал архивы с конфликтами при безопасной распаковке на case-insensitive файловых системах.
-
-## Контракт вложенных entry path
-
-Writer поддерживает вложенные пути через `/`.
-
-Примеры допустимых entry path:
-
-- `dir/empty.txt`;
-- `dir/file.bin`;
-- `dir/subdir/file.txt`.
-
-Writer отклоняет:
-
-- абсолютные пути;
-- пути с завершающим `/`;
-- пути с пустыми сегментами;
-- пути с `.` или `..` сегментами;
-- пути с `\`;
-- пути с некорректным сегментом;
-- путь, где parent-entry уже существует как файл;
-- вложенные path, отличающиеся только регистром.
-
-Примеры недопустимых entry path:
-
-- `/file.txt`;
-- `dir/`;
-- `dir//file.txt`;
-- `./file.txt`;
-- `dir/./file.txt`;
-- `../file.txt`;
-- `dir/../file.txt`;
-- `dir\file.txt`.
-
-Если parent-entry существует как директория, файл внутри неё разрешён:
-
-- `dir`;
-- `dir/file.bin`.
-
-Если parent-entry существует как файл, вложенный entry под ним возвращает `InvalidData`:
-
-- `dir`;
-- `dir/file.txt`.
-
-Проверка parent-entry выполняется без учёта регистра.
-
-Поэтому такой сценарий разрешён:
-
-- `Dir` как директория;
-- `dir/file.txt` как вложенный файл.
-
-А такой сценарий возвращает `InvalidData`:
-
-- `Dir` как файл;
-- `dir/file.txt` как вложенный entry.
-
-Полные path, отличающиеся только регистром, также возвращают `InvalidData`:
-
-- `dir/file.txt`;
-- `DIR/FILE.TXT`.
-
-Каждый сегмент path проходит тот же контракт имени entry: зарезервированные Windows-имена, недопустимые символы, завершающая точка и завершающий пробельный символ запрещены.
-
-## Связь с поздними направлениями
-
-AES writer и GOST writer не входят в базовый объём этапа 2.
-
-Magma, полноценный GOST KDF через Стрибог и остальные GOST-сценарии остаются поздним направлением после завершения основных этапов проекта.
-
-## Итоговый критерий завершения этапа
-
-Этап 2 можно считать завершённым, когда в проекте есть production-ориентированный базовый writer, покрытый тестами и согласованный с существующим decoder-path.
-
-До этого момента любые writer-сценарии считаются поэтапным развитием, а не полной реализацией архиватора.
-
+Этап 2 завершён, когда в проекте есть production-ориентированный базовый writer с реальным
+сжатием, покрытый тестами и согласованный с decoder-path. До этого любые writer-сценарии —
+поэтапное развитие, а не полная реализация архиватора.
