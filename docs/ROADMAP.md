@@ -132,16 +132,17 @@ range encoder, энкодеры литералов / длин / дистанци
 инкрементальный вариант, `Lzma2LzmaEncoder` (нарезка на чанки + COPY-fallback),
 `Lzma2CopyEncoder`.
 
-Ключевое ограничение: **match finder отсутствует**. `LzmaEncoder` сейчас «скриптовый» —
-кодирует литералы (literal-only) и matches по явно заданным `(distance, length)`, но сам
-совпадения не ищет. Поэтому произвольные данные он пока не сжимает: literal-only и `Copy`
-дают валидный поток, который читает 7-Zip, но без выигрыша по размеру.
+Реальное сжатие LZMA реализовано: добавлен match finder (`LzmaMatchFinder`, хеш-цепочки +
+greedy-разбор), `LzmaAloneEncoder.Encode(...)` сжимает произвольные данные. Сжатый `.lzma`
+распаковывается настоящими 7-Zip и `xz` побайтово идентично. Пока только LZMA-Alone, без
+rep-дистанций и оптимального разбора.
 
-Детальный план доведения энкодера до реального сжатия — [`ENCODER_MVP_PLAN.md`](ENCODER_MVP_PLAN.md).
+Детальный план развития энкодера (LZMA2) — [`ENCODER_MVP_PLAN.md`](ENCODER_MVP_PLAN.md).
 
 ### Направления этапа 2
 
-- match finder для `LZMA` → реальное сжатие, читаемое стандартным 7-Zip;
+- интеграция LZMA-сжатия в `LZMA2`-writer и 7z-writer;
+- rep-дистанции и lazy/optimal parsing для лучшего сжатия;
 - доведение `LZMA` и `LZMA2` энкодеров до production-уровня;
 - расширение 7z writer-а: `CTime`/`ATime`, развитие `StreamsInfo`/`FilesInfo`, задел под solid;
 - тесты совместимости в обе стороны (наше кодирование ↔ эталонная реализация) и round-trip внутри проекта;

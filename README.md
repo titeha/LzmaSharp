@@ -36,9 +36,9 @@ Decoder-path поддерживает методы и фильтры: `Copy`, `L
 вложенные `/`-paths, а также `FilesInfo.WinAttrib` и `FilesInfo.MTime`. Результаты
 проверяются round-trip и структурными тестами через существующий decoder-path.
 
-Низкоуровневый LZMA/LZMA2 энкодер реализован и протестирован, но **match finder пока нет** —
-поэтому произвольные данные сжимаются только через `Copy` / literal-only. Доведение до
-реального сжатия — ближайшая цель этапа 2 (см. [`docs/STAGE2_WRITER_STATUS.md`](docs/STAGE2_WRITER_STATUS.md)
+LZMA-энкодер уже даёт **реальное сжатие**: добавлен match finder, а `LzmaAloneEncoder.Encode(...)`
+пишет сжатый `.lzma`, который распаковывают настоящие 7-Zip и `xz`. Следующие шаги — интеграция
+LZMA-сжатия в LZMA2- и 7z-writer (см. [`docs/STAGE2_WRITER_STATUS.md`](docs/STAGE2_WRITER_STATUS.md)
 и [`docs/ENCODER_MVP_PLAN.md`](docs/ENCODER_MVP_PLAN.md)).
 
 ## Принципы разработки

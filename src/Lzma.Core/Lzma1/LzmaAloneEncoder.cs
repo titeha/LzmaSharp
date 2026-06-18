@@ -1,20 +1,37 @@
+using System.Runtime.InteropServices;
+
 namespace Lzma.Core.Lzma1;
 
 /// <summary>
 /// Утилита для кодирования потока в формате "LZMA Alone".
 /// </summary>
 /// <remarks>
-/// На данном шаге это в основном тестовый/вспомогательный энкодер:
-/// - умеет собрать заголовок (properties + dictionarySize + uncompressedSize);
-/// - умеет закодировать payload нашим <see cref="LzmaEncoder"/> и склеить с заголовком.
+/// Умеет:
+/// - собрать заголовок (properties + dictionarySize + uncompressedSize);
+/// - закодировать payload нашим <see cref="LzmaEncoder"/> и склеить с заголовком;
+/// - выполнить реальное сжатие через match finder (<see cref="Encode"/>).
 /// </remarks>
 public static class LzmaAloneEncoder
 {
   /// <summary>
+  /// Кодирует входной буфер в формат LZMA-Alone с реальным сжатием.
+  /// </summary>
+  /// <remarks>
+  /// Здесь подключён match finder (<see cref="LzmaMatchFinder"/>): данные разбираются на
+  /// литералы и match'и, после чего кодируются тем же путём, что и скрипт.
+  /// </remarks>
+  public static byte[] Encode(ReadOnlySpan<byte> input, LzmaProperties properties, int dictionarySize)
+  {
+    List<LzmaEncodeOp> ops = LzmaMatchFinder.Parse(input, dictionarySize);
+
+    return EncodeScript(CollectionsMarshal.AsSpan(ops), properties, dictionarySize);
+  }
+
+  /// <summary>
   /// Кодирует входной буфер в формат LZMA-Alone, используя ТОЛЬКО литералы.
   /// </summary>
   /// <remarks>
-  /// Это намеренное упрощение для тестов: на данном шаге энкодер не ищет match'и.
+  /// Это намеренное упрощение для тестов: здесь энкодер не ищет match'и.
   /// </remarks>
   public static byte[] EncodeLiteralOnly(ReadOnlySpan<byte> input, LzmaProperties properties, int dictionarySize)
   {

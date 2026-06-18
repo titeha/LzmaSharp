@@ -23,16 +23,26 @@ writer, UI, CLI, тяжёлая оптимизация, streaming writer API, п
 `LzmaAloneEncoder` и `LzmaAloneIncrementalEncoder`, `Lzma2LzmaEncoder` (нарезка на чанки +
 COPY-fallback, режимы literal-only и script), `Lzma2CopyEncoder` и инкрементальный вариант.
 
-Ключевое ограничение: **match finder отсутствует**. `LzmaEncoder` сейчас «скриптовый» —
-кодирует литералы (literal-only) и matches по явно заданным `(distance, length)`, но сам
-совпадения не ищет. Поэтому:
+Реальное сжатие LZMA реализовано. Добавлен match finder (`LzmaMatchFinder`): хеш-цепочки
+по 3 байтам, жадный (greedy) разбор, минимальная длина match — 3 байта, дистанция ограничена
+размером словаря. `LzmaAloneEncoder.Encode(...)` пропускает данные через match finder и
+кодирует их существующим путём (литералы + matches → range coder).
 
-- произвольные данные пока не сжимаются содержательно;
-- literal-only LZMA2 и `Copy` дают валидный поток, который читает стандартный 7-Zip, но без
-  выигрыша по размеру.
+Проверено:
 
-Ближайшая цель — добавить match finder и довести LZMA-энкодер до реального сжатия,
-читаемого 7-Zip. План — [`ENCODER_MVP_PLAN.md`](ENCODER_MVP_PLAN.md).
+- round-trip нашим декодером (текст, нули, повторяющиеся паттерны, случайные данные);
+- повторяющиеся/паттерные данные дают выигрыш по размеру;
+- сжатый `.lzma` распаковывается настоящими 7-Zip (`7z e`) и `xz --format=lzma` побайтово
+  идентично оригиналу.
+
+Текущие ограничения match finder-а (отдельные поздние шаги):
+
+- разбор только жадный (нет lazy/optimal parsing);
+- не используются rep-дистанции (rep0..rep3) — кодируются только обычные matches;
+- match finder подключён к LZMA-Alone; интеграция в LZMA2-writer и 7z-writer — следующие шаги;
+- оптимизация скорости/памяти — этап 3.
+
+Детальный план LZMA2 — [`ENCODER_MVP_PLAN.md`](ENCODER_MVP_PLAN.md).
 
 ## Состояние writer-path
 
