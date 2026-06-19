@@ -104,50 +104,86 @@ public static class Lzma2LzmaEncoder
 
     using var ms = new MemoryStream((data.Length / 2) + 64);
 
-    // Буфера match finder, список операций и энкодер переиспользуются между чанками:
-    // каждый чанк независим (сброс словаря на границе), а LzmaEncoder.EncodeScript и
-    // Parse сами сбрасывают состояние — поэтому результат побайтово тот же, но без
-    // аллокаций на каждый чанк.
+    if (data.Length == 0)
+    {
+      ms.WriteByte(0x00);
+      return ms.ToArray();
+    }
+
+    // Несущий словарь: match finder проходит ВЕСЬ вход со скользящим окном (совпадения
+    // могут ссылаться через границы чанков, вплоть до dictionarySize назад), а один
+    // LzmaEncoder кодирует поток операций, сохраняя словарь и модели между чанками.
+    // Первый LZMA-чанк сбрасывает словарь/состояние/props (0xE0), последующие сохраняют
+    // всё и лишь переинициализируют range coder (0x80) — как и ожидает декодер.
+    int windowSize = WindowSizePow2(Math.Min(dictionarySize, data.Length));
     int[] head = new int[LzmaMatchFinder.HashTableSize];
-    int[] prev = new int[maxUnpackChunkSize];
+    int[] prev = new int[windowSize];
     var ops = new List<LzmaEncodeOp>();
+    LzmaMatchFinder.ParseAll(data, dictionarySize, head, prev, windowSize - 1, ops);
+
     var encoder = new LzmaEncoder(lzmaProperties, dictionarySize);
 
-    int offset = 0;
+    // Границы чанка: по packed-размеру (с запасом до 64 КБ — packSize 16-битный) и по
+    // unpack-размеру (maxUnpackChunkSize). Берётся то, что наступит раньше.
+    const int packLimit = 60000;
+    int unpackLimit = maxUnpackChunkSize;
 
-    while (offset < data.Length)
+    bool first = true;
+    int chunkUnpack = 0;
+
+    foreach (LzmaEncodeOp op in CollectionsMarshal.AsSpan(ops))
     {
-      int take = Math.Min(maxUnpackChunkSize, data.Length - offset);
-      ReadOnlySpan<byte> slice = data.Slice(offset, take);
+      int opUnpack = op.Kind == LzmaEncodeOpKind.Match ? op.Length : 1;
 
-      // Сжимаем чанк независимо: match finder работает только в пределах чанка,
-      // потому что словарь сбрасывается на границе.
-      LzmaMatchFinder.Parse(slice, dictionarySize, head, prev, ops);
+      if (chunkUnpack > 0
+          && (encoder.PendingChunkBytes >= packLimit || chunkUnpack + opUnpack > unpackLimit))
+      {
+        FlushLzmaChunk(ms, encoder, ref first, propsByte, chunkUnpack);
+        chunkUnpack = 0;
+      }
 
-      byte[] payload = encoder.EncodeScript(CollectionsMarshal.AsSpan(ops));
-
-      // Заголовок LZMA-чанка с reset dict + props занимает 6 байт.
-      int lzmaTotalSize = 6 + payload.Length;
-      int copyTotalSize = 3 + take;
-
-      bool lzmaFits = payload.Length <= 65536;
-
-      if (lzmaFits && lzmaTotalSize < copyTotalSize)
-        WriteLzmaChunk(
-          ms,
-          payload,
-          unpackSize: take,
-          controlBase: 0xE0, // сброс словаря + сброс состояния + props
-          writeProps: true,
-          propsByte: propsByte);
-      else
-        WriteCopyChunk(ms, slice, resetDictionary: true);
-
-      offset += take;
+      encoder.EncodeOp(op);
+      chunkUnpack += opUnpack;
     }
+
+    if (chunkUnpack > 0)
+      FlushLzmaChunk(ms, encoder, ref first, propsByte, chunkUnpack);
 
     ms.WriteByte(0x00);
     return ms.ToArray();
+  }
+
+  /// <summary>
+  /// Завершает текущий LZMA2-чанк, пишет его в поток и начинает следующий, сохраняя
+  /// словарь и состояние модели. Первый чанк — 0xE0 (сброс словаря/состояния/props),
+  /// последующие — 0x80 (всё сохраняется, переинициализируется только range coder).
+  /// </summary>
+  private static void FlushLzmaChunk(MemoryStream ms, LzmaEncoder encoder, ref bool first, byte propsByte, int unpackSize)
+  {
+    byte[] payload = encoder.FinishChunk();
+
+    WriteLzmaChunk(
+        ms,
+        payload,
+        unpackSize: unpackSize,
+        controlBase: first ? (byte)0xE0 : (byte)0x80,
+        writeProps: first,
+        propsByte: propsByte);
+
+    encoder.BeginNextChunkKeepState();
+    first = false;
+  }
+
+  private static int WindowSizePow2(int n)
+  {
+    if (n < 1)
+      n = 1;
+
+    int size = 1;
+    while (size < n)
+      size <<= 1;
+
+    return size;
   }
 
   private static int EstimateUnpackSize(ReadOnlySpan<LzmaEncodeOp> script)

@@ -108,6 +108,113 @@ internal static class LzmaMatchFinder
   }
 
   /// <summary>
+  /// Разбирает <paramref name="input"/> целиком в <paramref name="ops"/> со скользящим окном:
+  /// <paramref name="prev"/> — циклический буфер размера (<paramref name="windowMask"/> + 1),
+  /// степень двойки ≥ dictionarySize. Это позволяет находить совпадения на всю длину входа
+  /// (в т.ч. через границы будущих LZMA2-чанков) при памяти, ограниченной размером словаря,
+  /// а не длиной входа.
+  /// </summary>
+  internal static void ParseAll(
+      ReadOnlySpan<byte> input,
+      int dictionarySize,
+      int[] head,
+      int[] prev,
+      int windowMask,
+      List<LzmaEncodeOp> ops)
+  {
+    ArgumentOutOfRangeException.ThrowIfNegativeOrZero(dictionarySize);
+
+    ops.Clear();
+
+    int n = input.Length;
+    if (n == 0)
+      return;
+
+    int maxMatch = LzmaConstants.MatchMaxLen;
+    int maxDistance = dictionarySize;
+
+    Array.Fill(head, -1);
+
+    int i = 0;
+    while (i < n)
+    {
+      FindLongestMatchCyclic(
+          input, i, maxMatch, maxDistance, head, prev, windowMask,
+          out int bestLength, out int bestDistance);
+
+      if (bestLength >= MinMatch)
+      {
+        ops.Add(LzmaEncodeOp.Match(bestDistance, bestLength));
+
+        int end = i + bestLength;
+        while (i < end)
+        {
+          InsertCyclic(input, i, head, prev, windowMask);
+          i++;
+        }
+      }
+      else
+      {
+        ops.Add(LzmaEncodeOp.Lit(input[i]));
+        InsertCyclic(input, i, head, prev, windowMask);
+        i++;
+      }
+    }
+  }
+
+  private static void FindLongestMatchCyclic(
+      ReadOnlySpan<byte> input,
+      int pos,
+      int maxMatch,
+      int maxDistance,
+      int[] head,
+      int[] prev,
+      int windowMask,
+      out int bestLength,
+      out int bestDistance)
+  {
+    bestLength = 0;
+    bestDistance = 0;
+
+    int n = input.Length;
+    if (pos + HashBytes > n)
+      return;
+
+    int candidate = head[Hash(input, pos)];
+    int chain = MaxChainLength;
+
+    while (candidate >= 0 && chain-- > 0)
+    {
+      int distance = pos - candidate;
+      if (distance > maxDistance)
+        break;
+
+      int length = MatchLength(input, candidate, pos, maxMatch);
+
+      if (length > bestLength)
+      {
+        bestLength = length;
+        bestDistance = distance;
+
+        if (length >= maxMatch)
+          break;
+      }
+
+      candidate = prev[candidate & windowMask];
+    }
+  }
+
+  private static void InsertCyclic(ReadOnlySpan<byte> input, int pos, int[] head, int[] prev, int windowMask)
+  {
+    if (pos + HashBytes > input.Length)
+      return;
+
+    int h = Hash(input, pos);
+    prev[pos & windowMask] = head[h];
+    head[h] = pos;
+  }
+
+  /// <summary>
   /// Ищет самый длинный match для позиции <paramref name="pos"/> по хеш-цепочке.
   /// </summary>
   private static void FindLongestMatch(

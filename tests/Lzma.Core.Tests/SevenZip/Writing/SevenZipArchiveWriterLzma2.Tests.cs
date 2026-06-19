@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 
 using Lzma.Core.SevenZip;
@@ -171,5 +172,64 @@ public sealed class SevenZipArchiveWriterLzma2Tests
     SevenZipCoderInfo coder = Assert.Single(folder.Coders);
 
     Assert.Equal([0x00], coder.MethodId);
+  }
+
+  /// <summary>
+  /// Живая проверка: собираем LZMA2-архив нашим writer-ом на данных больше одного чанка
+  /// (несущий словарь => первый чанк 0xE0, последующие 0x80) и распаковываем настоящим
+  /// 7-Zip, сравнивая байт в байт.
+  /// </summary>
+  [Fact]
+  public void BuildArchive_Lzma2_РаспаковываетсяНастоящим7Zip()
+  {
+    const string sevenZip = @"C:\Program Files\7-Zip\7z.exe";
+    if (!File.Exists(sevenZip))
+      return; // Настоящий 7-Zip недоступен в этом окружении.
+
+    // ~300 КБ текста => несколько LZMA2-чанков, кросс-чанковые матчи и перенос состояния.
+    byte[] content = Encoding.UTF8.GetBytes(
+        string.Concat(Enumerable.Repeat(
+            "Несущий словарь LZMA2 ↔ настоящий 7-Zip. The quick brown fox jumps over the lazy dog. 0123456789. ", 3000)));
+
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildArchive(
+        [new SevenZipArchiveWriterEntry("payload.bin", content)],
+        SevenZipWriterCompressionMethod.Lzma2,
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
+
+    string dir = Path.Combine(Path.GetTempPath(), "lzma2live_" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(dir);
+    try
+    {
+      string archivePath = Path.Combine(dir, "out.7z");
+      File.WriteAllBytes(archivePath, archive);
+
+      Assert.Equal(0, Run(sevenZip, $"t \"{archivePath}\""));
+      Assert.Equal(0, Run(sevenZip, $"e \"{archivePath}\" -o\"{dir}\" -y"));
+
+      byte[] extracted = File.ReadAllBytes(Path.Combine(dir, "payload.bin"));
+      Assert.Equal(content, extracted);
+    }
+    finally
+    {
+      Directory.Delete(dir, recursive: true);
+    }
+  }
+
+  private static int Run(string exe, string args)
+  {
+    var psi = new ProcessStartInfo(exe, args)
+    {
+      RedirectStandardOutput = true,
+      RedirectStandardError = true,
+      UseShellExecute = false,
+    };
+
+    using var p = Process.Start(psi)!;
+    p.StandardOutput.ReadToEnd();
+    p.StandardError.ReadToEnd();
+    p.WaitForExit();
+    return p.ExitCode;
   }
 }

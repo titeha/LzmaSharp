@@ -121,6 +121,51 @@ public sealed class LzmaEncoder
     return _range.ToArray();
   }
 
+  /// <summary>
+  /// Сколько байт упакованного вывода уже накоплено в текущем чанке (для контроля
+  /// границы LZMA2-чанка по packed-размеру).
+  /// </summary>
+  internal int PendingChunkBytes => _range.PendingBytes;
+
+  /// <summary>
+  /// Кодирует одну операцию (литерал/match) в текущий поток БЕЗ сброса состояния.
+  /// Используется при покусочном кодировании с несущим словарём.
+  /// </summary>
+  internal void EncodeOp(LzmaEncodeOp op)
+  {
+    switch (op.Kind)
+    {
+      case LzmaEncodeOpKind.Literal:
+        EncodeLiteral(op.Literal);
+        break;
+      case LzmaEncodeOpKind.Match:
+        EncodeMatch(op.Distance, op.Length);
+        break;
+      default:
+        throw new ArgumentOutOfRangeException(nameof(op), "Неизвестный тип операции.");
+    }
+  }
+
+  /// <summary>
+  /// Завершает текущий LZMA2-чанк: делает flush range coder'а и возвращает его байты.
+  /// Состояние модели (вероятности, reps, словарь, позиция) сохраняется.
+  /// </summary>
+  internal byte[] FinishChunk()
+  {
+    _range.Flush();
+    return _range.ToArray();
+  }
+
+  /// <summary>
+  /// Начинает следующий LZMA2-чанк, сохраняя словарь и состояние модели (семантика
+  /// control 0x80): переинициализируется только range coder (как и у декодера, который
+  /// заводит новый range-поток на границе каждого LZMA-чанка).
+  /// </summary>
+  internal void BeginNextChunkKeepState()
+  {
+    _range.Reset();
+  }
+
   private void EncodeLiteral(byte b)
   {
     long pos = _dictionary.TotalWritten;
