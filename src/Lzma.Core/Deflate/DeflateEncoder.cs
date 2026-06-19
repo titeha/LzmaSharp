@@ -13,6 +13,8 @@ public static class DeflateEncoder
   private const int MinMatch = 3;
   private const int MaxMatch = 258;
   private const int WindowSize = 32768;
+  private const int WindowMask = WindowSize - 1; // WindowSize — степень двойки
+
   private const int HashBits = 15;
   private const int HashSize = 1 << HashBits;
   private const int MaxChain = 128;
@@ -105,7 +107,13 @@ public static class DeflateEncoder
 
     int[] head = new int[HashSize];
     Array.Fill(head, -1);
-    int[] prev = new int[n];
+
+    // Дистанции Deflate ограничены окном (WindowSize), поэтому цепочки можно хранить
+    // в циклическом буфере размера окна, а не во весь вход: prev[pos & WindowMask].
+    // Все кандидаты в цепочке — в пределах окна (дальше цикл прерывается по dist),
+    // поэтому индексация по маске даёт тот же предшественник. Аллокация — константа
+    // (128 КБ) вместо new int[n].
+    int[] prev = new int[WindowSize];
 
     int i = 0;
     while (i < n)
@@ -134,7 +142,7 @@ public static class DeflateEncoder
               break;
           }
 
-          cand = prev[cand];
+          cand = prev[cand & WindowMask];
         }
       }
 
@@ -176,7 +184,7 @@ public static class DeflateEncoder
       return;
 
     int h = Hash(input, pos);
-    prev[pos] = head[h];
+    prev[pos & WindowMask] = head[h];
     head[h] = pos;
   }
 
