@@ -1,6 +1,15 @@
 namespace Lzma.Core.Lzma1;
 
 /// <summary>
+/// Кандидат-совпадение: длина и дистанция (1-based, как в <see cref="LzmaEncodeOp"/>).
+/// </summary>
+internal readonly struct LzmaMatch(int length, int distance)
+{
+  public int Length { get; } = length;
+  public int Distance { get; } = distance;
+}
+
+/// <summary>
 /// <para>
 /// Простой match finder для LZMA: разбирает входные данные в последовательность
 /// операций (литерал или match) методом хеш-цепочек с «жадным» (greedy) выбором.
@@ -134,18 +143,22 @@ internal static class LzmaMatchFinder
 
     Array.Fill(head, -1);
 
+    // Кандидаты совпадений текущей позиции (≤ MaxChainLength: по одному улучшению на узел цепочки).
+    Span<LzmaMatch> matches = stackalloc LzmaMatch[MaxChainLength];
+
     int i = 0;
     while (i < n)
     {
-      FindLongestMatchCyclic(
-          input, i, maxMatch, maxDistance, head, prev, windowMask,
-          out int bestLength, out int bestDistance);
+      int count = FindMatchesCyclic(input, i, maxMatch, maxDistance, head, prev, windowMask, matches);
 
-      if (bestLength >= MinMatch)
+      // Greedy: самый длинный кандидат — последний в списке (длины строго возрастают).
+      LzmaMatch best = count > 0 ? matches[count - 1] : default;
+
+      if (best.Length >= MinMatch)
       {
-        sink.Emit(LzmaEncodeOp.Match(bestDistance, bestLength));
+        sink.Emit(LzmaEncodeOp.Match(best.Distance, best.Length));
 
-        int end = i + bestLength;
+        int end = i + best.Length;
         while (i < end)
         {
           InsertCyclic(input, i, head, prev, windowMask);
@@ -161,7 +174,14 @@ internal static class LzmaMatchFinder
     }
   }
 
-  private static void FindLongestMatchCyclic(
+  /// <summary>
+  /// Находит совпадения для позиции <paramref name="pos"/> по хеш-цепочке и записывает их в
+  /// <paramref name="matches"/> с возрастающей длиной (и дистанцией): каждый элемент — это
+  /// «ступенька» вверх по достижимой длине с лучшей (наименьшей) дистанцией для неё. Возвращает
+  /// число кандидатов; последний — самый длинный (он же — greedy-выбор). Чтение из
+  /// <paramref name="head"/>/<paramref name="prev"/>, без вставки.
+  /// </summary>
+  internal static int FindMatchesCyclic(
       ReadOnlySpan<byte> input,
       int pos,
       int maxMatch,
@@ -169,15 +189,14 @@ internal static class LzmaMatchFinder
       int[] head,
       int[] prev,
       int windowMask,
-      out int bestLength,
-      out int bestDistance)
+      Span<LzmaMatch> matches)
   {
-    bestLength = 0;
-    bestDistance = 0;
-
     int n = input.Length;
     if (pos + HashBytes > n)
-      return;
+      return 0;
+
+    int count = 0;
+    int bestLength = 0;
 
     int candidate = head[Hash(input, pos)];
     int chain = MaxChainLength;
@@ -193,7 +212,7 @@ internal static class LzmaMatchFinder
       if (length > bestLength)
       {
         bestLength = length;
-        bestDistance = distance;
+        matches[count++] = new LzmaMatch(length, distance);
 
         if (length >= maxMatch)
           break;
@@ -201,9 +220,11 @@ internal static class LzmaMatchFinder
 
       candidate = prev[candidate & windowMask];
     }
+
+    return count;
   }
 
-  private static void InsertCyclic(ReadOnlySpan<byte> input, int pos, int[] head, int[] prev, int windowMask)
+  internal static void InsertCyclic(ReadOnlySpan<byte> input, int pos, int[] head, int[] prev, int windowMask)
   {
     if (pos + HashBytes > input.Length)
       return;
