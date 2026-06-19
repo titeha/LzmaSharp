@@ -31,6 +31,14 @@ public sealed class LzmaEncoder
   // isRep[state]
   private readonly ushort[] _isRep;
 
+  // isRepG0/G1/G2[state] — выбор индекса rep-дистанции (rep0..rep3).
+  private readonly ushort[] _isRepG0;
+  private readonly ushort[] _isRepG1;
+  private readonly ushort[] _isRepG2;
+
+  // isRep0Long[state][posState] — короткий (len 1) или длинный rep0.
+  private readonly ushort[] _isRep0Long;
+
   private readonly int _numPosStates;
   private readonly int _posStateMask;
 
@@ -51,6 +59,10 @@ public sealed class LzmaEncoder
 
     _isMatch = new ushort[LzmaConstants.NumStates * _numPosStates];
     _isRep = new ushort[LzmaConstants.NumStates];
+    _isRepG0 = new ushort[LzmaConstants.NumStates];
+    _isRepG1 = new ushort[LzmaConstants.NumStates];
+    _isRepG2 = new ushort[LzmaConstants.NumStates];
+    _isRep0Long = new ushort[LzmaConstants.NumStates * _numPosStates];
 
     _lenEncoder = new LzmaLenEncoder(_numPosStates);
     _repLenEncoder = new LzmaLenEncoder(_numPosStates);
@@ -65,6 +77,10 @@ public sealed class LzmaEncoder
 
     LzmaProbability.Reset(_isMatch);
     LzmaProbability.Reset(_isRep);
+    LzmaProbability.Reset(_isRepG0);
+    LzmaProbability.Reset(_isRepG1);
+    LzmaProbability.Reset(_isRepG2);
+    LzmaProbability.Reset(_isRep0Long);
 
     _literal.Reset();
     _lenEncoder.Reset();
@@ -209,32 +225,107 @@ public sealed class LzmaEncoder
     ref ushort isMatchProb = ref _isMatch[(state * _numPosStates) + posState];
     _range.EncodeBit(ref isMatchProb, 1);
 
-    // isRep = 0 (обычный match)
+    // Если дистанция совпадает с одной из последних rep-дистанций — кодируем дешёвый
+    // rep-match (без полного кодирования дистанции). reps хранят distance-1.
+    int repIndex = FindRepIndex(distance - 1);
+
     ref ushort isRepProb = ref _isRep[state];
-    _range.EncodeBit(ref isRepProb, 0);
 
-    // len
-    _lenEncoder.Encode(ref _range, posState, len);
+    if (repIndex < 0)
+    {
+      _range.EncodeBit(ref isRepProb, 0); // обычный match
 
-    // distance
-    int lenToPosState = len - LzmaConstants.MatchMinLen;
-    if (lenToPosState > LzmaConstants.NumLenToPosStates - 1)
-      lenToPosState = LzmaConstants.NumLenToPosStates - 1;
+      _lenEncoder.Encode(ref _range, posState, len);
 
-    _distanceEncoder.EncodeDistance(_range, lenToPosState, (uint)distance);
+      int lenToPosState = len - LzmaConstants.MatchMinLen;
+      if (lenToPosState > LzmaConstants.NumLenToPosStates - 1)
+        lenToPosState = LzmaConstants.NumLenToPosStates - 1;
+
+      _distanceEncoder.EncodeDistance(_range, lenToPosState, (uint)distance);
+
+      // Обновляем reps: rep0 хранит distance-1.
+      _reps[3] = _reps[2];
+      _reps[2] = _reps[1];
+      _reps[1] = _reps[0];
+      _reps[0] = distance - 1;
+
+      _state.UpdateMatch();
+    }
+    else
+    {
+      _range.EncodeBit(ref isRepProb, 1); // rep-match
+      EncodeRepMatch(repIndex, len, posState, state);
+      _state.UpdateRep();
+    }
 
     // Обновляем словарь так, как будто декодер реально выполнил match.
     _dictionary.CopyMatch(distance, len);
 
     // Последний записанный байт (distance = 1).
     _prevByte = _dictionary.PeekBackByte(1);
+  }
 
-    // Обновляем reps: rep0 хранит distance-1.
-    _reps[3] = _reps[2];
-    _reps[2] = _reps[1];
-    _reps[1] = _reps[0];
-    _reps[0] = distance - 1;
+  /// <summary>
+  /// Возвращает индекс rep-дистанции (0..3), равной <paramref name="distMinus1"/> (distance-1),
+  /// или -1, если совпадения нет. Меньший индекс предпочтительнее (он дешевле кодируется).
+  /// </summary>
+  private int FindRepIndex(int distMinus1)
+  {
+    for (int i = 0; i < 4; i++)
+      if (_reps[i] == distMinus1)
+        return i;
 
-    _state.UpdateMatch();
+    return -1;
+  }
+
+  /// <summary>
+  /// Кодирует rep-match: биты выбора индекса (isRepG0/G1/G2, isRep0Long) и длину repLen,
+  /// затем обновляет историю rep-дистанций — строго зеркально декодеру.
+  /// </summary>
+  private void EncodeRepMatch(int repIndex, int len, int posState, int state)
+  {
+    if (repIndex == 0)
+    {
+      _range.EncodeBit(ref _isRepG0[state], 0);
+      // Мы не выдаём матчи длиной < MatchMinLen, поэтому это всегда длинный rep0 (isRep0Long = 1).
+      _range.EncodeBit(ref _isRep0Long[(state * _numPosStates) + posState], 1);
+      // rep0 не меняется.
+    }
+    else
+    {
+      _range.EncodeBit(ref _isRepG0[state], 1);
+
+      if (repIndex == 1)
+      {
+        _range.EncodeBit(ref _isRepG1[state], 0);
+        int d = _reps[1];
+        _reps[1] = _reps[0];
+        _reps[0] = d;
+      }
+      else
+      {
+        _range.EncodeBit(ref _isRepG1[state], 1);
+
+        if (repIndex == 2)
+        {
+          _range.EncodeBit(ref _isRepG2[state], 0);
+          int d = _reps[2];
+          _reps[2] = _reps[1];
+          _reps[1] = _reps[0];
+          _reps[0] = d;
+        }
+        else // repIndex == 3
+        {
+          _range.EncodeBit(ref _isRepG2[state], 1);
+          int d = _reps[3];
+          _reps[3] = _reps[2];
+          _reps[2] = _reps[1];
+          _reps[1] = _reps[0];
+          _reps[0] = d;
+        }
+      }
+    }
+
+    _repLenEncoder.Encode(ref _range, posState, len);
   }
 }
