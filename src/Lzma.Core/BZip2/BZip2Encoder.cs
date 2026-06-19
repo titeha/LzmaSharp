@@ -74,6 +74,10 @@ public static class BZip2Encoder
     public readonly long[] Key = new long[BlockSize];
     public readonly byte[] Bwt = new byte[BlockSize];
     public readonly List<int> Mtf = new(BlockSize + 1);
+
+    // Буферы радикс-сортировки рангов (counting sort).
+    public readonly int[] Cnt = new int[BlockSize + 1];
+    public readonly int[] SaTmp = new int[BlockSize];
   }
 
   private static void EncodeBlock(MsbBitWriter writer, ReadOnlySpan<byte> chunk, uint blockCrc, BlockScratch scratch)
@@ -202,13 +206,20 @@ public static class BZip2Encoder
     int[] rank = scratch.Rank;
     int[] tmp = scratch.Tmp;
     long[] key = scratch.Key;
+    int[] cnt = scratch.Cnt;
+    int[] saTmp = scratch.SaTmp;
 
-    // Сортируем по упакованному ключу (rank[i] | rank[i+gap]) примитивным Array.Sort
-    // вместо делегата-компаратора: раньше на каждое сравнение был вызов делегата + два
-    // `% n`. Теперь модуло считается лишь O(n) раз за раунд при сборке ключей, а сама
-    // сортировка — по long. Буферы (sa/rank/tmp/key) переиспользуются между блоками.
+    // Каждый раунд сортируем позиции по паре рангов (rank[i], rank[i+gap]) РАДИКС-сортировкой
+    // (две стабильные counting-сортировки по 32-битным половинам), O(n) на раунд вместо
+    // O(n·log n) у сравнительной сортировки. Ранги в [0,n), поэтому counting sort применима
+    // напрямую. Ключ key[i] = (rank[i] << 32) | rank[i+gap]; сортировка по возрастанию key
+    // = лексикографический порядок пар. Все буферы переиспользуются между блоками.
     for (int i = 0; i < n; i++)
       rank[i] = t[i];
+
+    // Диапазон значений рангов для counting sort: в первом раунде ранги = байты [0,255],
+    // в последующих — плотные [0,n). Берём общий верхний предел.
+    int rmax = Math.Max(256, n);
 
     for (int gap = 1; ; gap *= 2)
     {
@@ -220,18 +231,33 @@ public static class BZip2Encoder
         if (j >= n)        // gap может превысить n на последнем раунде
           j %= n;
 
-        // Старшие 32 бита — ранг текущей половины, младшие — следующей; сортировка long
-        // по возрастанию даёт лексикографический порядок пар рангов.
         key[i] = ((long)rank[i] << 32) | (uint)rank[j];
-        sa[i] = i;
       }
 
-      // Сортируем только префикс длины n (буферы могут быть длиннее блока).
-      Array.Sort(key, sa, 0, n); // key и sa переупорядочиваются в тандеме
+      // Проход 1 (младшая половина = rank[i+gap]): стабильная counting sort позиций → saTmp.
+      Array.Clear(cnt, 0, rmax + 1);
+      for (int i = 0; i < n; i++)
+        cnt[(int)(key[i] & 0xFFFFFFFF) + 1]++;
+      for (int v = 1; v <= rmax; v++)
+        cnt[v] += cnt[v - 1];
+      for (int i = 0; i < n; i++)
+        saTmp[cnt[(int)(key[i] & 0xFFFFFFFF)]++] = i;
+
+      // Проход 2 (старшая половина = rank[i]): стабильная counting sort saTmp → sa.
+      Array.Clear(cnt, 0, rmax + 1);
+      for (int i = 0; i < n; i++)
+        cnt[(int)(key[i] >> 32) + 1]++;
+      for (int v = 1; v <= rmax; v++)
+        cnt[v] += cnt[v - 1];
+      for (int k = 0; k < n; k++)
+      {
+        int i = saTmp[k];
+        sa[cnt[(int)(key[i] >> 32)]++] = i;
+      }
 
       tmp[sa[0]] = 0;
       for (int i = 1; i < n; i++)
-        tmp[sa[i]] = tmp[sa[i - 1]] + (key[i] != key[i - 1] ? 1 : 0);
+        tmp[sa[i]] = tmp[sa[i - 1]] + (key[sa[i]] != key[sa[i - 1]] ? 1 : 0);
 
       Array.Copy(tmp, rank, n);
 
