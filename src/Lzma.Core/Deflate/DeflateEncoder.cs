@@ -162,11 +162,12 @@ public static class DeflateEncoder
   private static int MatchLength(ReadOnlySpan<byte> input, int source, int current, int n)
   {
     int max = Math.Min(MaxMatch, n - current);
-    int len = 0;
-    while (len < max && input[source + len] == input[current + len])
-      len++;
+    if (max <= 0)
+      return 0;
 
-    return len;
+    // Векторизованное сравнение общего префикса (SIMD). Результат идентичен побайтовому
+    // циклу: source < current, оба среза читают один входной буфер, длины равны max.
+    return input.Slice(source, max).CommonPrefixLength(input.Slice(current, max));
   }
 
   private static void Insert(ReadOnlySpan<byte> input, int pos, int[] head, int[] prev)
