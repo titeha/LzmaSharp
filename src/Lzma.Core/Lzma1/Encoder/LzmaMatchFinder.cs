@@ -166,15 +166,15 @@ internal static class LzmaMatchFinder
       int current,
       int maxMatch)
   {
-    int n = input.Length;
-    int length = 0;
+    // Ограничение длины: не дальше maxMatch и не за конец входа (по позиции current).
+    int limit = Math.Min(maxMatch, input.Length - current);
+    if (limit <= 0)
+      return 0;
 
-    while (length < maxMatch
-        && current + length < n
-        && input[source + length] == input[current + length])
-      length++;
-
-    return length;
+    // Векторизованное сравнение общего префикса. Результат идентичен побайтовому
+    // циклу (включая перекрывающиеся матчи, где source < current): обе стороны читают
+    // один и тот же входной буфер, а длины срезов равны limit.
+    return input.Slice(source, limit).CommonPrefixLength(input.Slice(current, limit));
   }
 
   /// <summary>
