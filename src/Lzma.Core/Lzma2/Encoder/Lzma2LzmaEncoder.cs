@@ -1,5 +1,3 @@
-using System.Runtime.InteropServices;
-
 using Lzma.Core.Lzma1;
 
 namespace Lzma.Core.Lzma2;
@@ -113,65 +111,73 @@ public static class Lzma2LzmaEncoder
     // Несущий словарь: match finder проходит ВЕСЬ вход со скользящим окном (совпадения
     // могут ссылаться через границы чанков, вплоть до dictionarySize назад), а один
     // LzmaEncoder кодирует поток операций, сохраняя словарь и модели между чанками.
-    // Первый LZMA-чанк сбрасывает словарь/состояние/props (0xE0), последующие сохраняют
-    // всё и лишь переинициализируют range coder (0x80) — как и ожидает декодер.
+    // Операции потоково (без материализации списка) уходят в ChunkingSink, который
+    // кодирует их на лету и нарезает LZMA2-чанки. Первый LZMA-чанк сбрасывает словарь/
+    // состояние/props (0xE0), последующие сохраняют всё и лишь переинициализируют range
+    // coder (0x80) — как и ожидает декодер.
     int windowSize = WindowSizePow2(Math.Min(dictionarySize, data.Length));
     int[] head = new int[LzmaMatchFinder.HashTableSize];
     int[] prev = new int[windowSize];
-    var ops = new List<LzmaEncodeOp>();
-    LzmaMatchFinder.ParseAll(data, dictionarySize, head, prev, windowSize - 1, ops);
 
     var encoder = new LzmaEncoder(lzmaProperties, dictionarySize);
+    var sink = new ChunkingSink(ms, encoder, propsByte, maxUnpackChunkSize);
 
-    // Границы чанка: по packed-размеру (с запасом до 64 КБ — packSize 16-битный) и по
-    // unpack-размеру (maxUnpackChunkSize). Берётся то, что наступит раньше.
-    const int packLimit = 60000;
-    int unpackLimit = maxUnpackChunkSize;
-
-    bool first = true;
-    int chunkUnpack = 0;
-
-    foreach (LzmaEncodeOp op in CollectionsMarshal.AsSpan(ops))
-    {
-      int opUnpack = op.Kind == LzmaEncodeOpKind.Match ? op.Length : 1;
-
-      if (chunkUnpack > 0
-          && (encoder.PendingChunkBytes >= packLimit || chunkUnpack + opUnpack > unpackLimit))
-      {
-        FlushLzmaChunk(ms, encoder, ref first, propsByte, chunkUnpack);
-        chunkUnpack = 0;
-      }
-
-      encoder.EncodeOp(op);
-      chunkUnpack += opUnpack;
-    }
-
-    if (chunkUnpack > 0)
-      FlushLzmaChunk(ms, encoder, ref first, propsByte, chunkUnpack);
+    LzmaMatchFinder.ParseAll(data, dictionarySize, head, prev, windowSize - 1, sink);
+    sink.Finish();
 
     ms.WriteByte(0x00);
     return ms.ToArray();
   }
 
   /// <summary>
-  /// Завершает текущий LZMA2-чанк, пишет его в поток и начинает следующий, сохраняя
-  /// словарь и состояние модели. Первый чанк — 0xE0 (сброс словаря/состояния/props),
-  /// последующие — 0x80 (всё сохраняется, переинициализируется только range coder).
+  /// Потоковый приёмник операций match finder: кодирует операции по мере поступления
+  /// и нарезает их на LZMA2-чанки по границам pack/unpack-размера. Первый чанк — 0xE0
+  /// (сброс словаря/состояния/props), последующие — 0x80 (всё сохраняется, переинициализируется
+  /// только range coder).
   /// </summary>
-  private static void FlushLzmaChunk(MemoryStream ms, LzmaEncoder encoder, ref bool first, byte propsByte, int unpackSize)
+  private sealed class ChunkingSink(MemoryStream ms, LzmaEncoder encoder, byte propsByte, int maxUnpackChunkSize)
+      : Lzma1.ILzmaOpSink
   {
-    byte[] payload = encoder.FinishChunk();
+    // Граница чанка по packed-размеру: с запасом до 64 КБ, т.к. packSize в заголовке 16-битный.
+    private const int PackLimit = 60000;
 
-    WriteLzmaChunk(
-        ms,
-        payload,
-        unpackSize: unpackSize,
-        controlBase: first ? (byte)0xE0 : (byte)0x80,
-        writeProps: first,
-        propsByte: propsByte);
+    private bool _first = true;
+    private int _chunkUnpack;
 
-    encoder.BeginNextChunkKeepState();
-    first = false;
+    public void Emit(LzmaEncodeOp op)
+    {
+      int opUnpack = op.Kind == LzmaEncodeOpKind.Match ? op.Length : 1;
+
+      if (_chunkUnpack > 0
+          && (encoder.PendingChunkBytes >= PackLimit || _chunkUnpack + opUnpack > maxUnpackChunkSize))
+        FlushChunk();
+
+      encoder.EncodeOp(op);
+      _chunkUnpack += opUnpack;
+    }
+
+    public void Finish()
+    {
+      if (_chunkUnpack > 0)
+        FlushChunk();
+    }
+
+    private void FlushChunk()
+    {
+      byte[] payload = encoder.FinishChunk();
+
+      WriteLzmaChunk(
+          ms,
+          payload,
+          unpackSize: _chunkUnpack,
+          controlBase: _first ? (byte)0xE0 : (byte)0x80,
+          writeProps: _first,
+          propsByte: propsByte);
+
+      encoder.BeginNextChunkKeepState();
+      _first = false;
+      _chunkUnpack = 0;
+    }
   }
 
   private static int WindowSizePow2(int n)

@@ -10,6 +10,15 @@ internal enum LzmaEncodeOpKind
 }
 
 /// <summary>
+/// Приёмник операций match finder. Позволяет парсеру отдавать операции потоково
+/// (по мере нахождения), не материализуя весь список в памяти.
+/// </summary>
+internal interface ILzmaOpSink
+{
+  void Emit(LzmaEncodeOp op);
+}
+
+/// <summary>
 /// Операция для «ручного» (скриптового) LZMA-кодирования.
 /// </summary>
 /// <remarks>

@@ -108,7 +108,8 @@ internal static class LzmaMatchFinder
   }
 
   /// <summary>
-  /// Разбирает <paramref name="input"/> целиком в <paramref name="ops"/> со скользящим окном:
+  /// Разбирает <paramref name="input"/> целиком, отдавая операции в <paramref name="sink"/>
+  /// по мере нахождения (без материализации всего списка), со скользящим окном:
   /// <paramref name="prev"/> — циклический буфер размера (<paramref name="windowMask"/> + 1),
   /// степень двойки ≥ dictionarySize. Это позволяет находить совпадения на всю длину входа
   /// (в т.ч. через границы будущих LZMA2-чанков) при памяти, ограниченной размером словаря,
@@ -120,11 +121,9 @@ internal static class LzmaMatchFinder
       int[] head,
       int[] prev,
       int windowMask,
-      List<LzmaEncodeOp> ops)
+      ILzmaOpSink sink)
   {
     ArgumentOutOfRangeException.ThrowIfNegativeOrZero(dictionarySize);
-
-    ops.Clear();
 
     int n = input.Length;
     if (n == 0)
@@ -144,7 +143,7 @@ internal static class LzmaMatchFinder
 
       if (bestLength >= MinMatch)
       {
-        ops.Add(LzmaEncodeOp.Match(bestDistance, bestLength));
+        sink.Emit(LzmaEncodeOp.Match(bestDistance, bestLength));
 
         int end = i + bestLength;
         while (i < end)
@@ -155,7 +154,7 @@ internal static class LzmaMatchFinder
       }
       else
       {
-        ops.Add(LzmaEncodeOp.Lit(input[i]));
+        sink.Emit(LzmaEncodeOp.Lit(input[i]));
         InsertCyclic(input, i, head, prev, windowMask);
         i++;
       }
