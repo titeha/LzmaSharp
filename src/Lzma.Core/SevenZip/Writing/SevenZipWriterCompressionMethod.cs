@@ -13,4 +13,10 @@ public enum SevenZipWriterCompressionMethod
 
   /// <summary>Сжатие `PPMd` (вариант H / PPMd7, как в 7-Zip).</summary>
   Ppmd = 2,
+
+  /// <summary>
+  /// Автовыбор кодека по содержимому: преимущественно текстовые данные → `PPMd`
+  /// (плотнее на тексте), иначе → `LZMA2`. Дешёвая эвристика (level 1).
+  /// </summary>
+  Auto = 3,
 }
