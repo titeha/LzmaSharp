@@ -78,6 +78,7 @@ public static partial class SevenZipArchiveWriter
     return compression switch
     {
       SevenZipWriterCompressionMethod.Lzma2 => BuildLzma2EntriesArchive(entries, out archive),
+      SevenZipWriterCompressionMethod.Ppmd => BuildPpmdEntriesArchive(entries, out archive),
       SevenZipWriterCompressionMethod.Copy => BuildCopyEntriesArchive(entries, out archive),
       _ => SevenZipArchiveWriteResult.NotSupported,
     };

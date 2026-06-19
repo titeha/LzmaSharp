@@ -10,4 +10,7 @@ public enum SevenZipWriterCompressionMethod
 
   /// <summary>Сжатие `LZMA2`.</summary>
   Lzma2 = 1,
+
+  /// <summary>Сжатие `PPMd` (вариант H / PPMd7, как в 7-Zip).</summary>
+  Ppmd = 2,
 }
