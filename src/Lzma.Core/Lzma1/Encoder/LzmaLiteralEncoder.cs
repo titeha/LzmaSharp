@@ -148,4 +148,60 @@ internal sealed class LzmaLiteralEncoder
       }
     }
   }
+
+  /// <summary>
+  /// Цена обычного литерала при текущих вероятностях — зеркало <see cref="EncodeNormal"/>.
+  /// </summary>
+  public uint GetPriceNormal(long position, byte previousByte, byte literal)
+  {
+    int baseIndex = GetSubCoderOffset(position, previousByte);
+
+    uint price = 0;
+    int symbol = 1;
+    for (int i = 7; i >= 0; i--)
+    {
+      uint bit = (uint)((literal >> i) & 1);
+      price += LzmaPrice.Price(Probs[baseIndex + symbol], bit);
+      symbol = (symbol << 1) | (int)bit;
+    }
+
+    return price;
+  }
+
+  /// <summary>
+  /// Цена «matched literal» при текущих вероятностях — зеркало <see cref="EncodeMatched"/>.
+  /// </summary>
+  public uint GetPriceMatched(long position, byte previousByte, byte matchByte, byte literal)
+  {
+    int baseIndex = GetSubCoderOffset(position, previousByte);
+
+    uint price = 0;
+    int symbol = 1;
+    for (int i = 7; i >= 0; i--)
+    {
+      uint matchBit = (uint)((matchByte >> 7) & 1);
+      matchByte <<= 1;
+
+      uint bit = (uint)((literal >> i) & 1);
+
+      int probIndex = baseIndex + ((1 + (int)matchBit) << 8) + symbol;
+      price += LzmaPrice.Price(Probs[probIndex], bit);
+
+      symbol = (symbol << 1) | (int)bit;
+
+      if (matchBit != bit)
+      {
+        for (int j = i - 1; j >= 0; j--)
+        {
+          uint b2 = (uint)((literal >> j) & 1);
+          price += LzmaPrice.Price(Probs[baseIndex + symbol], b2);
+          symbol = (symbol << 1) | (int)b2;
+        }
+
+        break;
+      }
+    }
+
+    return price;
+  }
 }

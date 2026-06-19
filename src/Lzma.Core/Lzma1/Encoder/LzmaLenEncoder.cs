@@ -117,4 +117,29 @@ internal sealed class LzmaLenEncoder
 
     _high.EncodeSymbol(range, (uint)symbol);
   }
+
+  /// <summary>
+  /// Цена кодирования длины <paramref name="len"/> при текущих вероятностях — зеркало
+  /// <see cref="Encode"/>. Нужна для optimal parsing.
+  /// </summary>
+  public uint GetPrice(int posState, int len)
+  {
+    int symbol = len - LzmaConstants.MatchMinLen;
+
+    if (symbol < LzmaConstants.LenNumLowSymbols)
+      return LzmaPrice.Price0(_choice[0])
+          + LzmaPrice.BitTreePrice(_low[posState].Probs, LzmaConstants.LenNumLowBits, (uint)symbol);
+
+    uint price = LzmaPrice.Price1(_choice[0]);
+    symbol -= LzmaConstants.LenNumLowSymbols;
+
+    if (symbol < LzmaConstants.LenNumMidSymbols)
+      return price + LzmaPrice.Price0(_choice[1])
+          + LzmaPrice.BitTreePrice(_mid[posState].Probs, LzmaConstants.LenNumMidBits, (uint)symbol);
+
+    price += LzmaPrice.Price1(_choice[1]);
+    symbol -= LzmaConstants.LenNumMidSymbols;
+
+    return price + LzmaPrice.BitTreePrice(_high.Probs, LzmaConstants.LenNumHighBits, (uint)symbol);
+  }
 }

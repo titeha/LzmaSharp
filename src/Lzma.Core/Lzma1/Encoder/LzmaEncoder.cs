@@ -266,6 +266,83 @@ public sealed class LzmaEncoder
   }
 
   /// <summary>
+  /// Цена кодирования операции <paramref name="op"/> при ТЕКУЩЕМ состоянии модели — без
+  /// её изменения. Зеркало решений <see cref="EncodeLiteral"/>/<see cref="EncodeMatch"/>;
+  /// нужна для optimal parsing (выбор дешевейшего пути).
+  /// </summary>
+  internal uint PriceOp(LzmaEncodeOp op)
+      => op.Kind == LzmaEncodeOpKind.Literal ? PriceLiteral(op.Literal) : PriceMatch(op.Distance, op.Length);
+
+  private uint PriceLiteral(byte b)
+  {
+    long pos = _dictionary.TotalWritten;
+    int posState = (int)pos & _posStateMask;
+    int state = _state.Value;
+
+    uint price = LzmaPrice.Price0(_isMatch[(state * _numPosStates) + posState]);
+
+    if (_state.IsLiteralState)
+      return price + _literal.GetPriceNormal(pos, _prevByte, b);
+
+    byte matchByte = _dictionary.PeekBackByte(_reps[0] + 1);
+    return price + _literal.GetPriceMatched(pos, _prevByte, matchByte, b);
+  }
+
+  private uint PriceMatch(int distance, int len)
+  {
+    long pos = _dictionary.TotalWritten;
+    int posState = (int)pos & _posStateMask;
+    int state = _state.Value;
+
+    uint price = LzmaPrice.Price1(_isMatch[(state * _numPosStates) + posState]);
+    int repIndex = FindRepIndex(distance - 1);
+
+    if (repIndex < 0)
+    {
+      price += LzmaPrice.Price0(_isRep[state]);
+      price += _lenEncoder.GetPrice(posState, len);
+
+      int lenToPosState = len - LzmaConstants.MatchMinLen;
+      if (lenToPosState > LzmaConstants.NumLenToPosStates - 1)
+        lenToPosState = LzmaConstants.NumLenToPosStates - 1;
+
+      price += _distanceEncoder.GetPrice(lenToPosState, (uint)distance);
+      return price;
+    }
+
+    price += LzmaPrice.Price1(_isRep[state]);
+    price += PriceRepMatch(repIndex, len, posState, state);
+    return price;
+  }
+
+  private uint PriceRepMatch(int repIndex, int len, int posState, int state)
+  {
+    uint price;
+
+    if (repIndex == 0)
+    {
+      price = LzmaPrice.Price0(_isRepG0[state])
+          + LzmaPrice.Price1(_isRep0Long[(state * _numPosStates) + posState]);
+    }
+    else
+    {
+      price = LzmaPrice.Price1(_isRepG0[state]);
+
+      if (repIndex == 1)
+      {
+        price += LzmaPrice.Price0(_isRepG1[state]);
+      }
+      else
+      {
+        price += LzmaPrice.Price1(_isRepG1[state]);
+        price += repIndex == 2 ? LzmaPrice.Price0(_isRepG2[state]) : LzmaPrice.Price1(_isRepG2[state]);
+      }
+    }
+
+    return price + _repLenEncoder.GetPrice(posState, len);
+  }
+
+  /// <summary>
   /// Возвращает индекс rep-дистанции (0..3), равной <paramref name="distMinus1"/> (distance-1),
   /// или -1, если совпадения нет. Меньший индекс предпочтительнее (он дешевле кодируется).
   /// </summary>

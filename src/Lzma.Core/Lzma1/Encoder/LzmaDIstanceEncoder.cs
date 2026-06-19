@@ -108,6 +108,40 @@ internal sealed class LzmaDistanceEncoder
     _alignEncoder.EncodeReverse(range, dist & ((1u << LzmaConstants.NumAlignBits) - 1u));
   }
 
+  /// <summary>
+  /// Цена кодирования <paramref name="distance"/> при текущих вероятностях — зеркало
+  /// <see cref="EncodeDistance"/>. Прямые биты (для больших расстояний) стоят ровно
+  /// <see cref="LzmaPrice.BitPrice"/> каждый.
+  /// </summary>
+  public uint GetPrice(int lenToPosState, uint distance)
+  {
+    uint pos = distance - 1;
+    int posSlot = GetPosSlot(pos);
+
+    uint price = LzmaPrice.BitTreePrice(
+        _posSlotEncoders[lenToPosState].Probs, LzmaConstants.NumPosSlotBits, (uint)posSlot);
+
+    if (posSlot < LzmaConstants.StartPosModelIndex)
+      return price;
+
+    int numDirectBits = (posSlot >> 1) - 1;
+    uint basePos = (uint)((2 | (posSlot & 1)) << numDirectBits);
+    uint dist = pos - basePos;
+
+    if (posSlot < LzmaConstants.EndPosModelIndex)
+    {
+      LzmaBitTreeEncoder enc = _posEncoders[posSlot - LzmaConstants.StartPosModelIndex];
+      return price + LzmaPrice.BitTreeReversePrice(enc.Probs, enc.NumBits, dist);
+    }
+
+    int directBits = numDirectBits - LzmaConstants.NumAlignBits;
+    price += (uint)directBits * LzmaPrice.BitPrice;
+    price += LzmaPrice.BitTreeReversePrice(
+        _alignEncoder.Probs, LzmaConstants.NumAlignBits, dist & ((1u << LzmaConstants.NumAlignBits) - 1u));
+
+    return price;
+  }
+
   private static int GetPosSlot(uint pos)
   {
     // Для pos 0..3 posSlot == pos.
