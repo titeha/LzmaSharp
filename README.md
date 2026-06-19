@@ -32,9 +32,10 @@ Decoder-path поддерживает методы и фильтры: `Copy`, `L
 ### Запись 7z (этап 2)
 
 Базовый writer через `SevenZipArchiveWriter.BuildArchive(...)` умеет писать пустой архив,
-пустые файлы и директории, непустые файлы (метод `Copy` или **`LZMA2`** на выбор через
-`SevenZipWriterCompressionMethod`), mixed-сценарии, безопасные вложенные `/`-paths, а также
-`FilesInfo.WinAttrib` и `FilesInfo.MTime`.
+пустые файлы и директории, непустые файлы (методы `Copy`, **`LZMA2`**, **`PPMd`** или
+**`Auto`** — выбор кодека по содержимому — через `SevenZipWriterCompressionMethod`),
+mixed-сценарии, безопасные вложенные `/`-paths, а также `FilesInfo.WinAttrib` и `FilesInfo.MTime`.
+Архивы `LZMA2` и `PPMd` распаковываются настоящим **7-Zip** побайтово.
 
 Энкодер даёт **реальное сжатие**: match finder питает `LzmaAloneEncoder.Encode(...)` (`.lzma`)
 и LZMA2-writer. Сжатые `.lzma` и `.7z` (LZMA2) распаковываются настоящими **7-Zip** и **`xz`**
