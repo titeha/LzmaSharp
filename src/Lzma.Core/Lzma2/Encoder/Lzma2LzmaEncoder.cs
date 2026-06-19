@@ -104,6 +104,15 @@ public static class Lzma2LzmaEncoder
 
     using var ms = new MemoryStream((data.Length / 2) + 64);
 
+    // Буфера match finder, список операций и энкодер переиспользуются между чанками:
+    // каждый чанк независим (сброс словаря на границе), а LzmaEncoder.EncodeScript и
+    // Parse сами сбрасывают состояние — поэтому результат побайтово тот же, но без
+    // аллокаций на каждый чанк.
+    int[] head = new int[LzmaMatchFinder.HashTableSize];
+    int[] prev = new int[maxUnpackChunkSize];
+    var ops = new List<LzmaEncodeOp>();
+    var encoder = new LzmaEncoder(lzmaProperties, dictionarySize);
+
     int offset = 0;
 
     while (offset < data.Length)
@@ -113,9 +122,8 @@ public static class Lzma2LzmaEncoder
 
       // Сжимаем чанк независимо: match finder работает только в пределах чанка,
       // потому что словарь сбрасывается на границе.
-      List<LzmaEncodeOp> ops = LzmaMatchFinder.Parse(slice, dictionarySize);
+      LzmaMatchFinder.Parse(slice, dictionarySize, head, prev, ops);
 
-      var encoder = new LzmaEncoder(lzmaProperties, dictionarySize);
       byte[] payload = encoder.EncodeScript(CollectionsMarshal.AsSpan(ops));
 
       // Заголовок LZMA-чанка с reset dict + props занимает 6 байт.

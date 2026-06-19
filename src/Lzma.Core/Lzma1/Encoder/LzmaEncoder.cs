@@ -69,6 +69,7 @@ public sealed class LzmaEncoder
     _literal.Reset();
     _lenEncoder.Reset();
     _repLenEncoder.Reset();
+    _distanceEncoder.Reset();
 
     _state.Reset();
     _prevByte = 0;

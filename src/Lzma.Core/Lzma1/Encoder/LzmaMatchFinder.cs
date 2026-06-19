@@ -25,33 +25,54 @@ internal static class LzmaMatchFinder
   /// <summary>Число бит хеш-таблицы (65536 цепочек).</summary>
   private const int HashBits = 16;
 
+  /// <summary>Размер хеш-таблицы (число цепочек). Нужен вызывающему для выделения буфера.</summary>
+  internal const int HashTableSize = 1 << HashBits;
+
   /// <summary>Максимальная длина прохода по цепочке кандидатов в одной позиции.</summary>
   private const int MaxChainLength = 128;
 
   /// <summary>
-  /// Разбирает <paramref name="input"/> в список LZMA-операций.
+  /// Разбирает <paramref name="input"/> в список LZMA-операций. Выделяет буфера сам —
+  /// удобно для разовых вызовов и тестов.
   /// </summary>
   /// <param name="input">Исходные данные.</param>
   /// <param name="dictionarySize">Размер словаря; ограничивает максимальную дистанцию match.</param>
   public static List<LzmaEncodeOp> Parse(ReadOnlySpan<byte> input, int dictionarySize)
   {
+    var ops = new List<LzmaEncodeOp>();
+    int[] head = new int[HashTableSize];
+    int[] prev = new int[Math.Max(1, input.Length)];
+    Parse(input, dictionarySize, head, prev, ops);
+    return ops;
+  }
+
+  /// <summary>
+  /// Разбирает <paramref name="input"/> в <paramref name="ops"/>, переиспользуя переданные
+  /// буфера <paramref name="head"/> (размер <see cref="HashTableSize"/>) и <paramref name="prev"/>
+  /// (размер ≥ длины входа). Результат разбора идентичен аллоцирующей перегрузке — это нужно
+  /// для покусочной обработки без аллокаций на каждый чанк.
+  /// </summary>
+  internal static void Parse(
+      ReadOnlySpan<byte> input,
+      int dictionarySize,
+      int[] head,
+      int[] prev,
+      List<LzmaEncodeOp> ops)
+  {
     ArgumentOutOfRangeException.ThrowIfNegativeOrZero(dictionarySize);
 
-    var ops = new List<LzmaEncodeOp>();
+    ops.Clear();
 
     int n = input.Length;
     if (n == 0)
-      return ops;
+      return;
 
     int maxMatch = LzmaConstants.MatchMaxLen;
     int maxDistance = dictionarySize;
 
-    int hashSize = 1 << HashBits;
-    int[] head = new int[hashSize];
+    // Сброс только head: цепочки содержат лишь позиции, вставленные в этом проходе,
+    // поэтому prev[candidate] всегда записан до чтения и в очистке не нуждается.
     Array.Fill(head, -1);
-
-    // prev[p] — предыдущая позиция с тем же хешем, что и p.
-    int[] prev = new int[n];
 
     int i = 0;
     while (i < n)
@@ -84,8 +105,6 @@ internal static class LzmaMatchFinder
         i++;
       }
     }
-
-    return ops;
   }
 
   /// <summary>
