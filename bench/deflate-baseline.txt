@@ -1,0 +1,369 @@
+G:\Projects\Windows\LzmaSharp\src\Lzma.Core\Ppmd\Ppmd7Model.cs(728,26): warning CA2014: Потенциальное переполнение стека. Переместите stackalloc за пределы цикла. (https://learn.microsoft.com/dotnet/fundamentals/code-analysis/quality-rules/ca2014) [G:\Projects\Windows\LzmaSharp\src\Lzma.Core\Lzma.Core.csproj]
+// Validating benchmarks:
+// ***** BenchmarkRunner: Start   *****
+// ***** Found 4 benchmark(s) in total *****
+// ***** Building 1 exe(s) in Parallel: Start   *****
+// start dotnet  restore /p:UseSharedCompilation=false /p:BuildInParallel=false /m:1 /p:Deterministic=true /p:Optimize=true /p:ArtifactsPath="G:\Projects\Windows\LzmaSharp\artifacts\bin\Lzma.Core.Benchmarks\release\Lzma.Core.Benchmarks-ShortRun-1/" /p:OutDir="G:\Projects\Windows\LzmaSharp\artifacts\bin\Lzma.Core.Benchmarks\release\Lzma.Core.Benchmarks-ShortRun-1\bin\Release\net10.0/" /p:OutputPath="G:\Projects\Windows\LzmaSharp\artifacts\bin\Lzma.Core.Benchmarks\release\Lzma.Core.Benchmarks-ShortRun-1\bin\Release\net10.0/" /p:PublishDir="G:\Projects\Windows\LzmaSharp\artifacts\bin\Lzma.Core.Benchmarks\release\Lzma.Core.Benchmarks-ShortRun-1\publish/" in G:\Projects\Windows\LzmaSharp\artifacts\bin\Lzma.Core.Benchmarks\release\Lzma.Core.Benchmarks-ShortRun-1
+// command took 1.67 sec and exited with 0
+// start dotnet  build -c Release --no-restore /p:UseSharedCompilation=false /p:BuildInParallel=false /m:1 /p:Deterministic=true /p:Optimize=true /p:ArtifactsPath="G:\Projects\Windows\LzmaSharp\artifacts\bin\Lzma.Core.Benchmarks\release\Lzma.Core.Benchmarks-ShortRun-1/" /p:OutDir="G:\Projects\Windows\LzmaSharp\artifacts\bin\Lzma.Core.Benchmarks\release\Lzma.Core.Benchmarks-ShortRun-1\bin\Release\net10.0/" /p:OutputPath="G:\Projects\Windows\LzmaSharp\artifacts\bin\Lzma.Core.Benchmarks\release\Lzma.Core.Benchmarks-ShortRun-1\bin\Release\net10.0/" /p:PublishDir="G:\Projects\Windows\LzmaSharp\artifacts\bin\Lzma.Core.Benchmarks\release\Lzma.Core.Benchmarks-ShortRun-1\publish/" --output "G:\Projects\Windows\LzmaSharp\artifacts\bin\Lzma.Core.Benchmarks\release\Lzma.Core.Benchmarks-ShortRun-1\bin\Release\net10.0/" in G:\Projects\Windows\LzmaSharp\artifacts\bin\Lzma.Core.Benchmarks\release\Lzma.Core.Benchmarks-ShortRun-1
+// command took 5.73 sec and exited with 0
+// ***** Done, took 00:00:07 (7.46 sec)   *****
+// Found 4 benchmarks:
+//   DeflateBenchmarks.Encode: ShortRun(IterationCount=3, LaunchCount=1, WarmupCount=3) [SizeMiB=1]
+//   DeflateBenchmarks.Decode: ShortRun(IterationCount=3, LaunchCount=1, WarmupCount=3) [SizeMiB=1]
+//   DeflateBenchmarks.Encode: ShortRun(IterationCount=3, LaunchCount=1, WarmupCount=3) [SizeMiB=16]
+//   DeflateBenchmarks.Decode: ShortRun(IterationCount=3, LaunchCount=1, WarmupCount=3) [SizeMiB=16]
+
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: Высокая производительность)
+// **************************
+// Benchmark: DeflateBenchmarks.Encode: ShortRun(IterationCount=3, LaunchCount=1, WarmupCount=3) [SizeMiB=1]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet Lzma.Core.Benchmarks-ShortRun-1.dll --anonymousPipes 2280 2400 --benchmarkName "Lzma.Core.Benchmarks.DeflateBenchmarks.Encode(SizeMiB: 1)" --job ShortRun --benchmarkId 0 in G:\Projects\Windows\LzmaSharp\artifacts\bin\Lzma.Core.Benchmarks\release\Lzma.Core.Benchmarks-ShortRun-1\bin\Release\net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.2
+// Runtime=.NET 10.0.9 (10.0.926.27113), X64 RyuJIT AVX2
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AVX2,AES,BMI1,BMI2,FMA,LZCNT,PCLMUL,POPCNT,AvxVnni,SERIALIZE VectorSize=256
+// Job: ShortRun(IterationCount=3, LaunchCount=1, WarmupCount=3)
+
+OverheadJitting  1: 1 op, 167100.00 ns, 167.1000 us/op
+WorkloadJitting  1: 1 op, 63798300.00 ns, 63.7983 ms/op
+
+WorkloadPilot    1: 2 op, 127171500.00 ns, 63.5858 ms/op
+WorkloadPilot    2: 3 op, 191503700.00 ns, 63.8346 ms/op
+WorkloadPilot    3: 4 op, 250156300.00 ns, 62.5391 ms/op
+WorkloadPilot    4: 5 op, 314864300.00 ns, 62.9729 ms/op
+WorkloadPilot    5: 6 op, 374563300.00 ns, 62.4272 ms/op
+WorkloadPilot    6: 7 op, 437764200.00 ns, 62.5377 ms/op
+WorkloadPilot    7: 8 op, 498921000.00 ns, 62.3651 ms/op
+WorkloadPilot    8: 9 op, 572790900.00 ns, 63.6434 ms/op
+
+WorkloadWarmup   1: 9 op, 567648000.00 ns, 63.0720 ms/op
+WorkloadWarmup   2: 9 op, 562156700.00 ns, 62.4619 ms/op
+WorkloadWarmup   3: 9 op, 555633000.00 ns, 61.7370 ms/op
+
+// BeforeActualRun
+WorkloadActual   1: 9 op, 548110100.00 ns, 60.9011 ms/op
+WorkloadActual   2: 9 op, 551428400.00 ns, 61.2698 ms/op
+WorkloadActual   3: 9 op, 551012000.00 ns, 61.2236 ms/op
+
+// AfterActualRun
+WorkloadResult   1: 9 op, 548110100.00 ns, 60.9011 ms/op
+WorkloadResult   2: 9 op, 551428400.00 ns, 61.2698 ms/op
+WorkloadResult   3: 9 op, 551012000.00 ns, 61.2236 ms/op
+// GC:  7 7 7 62035440 9
+// Threading:  0 0 9
+
+// AfterAll
+// Benchmark Process 93264 has exited with code 0.
+
+Mean = 61.132 ms, StdErr = 0.116 ms (0.19%), N = 3, StdDev = 0.201 ms
+Min = 60.901 ms, Q1 = 61.062 ms, Median = 61.224 ms, Q3 = 61.247 ms, Max = 61.270 ms
+IQR = 0.184 ms, LowerFence = 60.786 ms, UpperFence = 61.523 ms
+ConfidenceInterval = [57.467 ms; 64.796 ms] (CI 99.9%), Margin = 3.664 ms (5.99% of Mean)
+Skewness = -0.36, Kurtosis = 0.67, MValue = 2
+
+// ** Remained 3 (75,0 %) benchmark(s) to run. Estimated finish 2026-06-19 21:11 (0h 0m from now) **
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: Высокая производительность)
+// **************************
+// Benchmark: DeflateBenchmarks.Decode: ShortRun(IterationCount=3, LaunchCount=1, WarmupCount=3) [SizeMiB=1]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet Lzma.Core.Benchmarks-ShortRun-1.dll --anonymousPipes 2500 2436 --benchmarkName "Lzma.Core.Benchmarks.DeflateBenchmarks.Decode(SizeMiB: 1)" --job ShortRun --benchmarkId 1 in G:\Projects\Windows\LzmaSharp\artifacts\bin\Lzma.Core.Benchmarks\release\Lzma.Core.Benchmarks-ShortRun-1\bin\Release\net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.2
+// Runtime=.NET 10.0.9 (10.0.926.27113), X64 RyuJIT AVX2
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AVX2,AES,BMI1,BMI2,FMA,LZCNT,PCLMUL,POPCNT,AvxVnni,SERIALIZE VectorSize=256
+// Job: ShortRun(IterationCount=3, LaunchCount=1, WarmupCount=3)
+
+OverheadJitting  1: 1 op, 119200.00 ns, 119.2000 us/op
+WorkloadJitting  1: 1 op, 7115300.00 ns, 7.1153 ms/op
+
+OverheadJitting  2: 16 op, 225400.00 ns, 14.0875 us/op
+WorkloadJitting  2: 16 op, 55609600.00 ns, 3.4756 ms/op
+
+WorkloadPilot    1: 16 op, 55048800.00 ns, 3.4406 ms/op
+WorkloadPilot    2: 32 op, 109747900.00 ns, 3.4296 ms/op
+WorkloadPilot    3: 64 op, 217866500.00 ns, 3.4042 ms/op
+WorkloadPilot    4: 128 op, 440239700.00 ns, 3.4394 ms/op
+WorkloadPilot    5: 256 op, 866356400.00 ns, 3.3842 ms/op
+
+OverheadWarmup   1: 256 op, 1800.00 ns, 7.0313 ns/op
+OverheadWarmup   2: 256 op, 800.00 ns, 3.1250 ns/op
+OverheadWarmup   3: 256 op, 700.00 ns, 2.7344 ns/op
+OverheadWarmup   4: 256 op, 700.00 ns, 2.7344 ns/op
+OverheadWarmup   5: 256 op, 700.00 ns, 2.7344 ns/op
+OverheadWarmup   6: 256 op, 600.00 ns, 2.3438 ns/op
+OverheadWarmup   7: 256 op, 800.00 ns, 3.1250 ns/op
+
+OverheadActual   1: 256 op, 700.00 ns, 2.7344 ns/op
+OverheadActual   2: 256 op, 800.00 ns, 3.1250 ns/op
+OverheadActual   3: 256 op, 800.00 ns, 3.1250 ns/op
+OverheadActual   4: 256 op, 700.00 ns, 2.7344 ns/op
+OverheadActual   5: 256 op, 700.00 ns, 2.7344 ns/op
+OverheadActual   6: 256 op, 700.00 ns, 2.7344 ns/op
+OverheadActual   7: 256 op, 600.00 ns, 2.3438 ns/op
+OverheadActual   8: 256 op, 600.00 ns, 2.3438 ns/op
+OverheadActual   9: 256 op, 600.00 ns, 2.3438 ns/op
+OverheadActual  10: 256 op, 700.00 ns, 2.7344 ns/op
+OverheadActual  11: 256 op, 700.00 ns, 2.7344 ns/op
+OverheadActual  12: 256 op, 700.00 ns, 2.7344 ns/op
+OverheadActual  13: 256 op, 700.00 ns, 2.7344 ns/op
+OverheadActual  14: 256 op, 700.00 ns, 2.7344 ns/op
+OverheadActual  15: 256 op, 700.00 ns, 2.7344 ns/op
+OverheadActual  16: 256 op, 700.00 ns, 2.7344 ns/op
+OverheadActual  17: 256 op, 700.00 ns, 2.7344 ns/op
+OverheadActual  18: 256 op, 700.00 ns, 2.7344 ns/op
+OverheadActual  19: 256 op, 700.00 ns, 2.7344 ns/op
+OverheadActual  20: 256 op, 700.00 ns, 2.7344 ns/op
+
+WorkloadWarmup   1: 256 op, 874180800.00 ns, 3.4148 ms/op
+WorkloadWarmup   2: 256 op, 884893500.00 ns, 3.4566 ms/op
+WorkloadWarmup   3: 256 op, 880500200.00 ns, 3.4395 ms/op
+
+// BeforeActualRun
+WorkloadActual   1: 256 op, 868827700.00 ns, 3.3939 ms/op
+WorkloadActual   2: 256 op, 863848800.00 ns, 3.3744 ms/op
+WorkloadActual   3: 256 op, 863458600.00 ns, 3.3729 ms/op
+
+// AfterActualRun
+WorkloadResult   1: 256 op, 868827000.00 ns, 3.3939 ms/op
+WorkloadResult   2: 256 op, 863848100.00 ns, 3.3744 ms/op
+WorkloadResult   3: 256 op, 863457900.00 ns, 3.3729 ms/op
+// GC:  63 63 63 269405976 256
+// Threading:  0 0 256
+
+// AfterAll
+// Benchmark Process 103472 has exited with code 0.
+
+Mean = 3.380 ms, StdErr = 0.007 ms (0.20%), N = 3, StdDev = 0.012 ms
+Min = 3.373 ms, Q1 = 3.374 ms, Median = 3.374 ms, Q3 = 3.384 ms, Max = 3.394 ms
+IQR = 0.010 ms, LowerFence = 3.358 ms, UpperFence = 3.400 ms
+ConfidenceInterval = [3.167 ms; 3.594 ms] (CI 99.9%), Margin = 0.213 ms (6.31% of Mean)
+Skewness = 0.38, Kurtosis = 0.67, MValue = 2
+
+// ** Remained 2 (50,0 %) benchmark(s) to run. Estimated finish 2026-06-19 21:12 (0h 0m from now) **
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: Высокая производительность)
+// **************************
+// Benchmark: DeflateBenchmarks.Encode: ShortRun(IterationCount=3, LaunchCount=1, WarmupCount=3) [SizeMiB=16]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet Lzma.Core.Benchmarks-ShortRun-1.dll --anonymousPipes 2308 2540 --benchmarkName "Lzma.Core.Benchmarks.DeflateBenchmarks.Encode(SizeMiB: 16)" --job ShortRun --benchmarkId 2 in G:\Projects\Windows\LzmaSharp\artifacts\bin\Lzma.Core.Benchmarks\release\Lzma.Core.Benchmarks-ShortRun-1\bin\Release\net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.2
+// Runtime=.NET 10.0.9 (10.0.926.27113), X64 RyuJIT AVX2
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AVX2,AES,BMI1,BMI2,FMA,LZCNT,PCLMUL,POPCNT,AvxVnni,SERIALIZE VectorSize=256
+// Job: ShortRun(IterationCount=3, LaunchCount=1, WarmupCount=3)
+
+OverheadJitting  1: 1 op, 170400.00 ns, 170.4000 us/op
+WorkloadJitting  1: 1 op, 1013862700.00 ns, 1.0139 s/op
+
+OverheadJitting  2: 1 op, 300.00 ns, 300.0000 ns/op
+WorkloadJitting  2: 1 op, 1009455100.00 ns, 1.0095 s/op
+
+WorkloadWarmup   1: 1 op, 1005394600.00 ns, 1.0054 s/op
+WorkloadWarmup   2: 1 op, 994771700.00 ns, 994.7717 ms/op
+WorkloadWarmup   3: 1 op, 1008052900.00 ns, 1.0081 s/op
+
+// BeforeActualRun
+WorkloadActual   1: 1 op, 997020100.00 ns, 997.0201 ms/op
+WorkloadActual   2: 1 op, 1012715400.00 ns, 1.0127 s/op
+WorkloadActual   3: 1 op, 1015190800.00 ns, 1.0152 s/op
+
+// AfterActualRun
+WorkloadResult   1: 1 op, 997020100.00 ns, 997.0201 ms/op
+WorkloadResult   2: 1 op, 1012715400.00 ns, 1.0127 s/op
+WorkloadResult   3: 1 op, 1015190800.00 ns, 1.0152 s/op
+// GC:  1 1 1 107957744 1
+// Threading:  0 0 1
+
+// AfterAll
+// Benchmark Process 22744 has exited with code 0.
+
+Mean = 1.008 s, StdErr = 0.006 s (0.56%), N = 3, StdDev = 0.010 s
+Min = 0.997 s, Q1 = 1.005 s, Median = 1.013 s, Q3 = 1.014 s, Max = 1.015 s
+IQR = 0.009 s, LowerFence = 0.991 s, UpperFence = 1.028 s
+ConfidenceInterval = [0.829 s; 1.188 s] (CI 99.9%), Margin = 0.180 s (17.83% of Mean)
+Skewness = -0.36, Kurtosis = 0.67, MValue = 2
+
+// ** Remained 1 (25,0 %) benchmark(s) to run. Estimated finish 2026-06-19 21:12 (0h 0m from now) **
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: Высокая производительность)
+// **************************
+// Benchmark: DeflateBenchmarks.Decode: ShortRun(IterationCount=3, LaunchCount=1, WarmupCount=3) [SizeMiB=16]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet Lzma.Core.Benchmarks-ShortRun-1.dll --anonymousPipes 2532 2420 --benchmarkName "Lzma.Core.Benchmarks.DeflateBenchmarks.Decode(SizeMiB: 16)" --job ShortRun --benchmarkId 3 in G:\Projects\Windows\LzmaSharp\artifacts\bin\Lzma.Core.Benchmarks\release\Lzma.Core.Benchmarks-ShortRun-1\bin\Release\net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.2
+// Runtime=.NET 10.0.9 (10.0.926.27113), X64 RyuJIT AVX2
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AVX2,AES,BMI1,BMI2,FMA,LZCNT,PCLMUL,POPCNT,AvxVnni,SERIALIZE VectorSize=256
+// Job: ShortRun(IterationCount=3, LaunchCount=1, WarmupCount=3)
+
+OverheadJitting  1: 1 op, 114800.00 ns, 114.8000 us/op
+WorkloadJitting  1: 1 op, 1862800.00 ns, 1.8628 ms/op
+
+OverheadJitting  2: 16 op, 223200.00 ns, 13.9500 us/op
+WorkloadJitting  2: 16 op, 21637100.00 ns, 1.3523 ms/op
+
+WorkloadPilot    1: 16 op, 13332100.00 ns, 833.2563 us/op
+WorkloadPilot    2: 32 op, 26541100.00 ns, 829.4094 us/op
+WorkloadPilot    3: 64 op, 56709100.00 ns, 886.0797 us/op
+WorkloadPilot    4: 128 op, 104166000.00 ns, 813.7969 us/op
+WorkloadPilot    5: 256 op, 211105100.00 ns, 824.6293 us/op
+WorkloadPilot    6: 512 op, 404775500.00 ns, 790.5771 us/op
+WorkloadPilot    7: 1024 op, 822108000.00 ns, 802.8398 us/op
+
+OverheadWarmup   1: 1024 op, 2500.00 ns, 2.4414 ns/op
+OverheadWarmup   2: 1024 op, 1700.00 ns, 1.6602 ns/op
+OverheadWarmup   3: 1024 op, 1700.00 ns, 1.6602 ns/op
+OverheadWarmup   4: 1024 op, 1800.00 ns, 1.7578 ns/op
+OverheadWarmup   5: 1024 op, 1800.00 ns, 1.7578 ns/op
+OverheadWarmup   6: 1024 op, 1700.00 ns, 1.6602 ns/op
+
+OverheadActual   1: 1024 op, 1700.00 ns, 1.6602 ns/op
+OverheadActual   2: 1024 op, 1700.00 ns, 1.6602 ns/op
+OverheadActual   3: 1024 op, 1700.00 ns, 1.6602 ns/op
+OverheadActual   4: 1024 op, 1700.00 ns, 1.6602 ns/op
+OverheadActual   5: 1024 op, 1800.00 ns, 1.7578 ns/op
+OverheadActual   6: 1024 op, 1800.00 ns, 1.7578 ns/op
+OverheadActual   7: 1024 op, 1800.00 ns, 1.7578 ns/op
+OverheadActual   8: 1024 op, 1700.00 ns, 1.6602 ns/op
+OverheadActual   9: 1024 op, 1700.00 ns, 1.6602 ns/op
+OverheadActual  10: 1024 op, 1800.00 ns, 1.7578 ns/op
+OverheadActual  11: 1024 op, 1800.00 ns, 1.7578 ns/op
+OverheadActual  12: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadActual  13: 1024 op, 1800.00 ns, 1.7578 ns/op
+OverheadActual  14: 1024 op, 1700.00 ns, 1.6602 ns/op
+OverheadActual  15: 1024 op, 1700.00 ns, 1.6602 ns/op
+
+WorkloadWarmup   1: 1024 op, 842811900.00 ns, 823.0585 us/op
+WorkloadWarmup   2: 1024 op, 824685800.00 ns, 805.3572 us/op
+WorkloadWarmup   3: 1024 op, 805406200.00 ns, 786.5295 us/op
+
+// BeforeActualRun
+WorkloadActual   1: 1024 op, 816044300.00 ns, 796.9183 us/op
+WorkloadActual   2: 1024 op, 843575400.00 ns, 823.8041 us/op
+WorkloadActual   3: 1024 op, 831756500.00 ns, 812.2622 us/op
+
+// AfterActualRun
+WorkloadResult   1: 1024 op, 816042600.00 ns, 796.9166 us/op
+WorkloadResult   2: 1024 op, 843573700.00 ns, 823.8024 us/op
+WorkloadResult   3: 1024 op, 831754800.00 ns, 812.2605 us/op
+// GC:  340 340 340 17182748304 1024
+// Threading:  0 0 1024
+// Exceptions:  1
+
+// AfterAll
+// Benchmark Process 92428 has exited with code 0.
+
+Mean = 810.993 us, StdErr = 7.787 us (0.96%), N = 3, StdDev = 13.488 us
+Min = 796.917 us, Q1 = 804.589 us, Median = 812.261 us, Q3 = 818.031 us, Max = 823.802 us
+IQR = 13.443 us, LowerFence = 784.424 us, UpperFence = 838.196 us
+ConfidenceInterval = [564.928 us; 1,057.058 us] (CI 99.9%), Margin = 246.065 us (30.34% of Mean)
+Skewness = -0.09, Kurtosis = 0.67, MValue = 2
+
+// ** Remained 0 (0,0 %) benchmark(s) to run. Estimated finish 2026-06-19 21:12 (0h 0m from now) **
+Successfully reverted power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: Высокая производительность)
+// ***** BenchmarkRunner: Finish  *****
+
+// * Export *
+  BenchmarkDotNet.Artifacts\results\Lzma.Core.Benchmarks.DeflateBenchmarks-report.csv
+  BenchmarkDotNet.Artifacts\results\Lzma.Core.Benchmarks.DeflateBenchmarks-report-github.md
+  BenchmarkDotNet.Artifacts\results\Lzma.Core.Benchmarks.DeflateBenchmarks-report.html
+
+// * Detailed results *
+DeflateBenchmarks.Encode: ShortRun(IterationCount=3, LaunchCount=1, WarmupCount=3) [SizeMiB=1]
+Runtime = .NET 10.0.9 (10.0.926.27113), X64 RyuJIT AVX2; GC = Concurrent Workstation
+Mean = 61.132 ms, StdErr = 0.116 ms (0.19%), N = 3, StdDev = 0.201 ms
+Min = 60.901 ms, Q1 = 61.062 ms, Median = 61.224 ms, Q3 = 61.247 ms, Max = 61.270 ms
+IQR = 0.184 ms, LowerFence = 60.786 ms, UpperFence = 61.523 ms
+ConfidenceInterval = [57.467 ms; 64.796 ms] (CI 99.9%), Margin = 3.664 ms (5.99% of Mean)
+Skewness = -0.36, Kurtosis = 0.67, MValue = 2
+-------------------- Histogram --------------------
+[60.718 ms ; 61.453 ms) | @@@
+---------------------------------------------------
+
+DeflateBenchmarks.Decode: ShortRun(IterationCount=3, LaunchCount=1, WarmupCount=3) [SizeMiB=1]
+Runtime = .NET 10.0.9 (10.0.926.27113), X64 RyuJIT AVX2; GC = Concurrent Workstation
+Mean = 3.380 ms, StdErr = 0.007 ms (0.20%), N = 3, StdDev = 0.012 ms
+Min = 3.373 ms, Q1 = 3.374 ms, Median = 3.374 ms, Q3 = 3.384 ms, Max = 3.394 ms
+IQR = 0.010 ms, LowerFence = 3.358 ms, UpperFence = 3.400 ms
+ConfidenceInterval = [3.167 ms; 3.594 ms] (CI 99.9%), Margin = 0.213 ms (6.31% of Mean)
+Skewness = 0.38, Kurtosis = 0.67, MValue = 2
+-------------------- Histogram --------------------
+[3.373 ms ; 3.394 ms) | @@@
+---------------------------------------------------
+
+DeflateBenchmarks.Encode: ShortRun(IterationCount=3, LaunchCount=1, WarmupCount=3) [SizeMiB=16]
+Runtime = .NET 10.0.9 (10.0.926.27113), X64 RyuJIT AVX2; GC = Concurrent Workstation
+Mean = 1.008 s, StdErr = 0.006 s (0.56%), N = 3, StdDev = 0.010 s
+Min = 0.997 s, Q1 = 1.005 s, Median = 1.013 s, Q3 = 1.014 s, Max = 1.015 s
+IQR = 0.009 s, LowerFence = 0.991 s, UpperFence = 1.028 s
+ConfidenceInterval = [0.829 s; 1.188 s] (CI 99.9%), Margin = 0.180 s (17.83% of Mean)
+Skewness = -0.36, Kurtosis = 0.67, MValue = 2
+-------------------- Histogram --------------------
+[0.988 s ; 1.024 s) | @@@
+---------------------------------------------------
+
+DeflateBenchmarks.Decode: ShortRun(IterationCount=3, LaunchCount=1, WarmupCount=3) [SizeMiB=16]
+Runtime = .NET 10.0.9 (10.0.926.27113), X64 RyuJIT AVX2; GC = Concurrent Workstation
+Mean = 810.993 us, StdErr = 7.787 us (0.96%), N = 3, StdDev = 13.488 us
+Min = 796.917 us, Q1 = 804.589 us, Median = 812.261 us, Q3 = 818.031 us, Max = 823.802 us
+IQR = 13.443 us, LowerFence = 784.424 us, UpperFence = 838.196 us
+ConfidenceInterval = [564.928 us; 1,057.058 us] (CI 99.9%), Margin = 246.065 us (30.34% of Mean)
+Skewness = -0.09, Kurtosis = 0.67, MValue = 2
+-------------------- Histogram --------------------
+[784.642 us ; 805.757 us) | @
+[805.757 us ; 830.306 us) | @@
+---------------------------------------------------
+
+// * Summary *
+
+BenchmarkDotNet v0.15.2, Windows 11 (10.0.26200.8655)
+13th Gen Intel Core i9-13900F 2.00GHz, 1 CPU, 32 logical and 24 physical cores
+.NET SDK 10.0.109
+  [Host]   : .NET 10.0.9 (10.0.926.27113), X64 RyuJIT AVX2
+  ShortRun : .NET 10.0.9 (10.0.926.27113), X64 RyuJIT AVX2
+
+Job=ShortRun  IterationCount=3  LaunchCount=1  
+WarmupCount=3  
+
+| Method | SizeMiB | Mean           | Error        | StdDev      | Gen0      | Gen1      | Gen2      | Allocated |
+|------- |-------- |---------------:|-------------:|------------:|----------:|----------:|----------:|----------:|
+| Encode | 1       |    61,131.5 us |   3,664.2 us |   200.85 us |  777.7778 |  777.7778 |  777.7778 |   6.57 MB |
+| Decode | 1       |     3,380.4 us |     213.3 us |    11.69 us |  246.0938 |  246.0938 |  246.0938 |      1 MB |
+| Encode | 16      | 1,008,308.8 us | 179,779.3 us | 9,854.31 us | 1000.0000 | 1000.0000 | 1000.0000 | 102.96 MB |
+| Decode | 16      |       811.0 us |     246.1 us |    13.49 us |  332.0313 |  332.0313 |  332.0313 |     16 MB |
+
+// * Legends *
+  SizeMiB   : Value of the 'SizeMiB' parameter
+  Mean      : Arithmetic mean of all measurements
+  Error     : Half of 99.9% confidence interval
+  StdDev    : Standard deviation of all measurements
+  Gen0      : GC Generation 0 collects per 1000 operations
+  Gen1      : GC Generation 1 collects per 1000 operations
+  Gen2      : GC Generation 2 collects per 1000 operations
+  Allocated : Allocated memory per single operation (managed only, inclusive, 1KB = 1024B)
+  1 us      : 1 Microsecond (0.000001 sec)
+
+// * Diagnostic Output - MemoryDiagnoser *
+
+
+// ***** BenchmarkRunner: End *****
+Run time: 00:00:34 (34.35 sec), executed benchmarks: 4
+
+Global total time: 00:00:42 (42.07 sec), executed benchmarks: 4
+// * Artifacts cleanup *
+Artifacts cleanup is finished

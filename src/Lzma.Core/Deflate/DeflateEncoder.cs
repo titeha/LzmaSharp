@@ -462,17 +462,27 @@ public static class DeflateEncoder
 
     if (maxDepth > maxLen)
     {
-      int overflow = 0;
-      for (int b = maxLen + 1; b <= maxDepth; b++)
-        overflow += blCount[b];
-
+      // Сжимаем все коды длиннее maxLen до maxLen.
       for (int b = maxLen + 1; b <= maxDepth; b++)
       {
         blCount[maxLen] += blCount[b];
         blCount[b] = 0;
       }
 
-      while (overflow > 0)
+      // Теперь код «переподписан»: суммарный Крафт Σ blCount[b]·2^(maxLen-b) превышает
+      // 2^maxLen. Каждая итерация ниже (взять лист на уровне b<maxLen, опустить его и
+      // одного «брата» на b+1, убрать один лист с maxLen) уменьшает избыток Крафта РОВНО
+      // на 1. Поэтому гоняем цикл по фактическому избытку, а не по числу длинных кодов —
+      // это и есть исправление: прежний счётчик `overflow` в общем случае не равен
+      // удвоенному избытку, из-за чего на части деревьев цикл останавливался рано и
+      // код оставался over-subscribed (битый поток на входах ≳1 МиБ).
+      long kraft = 0;
+      for (int b = 1; b <= maxLen; b++)
+        kraft += (long)blCount[b] << (maxLen - b);
+
+      long excess = kraft - (1L << maxLen);
+
+      while (excess > 0)
       {
         int b = maxLen - 1;
         while (blCount[b] == 0)
@@ -481,7 +491,7 @@ public static class DeflateEncoder
         blCount[b]--;
         blCount[b + 1] += 2;
         blCount[maxLen]--;
-        overflow -= 2;
+        excess--;
       }
 
       maxDepth = maxLen;

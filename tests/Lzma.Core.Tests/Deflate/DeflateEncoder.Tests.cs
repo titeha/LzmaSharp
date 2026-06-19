@@ -93,6 +93,31 @@ public sealed class DeflateEncoderTests
     AssertEncode(input);
   }
 
+  [Fact]
+  public void Encode_БольшойТекстоподобныйВход_ДинамическийХаффманКорректен()
+  {
+    // Регрессия: на входах ≳1 МиБ динамическая ветка Хаффмана давала переподписанный
+    // (over-subscribed) код из-за неверного условия завершения коррекции переполнения длин
+    // — поток отвергался декодерами. Здесь генерируем ~2.5 МиБ текстоподобных данных
+    // (слова из небольшого словаря), что заведомо активирует коррекцию.
+    string[] words =
+    [
+      "the", "quick", "brown", "fox", "jumps", "over", "lazy", "dog", "lorem", "ipsum",
+      "dolor", "sit", "amet", "consectetur", "adipiscing", "elit", "sed", "do", "eiusmod",
+      "data", "compression", "algorithm", "stream", "buffer", "window", "match", "literal",
+    ];
+
+    var random = new Random(20260619);
+    var sb = new StringBuilder(2_700_000);
+    while (sb.Length < 2_600_000)
+    {
+      sb.Append(words[random.Next(words.Length)]);
+      sb.Append(' ');
+    }
+
+    AssertEncode(Encoding.ASCII.GetBytes(sb.ToString()));
+  }
+
   /// <summary>
   /// Кодирует, затем проверяет двумя независимыми декодерами: нашим и BCL.
   /// </summary>
