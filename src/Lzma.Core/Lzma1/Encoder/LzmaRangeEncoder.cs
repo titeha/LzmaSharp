@@ -12,10 +12,11 @@ internal sealed class LzmaRangeEncoder
   private const uint _topValue = 1u << 24;
 
   // Замечание по реализации:
-  // Мы храним выход в List<byte>. Для инкрементального режима (стриминг) добавили
-  // простую «дренажную» механику (DrainTo), чтобы можно было постепенно вычитывать
-  // готовые байты, не копируя каждый раз весь массив.
-  private readonly List<byte> _output = new();
+  // Выход храним в растущем byte[] (а не List<byte>): запись в горячем ShiftLow — это
+  // индексная установка, а ToArray/DrainTo — быстрое копирование Span. Для инкрементального
+  // режима (стриминг) есть «дренажная» механика (DrainTo) с переиспользованием буфера.
+  private byte[] _output = new byte[256];
+  private int _count;
   private int _readPos;
 
   private uint _range;
@@ -31,7 +32,7 @@ internal sealed class LzmaRangeEncoder
   /// </summary>
   public void Reset()
   {
-    _output.Clear();
+    _count = 0;
     _readPos = 0;
 
     _range = uint.MaxValue;
@@ -44,7 +45,7 @@ internal sealed class LzmaRangeEncoder
   /// <summary>
   /// Сколько байт готово к выдаче наружу (ещё не было «сдренировано»).
   /// </summary>
-  internal int PendingBytes => _output.Count - _readPos;
+  internal int PendingBytes => _count - _readPos;
 
   /// <summary>
   /// Пытается скопировать часть накопленного вывода в <paramref name="destination"/>.
@@ -61,26 +62,23 @@ internal sealed class LzmaRangeEncoder
 
     int toCopy = Math.Min(available, destination.Length);
 
-    // List<byte> не даёт Span напрямую без unsafe/CollectionsMarshal.
-    // Здесь важнее простота; оптимизацию сделаем позже.
-    for (int i = 0; i < toCopy; i++)
-      destination[i] = _output[_readPos + i];
-
+    _output.AsSpan(_readPos, toCopy).CopyTo(destination);
     _readPos += toCopy;
 
-    // Если вычитали всё – очищаем полностью (быстро).
-    if (_readPos == _output.Count)
+    // Если вычитали всё – сбрасываем позиции (буфер переиспользуется).
+    if (_readPos == _count)
     {
-      _output.Clear();
+      _count = 0;
       _readPos = 0;
       return toCopy;
     }
 
-    // Периодическая компактация, чтобы список не рос бесконечно.
-    // Порог подобран «на глаз»; оптимизируем позже.
-    if (_readPos > 4096 && _readPos > (_output.Count / 2))
+    // Периодическая компактация, чтобы непрочитанный «хвост» не уезжал всё дальше.
+    // Порог подобран «на глаз».
+    if (_readPos > 4096 && _readPos > (_count / 2))
     {
-      _output.RemoveRange(0, _readPos);
+      Array.Copy(_output, _readPos, _output, 0, _count - _readPos);
+      _count -= _readPos;
       _readPos = 0;
     }
 
@@ -94,13 +92,9 @@ internal sealed class LzmaRangeEncoder
   {
     int available = PendingBytes;
     if (available <= 0)
-      return Array.Empty<byte>();
+      return [];
 
-    var arr = new byte[available];
-    for (int i = 0; i < available; i++)
-      arr[i] = _output[_readPos + i];
-
-    return arr;
+    return _output.AsSpan(_readPos, available).ToArray();
   }
 
   /// <summary>
@@ -159,7 +153,7 @@ internal sealed class LzmaRangeEncoder
       byte temp = _cache;
       do
       {
-        _output.Add((byte)(temp + lowHi));
+        WriteByte((byte)(temp + lowHi));
         temp = 0xFF;
       }
       while (--_cacheSize != 0);
@@ -169,6 +163,14 @@ internal sealed class LzmaRangeEncoder
 
     _cacheSize++;
     _low = (_low & 0x00FFFFFFUL) << 8;
+  }
+
+  private void WriteByte(byte b)
+  {
+    if (_count == _output.Length)
+      Array.Resize(ref _output, _output.Length * 2);
+
+    _output[_count++] = b;
   }
 
 #if DEBUG
