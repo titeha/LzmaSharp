@@ -94,12 +94,14 @@ dotnet test
 
 ## Внешние зависимости
 
-У `Lzma.Core` **нет внешних codec-зависимостей** — все методы декодируются собственными
-управляемыми реализациями:
+У `Lzma.Core` **нет внешних codec-зависимостей** — все методы декодируются и кодируются
+собственными управляемыми реализациями:
 
-- `Deflate`, `Deflate64` — `DeflateDecoder` (RFC 1951 + режим Deflate64);
-- `BZip2` — `BZip2Decoder`;
-- `PPMd` — `Ppmd7Decoder` (PPMd var.H / 7z).
+- `Deflate`, `Deflate64` — `DeflateDecoder` (RFC 1951 + режим Deflate64), `DeflateEncoder`;
+- ZIP-контейнер — `ZipReader` / `ZipWriter` (Store + Deflate);
+- `BZip2` — `BZip2Decoder` / `BZip2Encoder`;
+- `PPMd` — `Ppmd7Decoder` / `Ppmd7Encoder` (PPMd var.H / 7z; поток энкодера бит-в-бит
+  совпадает с настоящим 7-Zip).
 
 `SharpZipLib` и `SharpCompress` полностью удалены из production. `SharpZipLib` оставлен только
 в тест-проекте как эталон для round-trip сверки BZip2. Сторонние компоненты и их лицензии

@@ -58,9 +58,9 @@
 ## Временные внешние зависимости
 
 На этапе 1 были допущены узкие управляемые зависимости. К текущему моменту (этап 2) все
-codec-методы (`Deflate`/`Deflate64`, `BZip2`, `PPMd`) переведены на собственные декодеры,
-а `SharpZipLib` и `SharpCompress` удалены из production — внешних codec-зависимостей больше
-нет (см. этап 2 в [`ROADMAP.md`](ROADMAP.md)).
+codec-методы (`Deflate`/`Deflate64`, `BZip2`, `PPMd`) переведены на собственные декодеры
+**и энкодеры** (плюс ZIP-контейнер `ZipReader`/`ZipWriter`), а `SharpZipLib` и `SharpCompress`
+удалены из production — внешних codec-зависимостей больше нет (см. этап 2 в [`ROADMAP.md`](ROADMAP.md)).
 
 ## Итог
 
