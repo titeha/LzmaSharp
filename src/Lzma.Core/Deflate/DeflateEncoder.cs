@@ -58,16 +58,24 @@ public static class DeflateEncoder
   {
     List<Token> tokens = Lz77(input);
 
-    byte[] fixedBytes = EncodeFixed(tokens, input.Length);
+    // Выбираем меньший из трёх валидных вариантов: fixed / dynamic / stored.
+    byte[] best = EncodeFixed(tokens, input.Length);
 
-    // Stored-вариант: на каждый блок (<= 65535) — 5 байт заголовка.
-    long storedSize = ComputeStoredSize(input.Length);
+    byte[] dynamic = EncodeDynamic(tokens, input.Length);
+    if (dynamic.Length < best.Length)
+      best = dynamic;
 
-    if (fixedBytes.Length <= storedSize)
-      return fixedBytes;
+    if (ComputeStoredSize(input.Length) < best.Length)
+      return EncodeStored(input);
 
-    return EncodeStored(input);
+    return best;
   }
+
+  // Порядок передачи длин кодов code-length алфавита (RFC 1951, §3.2.7).
+  private static readonly int[] CodeLengthOrder =
+  [
+      16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15
+  ];
 
   private readonly struct Token
   {
@@ -218,6 +226,285 @@ public static class DeflateEncoder
   /// </summary>
   private static void WriteHuffman(BitWriter writer, (int Code, int Len) c)
       => writer.WriteBits((uint)ReverseBits(c.Code, c.Len), c.Len);
+
+  // ============================================================
+  // Кодирование динамическими таблицами Хаффмана
+  // ============================================================
+
+  private static byte[] EncodeDynamic(List<Token> tokens, int inputLength)
+  {
+    // 1) Частоты символов lit/len (0..285, плюс EOB=256) и dist (0..29).
+    int[] litLenFreq = new int[286];
+    int[] distFreq = new int[30];
+    litLenFreq[256] = 1; // EOB
+
+    foreach (Token t in tokens)
+    {
+      if (t.Dist == 0)
+      {
+        litLenFreq[t.LitOrLen]++;
+        continue;
+      }
+
+      litLenFreq[257 + LenEncode[t.LitOrLen].Code]++;
+      distFreq[DistEncode[t.Dist].Code]++;
+    }
+
+    // 2) Длины кодов (length-limited).
+    int[] litLenLengths = BuildLengths(litLenFreq, 15);
+    int[] distLengths = BuildLengths(distFreq, 15);
+
+    // Должен быть хотя бы один dist-код (RFC: при нуле дистанций — один фиктивный код).
+    bool anyDist = false;
+    for (int i = 0; i < distLengths.Length; i++)
+      if (distLengths[i] != 0) { anyDist = true; break; }
+    if (!anyDist)
+      distLengths[0] = 1;
+
+    int hlit = 257;
+    for (int i = 285; i >= 257; i--)
+      if (litLenLengths[i] != 0) { hlit = i + 1; break; }
+
+    int hdist = 1;
+    for (int i = 29; i >= 1; i--)
+      if (distLengths[i] != 0) { hdist = i + 1; break; }
+
+    // 3) RLE последовательности длин (lit/len ++ dist) символами code-length алфавита.
+    var clItems = new List<(int Sym, int ExtraBits, int ExtraVal)>();
+    int[] clFreq = new int[19];
+
+    int[] combined = new int[hlit + hdist];
+    Array.Copy(litLenLengths, combined, hlit);
+    Array.Copy(distLengths, 0, combined, hlit, hdist);
+    RunLengthEncodeLengths(combined, clItems, clFreq);
+
+    int[] clLengths = BuildLengths(clFreq, 7);
+    (int Code, int Len)[] clCodes = BuildCanonical(clLengths);
+
+    int hclen = 19;
+    while (hclen > 4 && clLengths[CodeLengthOrder[hclen - 1]] == 0)
+      hclen--;
+
+    // 4) Канонические коды для данных.
+    (int, int)[] litLenCodes = BuildCanonical(litLenLengths);
+    (int, int)[] distCodes = BuildCanonical(distLengths);
+
+    // 5) Запись блока.
+    var writer = new BitWriter(inputLength / 2 + 32);
+    writer.WriteBits(1, 1); // BFINAL = 1
+    writer.WriteBits(2, 2); // BTYPE = 10 (dynamic Huffman)
+
+    writer.WriteBits((uint)(hlit - 257), 5);
+    writer.WriteBits((uint)(hdist - 1), 5);
+    writer.WriteBits((uint)(hclen - 4), 4);
+
+    for (int j = 0; j < hclen; j++)
+      writer.WriteBits((uint)clLengths[CodeLengthOrder[j]], 3);
+
+    foreach ((int sym, int extraBits, int extraVal) in clItems)
+    {
+      WriteHuffman(writer, clCodes[sym]);
+      if (extraBits != 0)
+        writer.WriteBits((uint)extraVal, extraBits);
+    }
+
+    foreach (Token t in tokens)
+    {
+      if (t.Dist == 0)
+      {
+        WriteHuffman(writer, litLenCodes[t.LitOrLen]);
+        continue;
+      }
+
+      (byte lenCode, byte lenExtraBits, ushort lenExtraVal) = LenEncode[t.LitOrLen];
+      WriteHuffman(writer, litLenCodes[257 + lenCode]);
+      if (lenExtraBits != 0)
+        writer.WriteBits(lenExtraVal, lenExtraBits);
+
+      (byte distCode, byte distExtraBits, ushort distExtraVal) = DistEncode[t.Dist];
+      WriteHuffman(writer, distCodes[distCode]);
+      if (distExtraBits != 0)
+        writer.WriteBits(distExtraVal, distExtraBits);
+    }
+
+    WriteHuffman(writer, litLenCodes[256]); // EOB
+    writer.Flush();
+    return writer.ToArray();
+  }
+
+  /// <summary>
+  /// RLE-кодирует массив длин кодов символами code-length алфавита (0-15, 16, 17, 18).
+  /// </summary>
+  private static void RunLengthEncodeLengths(int[] lengths, List<(int, int, int)> items, int[] freq)
+  {
+    int i = 0;
+    while (i < lengths.Length)
+    {
+      int cur = lengths[i];
+      int run = 1;
+      while (i + run < lengths.Length && lengths[i + run] == cur)
+        run++;
+
+      i += run;
+
+      if (cur == 0)
+      {
+        while (run >= 11)
+        {
+          int take = Math.Min(run, 138);
+          items.Add((18, 7, take - 11));
+          freq[18]++;
+          run -= take;
+        }
+
+        while (run >= 3)
+        {
+          int take = Math.Min(run, 10);
+          items.Add((17, 3, take - 3));
+          freq[17]++;
+          run -= take;
+        }
+
+        while (run-- > 0)
+        {
+          items.Add((0, 0, 0));
+          freq[0]++;
+        }
+      }
+      else
+      {
+        // Первое вхождение — литерально.
+        items.Add((cur, 0, 0));
+        freq[cur]++;
+        run--;
+
+        while (run >= 3)
+        {
+          int take = Math.Min(run, 6);
+          items.Add((16, 2, take - 3));
+          freq[16]++;
+          run -= take;
+        }
+
+        while (run-- > 0)
+        {
+          items.Add((cur, 0, 0));
+          freq[cur]++;
+        }
+      }
+    }
+  }
+
+  /// <summary>
+  /// Строит длины кодов Хаффмана по частотам с ограничением максимальной длины
+  /// (Хаффман через кучу + zlib-коррекция переполнения, затем назначение длин по частоте).
+  /// </summary>
+  private static int[] BuildLengths(int[] freq, int maxLen)
+  {
+    int alpha = freq.Length;
+    var lengths = new int[alpha];
+
+    var syms = new List<int>();
+    for (int i = 0; i < alpha; i++)
+      if (freq[i] > 0)
+        syms.Add(i);
+
+    int n = syms.Count;
+    if (n == 0)
+      return lengths;
+
+    if (n == 1)
+    {
+      lengths[syms[0]] = 1;
+      return lengths;
+    }
+
+    int maxNodes = 2 * n - 1;
+    long[] weight = new long[maxNodes];
+    int[] parent = new int[maxNodes];
+    for (int i = 0; i < n; i++)
+      weight[i] = freq[syms[i]];
+
+    var pq = new PriorityQueue<int, (long, int)>();
+    for (int i = 0; i < n; i++)
+      pq.Enqueue(i, (weight[i], i));
+
+    int nextNode = n;
+    while (pq.Count > 1)
+    {
+      int a = pq.Dequeue();
+      int b = pq.Dequeue();
+      weight[nextNode] = weight[a] + weight[b];
+      parent[a] = nextNode;
+      parent[b] = nextNode;
+      pq.Enqueue(nextNode, (weight[nextNode], nextNode));
+      nextNode++;
+    }
+
+    int root = nextNode - 1;
+
+    Span<int> blCount = stackalloc int[64];
+    int maxDepth = 0;
+    for (int i = 0; i < n; i++)
+    {
+      int depth = 0;
+      int node = i;
+      while (node != root)
+      {
+        node = parent[node];
+        depth++;
+      }
+
+      blCount[depth]++;
+      if (depth > maxDepth)
+        maxDepth = depth;
+    }
+
+    if (maxDepth > maxLen)
+    {
+      int overflow = 0;
+      for (int b = maxLen + 1; b <= maxDepth; b++)
+        overflow += blCount[b];
+
+      for (int b = maxLen + 1; b <= maxDepth; b++)
+      {
+        blCount[maxLen] += blCount[b];
+        blCount[b] = 0;
+      }
+
+      while (overflow > 0)
+      {
+        int b = maxLen - 1;
+        while (blCount[b] == 0)
+          b--;
+
+        blCount[b]--;
+        blCount[b + 1] += 2;
+        blCount[maxLen]--;
+        overflow -= 2;
+      }
+
+      maxDepth = maxLen;
+    }
+
+    // Длины назначаем по частоте: наименее частым — самые длинные коды.
+    int[] order = [.. syms];
+    Array.Sort(order, (x, y) =>
+    {
+      int c = freq[x].CompareTo(freq[y]);
+      return c != 0 ? c : x.CompareTo(y);
+    });
+
+    int idx = 0;
+    for (int b = maxDepth; b >= 1; b--)
+    {
+      int cnt = blCount[b];
+      while (cnt-- > 0)
+        lengths[order[idx++]] = b;
+    }
+
+    return lengths;
+  }
 
   // ============================================================
   // Stored-блоки (для несжимаемых данных)

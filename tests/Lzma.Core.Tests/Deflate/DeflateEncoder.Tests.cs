@@ -65,6 +65,34 @@ public sealed class DeflateEncoderTests
     Assert.True(encoded.Length <= input.Length + 64, $"Слишком большое раздувание: {encoded.Length} vs {input.Length}.");
   }
 
+  [Fact]
+  public void Encode_СкошенныеЧастоты_СрабатываетОграничениеДлиныКодов()
+  {
+    // Fibonacci-веса частот символов вынуждают длины кодов Хаффмана превысить 15 бит,
+    // что активирует коррекцию переполнения. Перемешиваем, чтобы это были литералы, а не матчи.
+    var pool = new List<byte>();
+    long a = 1, b = 1;
+    for (int sym = 0; sym < 26; sym++)
+    {
+      long countLong = a;
+      int count = (int)Math.Min(countLong, 40_000);
+      for (int j = 0; j < count; j++)
+        pool.Add((byte)sym);
+
+      (a, b) = (b, a + b);
+    }
+
+    var random = new Random(2026);
+    byte[] input = [.. pool];
+    for (int i = input.Length - 1; i > 0; i--)
+    {
+      int j = random.Next(i + 1);
+      (input[i], input[j]) = (input[j], input[i]);
+    }
+
+    AssertEncode(input);
+  }
+
   /// <summary>
   /// Кодирует, затем проверяет двумя независимыми декодерами: нашим и BCL.
   /// </summary>
