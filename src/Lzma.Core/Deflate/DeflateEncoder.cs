@@ -60,17 +60,74 @@ public static class DeflateEncoder
   {
     List<Token> tokens = Lz77(input);
 
-    // Выбираем меньший из трёх валидных вариантов: fixed / dynamic / stored.
-    byte[] best = EncodeFixed(tokens, input.Length);
+    // Частоты символов и сумма доп. бит (доп. биты длины/дистанции одинаковы для fixed и
+    // dynamic, т.к. не зависят от таблиц Хаффмана). Считаем один раз.
+    int[] litLenFreq = new int[286];
+    int[] distFreq = new int[30];
+    litLenFreq[256] = 1; // EOB
+    long extraBits = CountFrequencies(tokens, litLenFreq, distFreq);
 
-    byte[] dynamic = EncodeDynamic(tokens, input.Length);
-    if (dynamic.Length < best.Length)
-      best = dynamic;
+    // Размеры вариантов вычисляем дёшево (частоты × длины кодов + доп. биты), а
+    // материализуем (пишем биты по всем токенам) только победителя — это убирает
+    // лишний полный проход кодирования.
+    long fixedBits = 3 + extraBits
+        + WeightedLen(litLenFreq, FixedLitLen)
+        + WeightedLen(distFreq, FixedDist);
+    long fixedBytes = (fixedBits + 7) / 8;
 
-    if (ComputeStoredSize(input.Length) < best.Length)
+    DynamicPlan plan = BuildDynamicPlan(litLenFreq, distFreq, extraBits);
+    long dynamicBytes = (plan.Bits + 7) / 8;
+
+    long storedBytes = ComputeStoredSize(input.Length);
+
+    // Те же приоритеты, что и раньше: при равенстве предпочитаем fixed; stored — только
+    // если строго меньше лучшего из {fixed, dynamic}.
+    bool dynamicWins = dynamicBytes < fixedBytes;
+    long bestBytes = dynamicWins ? dynamicBytes : fixedBytes;
+
+    if (storedBytes < bestBytes)
       return EncodeStored(input);
 
-    return best;
+    return dynamicWins ? WriteDynamic(plan, tokens, input.Length) : EncodeFixed(tokens, input.Length);
+  }
+
+  /// <summary>
+  /// Считает частоты символов lit/len и dist по токенам, возвращает суммарное число
+  /// доп. бит (длины + дистанции). <paramref name="litLenFreq"/> должен прийти с EOB=1.
+  /// </summary>
+  private static long CountFrequencies(List<Token> tokens, int[] litLenFreq, int[] distFreq)
+  {
+    long extraBits = 0;
+
+    foreach (Token t in tokens)
+    {
+      if (t.Dist == 0)
+      {
+        litLenFreq[t.LitOrLen]++;
+        continue;
+      }
+
+      (byte lenCode, byte lenExtraBits, _) = LenEncode[t.LitOrLen];
+      litLenFreq[257 + lenCode]++;
+      extraBits += lenExtraBits;
+
+      (byte distCode, byte distExtraBits, _) = DistEncode[t.Dist];
+      distFreq[distCode]++;
+      extraBits += distExtraBits;
+    }
+
+    return extraBits;
+  }
+
+  /// <summary>Сумма freq[i] · codes[i].Len (число бит на Huffman-коды без доп. бит).</summary>
+  private static long WeightedLen(int[] freq, (int Code, int Len)[] codes)
+  {
+    long bits = 0;
+    for (int i = 0; i < freq.Length; i++)
+      if (freq[i] > 0)
+        bits += (long)freq[i] * codes[i].Len;
+
+    return bits;
   }
 
   // Порядок передачи длин кодов code-length алфавита (RFC 1951, §3.2.7).
@@ -240,26 +297,31 @@ public static class DeflateEncoder
   // Кодирование динамическими таблицами Хаффмана
   // ============================================================
 
-  private static byte[] EncodeDynamic(List<Token> tokens, int inputLength)
+  /// <summary>
+  /// План динамического блока Хаффмана: таблицы кодов + точный размер в битах.
+  /// Размер позволяет выбрать вариант, не материализуя поток.
+  /// </summary>
+  private sealed class DynamicPlan
   {
-    // 1) Частоты символов lit/len (0..285, плюс EOB=256) и dist (0..29).
-    int[] litLenFreq = new int[286];
-    int[] distFreq = new int[30];
-    litLenFreq[256] = 1; // EOB
+    public required (int Code, int Len)[] LitLenCodes;
+    public required (int Code, int Len)[] DistCodes;
+    public required (int Code, int Len)[] ClCodes;
+    public required int[] ClLengths;
+    public required List<(int Sym, int ExtraBits, int ExtraVal)> ClItems;
+    public required int Hlit;
+    public required int Hdist;
+    public required int Hclen;
+    public required long Bits;
+  }
 
-    foreach (Token t in tokens)
-    {
-      if (t.Dist == 0)
-      {
-        litLenFreq[t.LitOrLen]++;
-        continue;
-      }
-
-      litLenFreq[257 + LenEncode[t.LitOrLen].Code]++;
-      distFreq[DistEncode[t.Dist].Code]++;
-    }
-
-    // 2) Длины кодов (length-limited).
+  /// <summary>
+  /// Строит таблицы динамического Хаффмана по уже подсчитанным частотам и вычисляет точный
+  /// размер блока в битах (без записи). Частоты <paramref name="litLenFreq"/> должны включать
+  /// EOB=1, <paramref name="extraBits"/> — суммарные доп. биты длины/дистанции.
+  /// </summary>
+  private static DynamicPlan BuildDynamicPlan(int[] litLenFreq, int[] distFreq, long extraBits)
+  {
+    // Длины кодов (length-limited).
     int[] litLenLengths = BuildLengths(litLenFreq, 15);
     int[] distLengths = BuildLengths(distFreq, 15);
 
@@ -278,7 +340,7 @@ public static class DeflateEncoder
     for (int i = 29; i >= 1; i--)
       if (distLengths[i] != 0) { hdist = i + 1; break; }
 
-    // 3) RLE последовательности длин (lit/len ++ dist) символами code-length алфавита.
+    // RLE последовательности длин (lit/len ++ dist) символами code-length алфавита.
     var clItems = new List<(int Sym, int ExtraBits, int ExtraVal)>();
     int[] clFreq = new int[19];
 
@@ -294,25 +356,48 @@ public static class DeflateEncoder
     while (hclen > 4 && clLengths[CodeLengthOrder[hclen - 1]] == 0)
       hclen--;
 
-    // 4) Канонические коды для данных.
-    (int, int)[] litLenCodes = BuildCanonical(litLenLengths);
-    (int, int)[] distCodes = BuildCanonical(distLengths);
+    // Канонические коды для данных.
+    (int Code, int Len)[] litLenCodes = BuildCanonical(litLenLengths);
+    (int Code, int Len)[] distCodes = BuildCanonical(distLengths);
 
-    // 5) Запись блока.
+    // Точный размер блока в битах = заголовок + данные.
+    long headerBits = 3 + 5 + 5 + 4 + (long)hclen * 3;
+    foreach ((int sym, int itemExtraBits, _) in clItems)
+      headerBits += clLengths[sym] + itemExtraBits;
+
+    long dataBits = WeightedLen(litLenFreq, litLenCodes) + WeightedLen(distFreq, distCodes) + extraBits;
+
+    return new DynamicPlan
+    {
+      LitLenCodes = litLenCodes,
+      DistCodes = distCodes,
+      ClCodes = clCodes,
+      ClLengths = clLengths,
+      ClItems = clItems,
+      Hlit = hlit,
+      Hdist = hdist,
+      Hclen = hclen,
+      Bits = headerBits + dataBits,
+    };
+  }
+
+  /// <summary>Материализует динамический блок Хаффмана по готовому плану и токенам.</summary>
+  private static byte[] WriteDynamic(DynamicPlan plan, List<Token> tokens, int inputLength)
+  {
     var writer = new BitWriter(inputLength / 2 + 32);
     writer.WriteBits(1, 1); // BFINAL = 1
     writer.WriteBits(2, 2); // BTYPE = 10 (dynamic Huffman)
 
-    writer.WriteBits((uint)(hlit - 257), 5);
-    writer.WriteBits((uint)(hdist - 1), 5);
-    writer.WriteBits((uint)(hclen - 4), 4);
+    writer.WriteBits((uint)(plan.Hlit - 257), 5);
+    writer.WriteBits((uint)(plan.Hdist - 1), 5);
+    writer.WriteBits((uint)(plan.Hclen - 4), 4);
 
-    for (int j = 0; j < hclen; j++)
-      writer.WriteBits((uint)clLengths[CodeLengthOrder[j]], 3);
+    for (int j = 0; j < plan.Hclen; j++)
+      writer.WriteBits((uint)plan.ClLengths[CodeLengthOrder[j]], 3);
 
-    foreach ((int sym, int extraBits, int extraVal) in clItems)
+    foreach ((int sym, int extraBits, int extraVal) in plan.ClItems)
     {
-      WriteHuffman(writer, clCodes[sym]);
+      WriteHuffman(writer, plan.ClCodes[sym]);
       if (extraBits != 0)
         writer.WriteBits((uint)extraVal, extraBits);
     }
@@ -321,22 +406,22 @@ public static class DeflateEncoder
     {
       if (t.Dist == 0)
       {
-        WriteHuffman(writer, litLenCodes[t.LitOrLen]);
+        WriteHuffman(writer, plan.LitLenCodes[t.LitOrLen]);
         continue;
       }
 
       (byte lenCode, byte lenExtraBits, ushort lenExtraVal) = LenEncode[t.LitOrLen];
-      WriteHuffman(writer, litLenCodes[257 + lenCode]);
+      WriteHuffman(writer, plan.LitLenCodes[257 + lenCode]);
       if (lenExtraBits != 0)
         writer.WriteBits(lenExtraVal, lenExtraBits);
 
       (byte distCode, byte distExtraBits, ushort distExtraVal) = DistEncode[t.Dist];
-      WriteHuffman(writer, distCodes[distCode]);
+      WriteHuffman(writer, plan.DistCodes[distCode]);
       if (distExtraBits != 0)
         writer.WriteBits(distExtraVal, distExtraBits);
     }
 
-    WriteHuffman(writer, litLenCodes[256]); // EOB
+    WriteHuffman(writer, plan.LitLenCodes[256]); // EOB
     writer.Flush();
     return writer.ToArray();
   }
