@@ -94,7 +94,20 @@ public static class BZip2Decoder
     private int[] _tt = [];
     private byte[] _ll8 = [];
 
+    // Выход: управляемый растущий byte[] (вместо List<byte>) — без overhead List.Add и с
+    // разумной стартовой ёмкостью, чтобы избежать множества удвоений.
+    private byte[] _out = [];
+    private int _outLen;
+
     public Worker(ReadOnlySpan<byte> input) => _input = input.ToArray();
+
+    private void Emit(byte b)
+    {
+      if (_outLen == _out.Length)
+        Array.Resize(ref _out, _out.Length * 2);
+
+      _out[_outLen++] = b;
+    }
 
     public byte[] Decode()
     {
@@ -112,7 +125,10 @@ public static class BZip2Decoder
       _tt = new int[maxBlock + 1];
       _ll8 = new byte[maxBlock];
 
-      var output = new List<byte>(maxBlock);
+      // Стартовая ёмкость выхода: оценка по размеру входа (bzip2-сжатие текста ~3-9×),
+      // но не меньше размера блока. Удвоение скорректирует, если оценка занижена.
+      _out = new byte[Math.Max(maxBlock, _input.Length * 4)];
+      _outLen = 0;
 
       while (true)
       {
@@ -127,13 +143,13 @@ public static class BZip2Decoder
         if (magic != BlockMagic)
           throw new InvalidBZip2Exception();
 
-        DecodeBlock(output);
+        DecodeBlock();
       }
 
-      return [.. output];
+      return _outLen == _out.Length ? _out : _out.AsSpan(0, _outLen).ToArray();
     }
 
-    private void DecodeBlock(List<byte> output)
+    private void DecodeBlock()
     {
       ReadBits(32); // block CRC (не проверяем)
 
@@ -157,9 +173,9 @@ public static class BZip2Decoder
       ReadSelectors(numGroups, numSelectors);
       ReadHuffmanTables(numGroups, alphaSize);
 
-      int nblock = DecodeMtfValues(output, alphaSize, numSelectors, nInUse, origPtr);
+      int nblock = DecodeMtfValues(alphaSize, numSelectors, nInUse, origPtr);
 
-      InverseBwtAndRle1(output, nblock, origPtr, randomized);
+      InverseBwtAndRle1(nblock, origPtr, randomized);
     }
 
     /// <summary>
@@ -320,7 +336,7 @@ public static class BZip2Decoder
     /// Декодирует Huffman-поток в BWT-вход (_ll8): обратные RLE2 (RUNA/RUNB) и MTF.
     /// Возвращает длину BWT-блока.
     /// </summary>
-    private int DecodeMtfValues(List<byte> output, int alphaSize, int numSelectors, int nInUse, int origPtr)
+    private int DecodeMtfValues(int alphaSize, int numSelectors, int nInUse, int origPtr)
     {
       int eob = alphaSize - 1;
 
@@ -472,9 +488,9 @@ public static class BZip2Decoder
 
     /// <summary>
     /// Выполняет обратный BWT (следуя _tt от origPtr) и обратный RLE1 первой стадии,
-    /// записывая итоговые байты в <paramref name="output"/>.
+    /// записывая итоговые байты в выходной буфер через <see cref="Emit"/>.
     /// </summary>
-    private void InverseBwtAndRle1(List<byte> output, int nblock, int origPtr, bool randomized)
+    private void InverseBwtAndRle1(int nblock, int origPtr, bool randomized)
     {
       int tPos = _tt[origPtr];
 
@@ -509,7 +525,7 @@ public static class BZip2Decoder
         {
           // b — счётчик дополнительных повторов (0..255).
           for (int k = 0; k < b; k++)
-            output.Add((byte)runByte);
+            Emit((byte)runByte);
 
           runCount = 0;
           runByte = -1;
@@ -524,7 +540,7 @@ public static class BZip2Decoder
           runByte = b;
         }
 
-        output.Add((byte)b);
+        Emit((byte)b);
       }
     }
 
