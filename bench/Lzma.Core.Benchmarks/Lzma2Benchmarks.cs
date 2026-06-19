@@ -29,7 +29,7 @@ public class Lzma2Benchmarks
   [GlobalSetup]
   public void Setup()
   {
-    _raw = MakeTextLikeData(SizeMiB * 1024 * 1024);
+    _raw = BenchData.MakeTextLike(SizeMiB * 1024 * 1024);
     _encoded = Lzma2LzmaEncoder.Encode(_raw, Props, Dict);
   }
 
@@ -65,48 +65,5 @@ public class Lzma2Benchmarks
       if (consumed == 0 && written == 0)
         throw new InvalidOperationException("Декодер не продвинулся.");
     }
-  }
-
-  /// <summary>
-  /// Детерминированные полу-реалистичные текстовые данные: слова из небольшого словаря,
-  /// разделённые пробелами и переводами строк. Хорошо сжимаются (как реальный текст),
-  /// поэтому match finder реально работает.
-  /// </summary>
-  private static byte[] MakeTextLikeData(int size)
-  {
-    string[] words =
-    [
-      "the", "quick", "brown", "fox", "jumps", "over", "lazy", "dog", "lorem", "ipsum",
-      "dolor", "sit", "amet", "consectetur", "adipiscing", "elit", "sed", "do", "eiusmod",
-      "tempor", "incididunt", "ut", "labore", "et", "dolore", "magna", "aliqua", "data",
-      "compression", "algorithm", "stream", "buffer", "window", "match", "literal", "range",
-    ];
-
-    var output = new byte[size];
-    var random = new Random(20260619);
-    int pos = 0;
-    int wordsOnLine = 0;
-
-    while (pos < size)
-    {
-      string word = words[random.Next(words.Length)];
-      foreach (char c in word)
-      {
-        if (pos >= size)
-          break;
-        output[pos++] = (byte)c;
-      }
-
-      if (pos < size)
-        output[pos++] = (byte)' ';
-
-      if (++wordsOnLine >= 12 && pos < size)
-      {
-        output[pos++] = (byte)'\n';
-        wordsOnLine = 0;
-      }
-    }
-
-    return output;
   }
 }
