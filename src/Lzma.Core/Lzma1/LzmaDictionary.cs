@@ -126,28 +126,59 @@ public sealed class LzmaDictionary
       return LzmaDictionaryResult.OutputTooSmall;
 
     // Индекс источника: позиция записи минус distance.
+    int blen = _buffer.Length;
     int src = _pos - distance;
     if (src < 0)
-      src += _buffer.Length;
+      src += blen;
 
-    for (int i = 0; i < length; i++)
+    if (distance >= length)
     {
-      byte b = _buffer[src];
+      // Непересекающийся матч (источник целиком «позади» позиции записи на >= length):
+      // копируем блоками через Span.CopyTo (векторно), а не побайтно. Сегментируем по
+      // границам кольцевого буфера (src и _pos могут переходить через конец).
+      int remaining = length;
+      while (remaining > 0)
+      {
+        int seg = remaining;
+        int srcToEnd = blen - src;
+        int posToEnd = blen - _pos;
+        if (seg > srcToEnd) seg = srcToEnd;
+        if (seg > posToEnd) seg = posToEnd;
 
-      output[outputPos++] = b;
+        ReadOnlySpan<byte> srcSpan = _buffer.AsSpan(src, seg);
+        srcSpan.CopyTo(_buffer.AsSpan(_pos, seg));      // в словарь
+        srcSpan.CopyTo(output.Slice(outputPos, seg));   // в выход
 
-      _buffer[_pos] = b;
-      _pos++;
-      if (_pos == _buffer.Length)
-        _pos = 0;
+        src += seg;
+        if (src == blen) src = 0;
+        _pos += seg;
+        if (_pos == blen) _pos = 0;
+        outputPos += seg;
+        remaining -= seg;
+      }
+    }
+    else
+    {
+      // Пересекающийся матч (distance < length, напр. RLE): каждый байт зависит от только
+      // что записанного, поэтому строго побайтно.
+      for (int i = 0; i < length; i++)
+      {
+        byte b = _buffer[src];
 
-      src++;
-      if (src == _buffer.Length)
-        src = 0;
+        output[outputPos++] = b;
 
-      _totalWritten++;
+        _buffer[_pos] = b;
+        _pos++;
+        if (_pos == blen)
+          _pos = 0;
+
+        src++;
+        if (src == blen)
+          src = 0;
+      }
     }
 
+    _totalWritten += length;
     return LzmaDictionaryResult.Ok;
   }
 
