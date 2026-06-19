@@ -40,6 +40,11 @@ public static class BZip2Encoder
     uint combinedCrc = 0;
     int offset = 0;
 
+    // Крупные буферы (BWT и MTF) переиспользуются между блоками: иначе каждый блок
+    // выделял бы несколько массивов >85 КБ в LOH, вызывая постоянные Gen2-сборки —
+    // именно GC-давление, а не CPU, доминировало во времени encode.
+    var scratch = new BlockScratch();
+
     while (offset < input.Length)
     {
       int take = Math.Min(MaxInputPerBlock, input.Length - offset);
@@ -49,7 +54,7 @@ public static class BZip2Encoder
       uint blockCrc = ComputeCrc(chunk);
       combinedCrc = ((combinedCrc << 1) | (combinedCrc >> 31)) ^ blockCrc;
 
-      EncodeBlock(writer, chunk, blockCrc);
+      EncodeBlock(writer, chunk, blockCrc, scratch);
     }
 
     writer.WriteBits((uint)(EndOfStreamMagic >> 24), 24);
@@ -60,18 +65,31 @@ public static class BZip2Encoder
     return writer.ToArray();
   }
 
-  private static void EncodeBlock(MsbBitWriter writer, ReadOnlySpan<byte> chunk, uint blockCrc)
+  /// <summary>Переиспользуемые между блоками крупные буферы (во избежание LOH-мусора).</summary>
+  private sealed class BlockScratch
+  {
+    public readonly int[] Sa = new int[BlockSize];
+    public readonly int[] Rank = new int[BlockSize];
+    public readonly int[] Tmp = new int[BlockSize];
+    public readonly long[] Key = new long[BlockSize];
+    public readonly byte[] Bwt = new byte[BlockSize];
+    public readonly List<int> Mtf = new(BlockSize + 1);
+  }
+
+  private static void EncodeBlock(MsbBitWriter writer, ReadOnlySpan<byte> chunk, uint blockCrc, BlockScratch scratch)
   {
     // 1) RLE1.
     byte[] rle = Rle1Encode(chunk);
+    int n = rle.Length;
 
-    // 2) BWT.
-    byte[] bwt = BurrowsWheeler(rle, out int origPtr);
+    // 2) BWT (результат в scratch.Bwt[0..n)).
+    BurrowsWheeler(rle, scratch, out int origPtr);
+    byte[] bwt = scratch.Bwt;
 
     // 3) Карта используемых символов.
     bool[] inUse = new bool[256];
-    foreach (byte b in bwt)
-      inUse[b] = true;
+    for (int i = 0; i < n; i++)
+      inUse[bwt[i]] = true;
 
     byte[] seqToUnseq = new byte[256];
     int nInUse = 0;
@@ -83,9 +101,9 @@ public static class BZip2Encoder
     int alphaSize = nInUse + 2;
 
     // 4) MTF + RLE2.
-    var mtfSymbols = new List<int>(bwt.Length + 1);
+    List<int> mtfSymbols = scratch.Mtf;
     int[] freq = new int[alphaSize];
-    MtfAndRle2(bwt, seqToUnseq, nInUse, mtfSymbols, freq, eob);
+    MtfAndRle2(bwt, n, seqToUnseq, nInUse, mtfSymbols, freq, eob);
 
     // 5) Huffman (одна таблица, продублированная в 2 группы).
     // Частоты с полом 1, чтобы все символы алфавита получили длину 1..20.
@@ -164,50 +182,56 @@ public static class BZip2Encoder
   // BWT (прямое) через prefix-doubling сортировку циклических ротаций.
   // ============================================================
 
-  private static byte[] BurrowsWheeler(byte[] t, out int origPtr)
+  private static void BurrowsWheeler(byte[] t, BlockScratch scratch, out int origPtr)
   {
     int n = t.Length;
-    byte[] bwt = new byte[n];
+    byte[] bwt = scratch.Bwt;
     origPtr = 0;
 
     if (n == 0)
-      return bwt;
+      return;
 
     if (n == 1)
     {
       bwt[0] = t[0];
       origPtr = 0;
-      return bwt;
+      return;
     }
 
-    int[] sa = new int[n];
-    int[] rank = new int[n];
-    int[] tmp = new int[n];
+    int[] sa = scratch.Sa;
+    int[] rank = scratch.Rank;
+    int[] tmp = scratch.Tmp;
+    long[] key = scratch.Key;
+
+    // Сортируем по упакованному ключу (rank[i] | rank[i+gap]) примитивным Array.Sort
+    // вместо делегата-компаратора: раньше на каждое сравнение был вызов делегата + два
+    // `% n`. Теперь модуло считается лишь O(n) раз за раунд при сборке ключей, а сама
+    // сортировка — по long. Буферы (sa/rank/tmp/key) переиспользуются между блоками.
     for (int i = 0; i < n; i++)
-    {
-      sa[i] = i;
       rank[i] = t[i];
-    }
 
-    int gap = 0;
-
-    int Compare(int a, int b)
+    for (int gap = 1; ; gap *= 2)
     {
-      if (rank[a] != rank[b])
-        return rank[a] < rank[b] ? -1 : 1;
+      for (int i = 0; i < n; i++)
+      {
+        int j = i + gap;
+        if (j >= n)
+          j -= n;
+        if (j >= n)        // gap может превысить n на последнем раунде
+          j %= n;
 
-      int ra = rank[(a + gap) % n];
-      int rb = rank[(b + gap) % n];
-      return ra == rb ? 0 : (ra < rb ? -1 : 1);
-    }
+        // Старшие 32 бита — ранг текущей половины, младшие — следующей; сортировка long
+        // по возрастанию даёт лексикографический порядок пар рангов.
+        key[i] = ((long)rank[i] << 32) | (uint)rank[j];
+        sa[i] = i;
+      }
 
-    for (gap = 1; ; gap *= 2)
-    {
-      Array.Sort(sa, Compare);
+      // Сортируем только префикс длины n (буферы могут быть длиннее блока).
+      Array.Sort(key, sa, 0, n); // key и sa переупорядочиваются в тандеме
 
       tmp[sa[0]] = 0;
       for (int i = 1; i < n; i++)
-        tmp[sa[i]] = tmp[sa[i - 1]] + (Compare(sa[i - 1], sa[i]) < 0 ? 1 : 0);
+        tmp[sa[i]] = tmp[sa[i - 1]] + (key[i] != key[i - 1] ? 1 : 0);
 
       Array.Copy(tmp, rank, n);
 
@@ -225,24 +249,25 @@ public static class BZip2Encoder
       if (s == 0)
         origPtr = i;
     }
-
-    return bwt;
   }
 
   // ============================================================
   // MTF + RLE2.
   // ============================================================
 
-  private static void MtfAndRle2(byte[] bwt, byte[] seqToUnseq, int nInUse, List<int> output, int[] freq, int eob)
+  private static void MtfAndRle2(byte[] bwt, int n, byte[] seqToUnseq, int nInUse, List<int> output, int[] freq, int eob)
   {
+    output.Clear(); // список переиспользуется между блоками
+
     byte[] mtf = new byte[nInUse];
     for (int i = 0; i < nInUse; i++)
       mtf[i] = seqToUnseq[i];
 
     int zeroRun = 0;
 
-    foreach (byte b in bwt)
+    for (int p = 0; p < n; p++)
     {
+      byte b = bwt[p];
       // Индекс b в MTF-списке.
       int idx = 0;
       while (mtf[idx] != b)
