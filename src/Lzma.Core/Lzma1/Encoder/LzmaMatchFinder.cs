@@ -117,64 +117,6 @@ internal static class LzmaMatchFinder
   }
 
   /// <summary>
-  /// Разбирает <paramref name="input"/> целиком, отдавая операции в <paramref name="sink"/>
-  /// по мере нахождения (без материализации всего списка), со скользящим окном:
-  /// <paramref name="prev"/> — циклический буфер размера (<paramref name="windowMask"/> + 1),
-  /// степень двойки ≥ dictionarySize. Это позволяет находить совпадения на всю длину входа
-  /// (в т.ч. через границы будущих LZMA2-чанков) при памяти, ограниченной размером словаря,
-  /// а не длиной входа.
-  /// </summary>
-  internal static void ParseAll(
-      ReadOnlySpan<byte> input,
-      int dictionarySize,
-      int[] head,
-      int[] prev,
-      int windowMask,
-      ILzmaOpSink sink)
-  {
-    ArgumentOutOfRangeException.ThrowIfNegativeOrZero(dictionarySize);
-
-    int n = input.Length;
-    if (n == 0)
-      return;
-
-    int maxMatch = LzmaConstants.MatchMaxLen;
-    int maxDistance = dictionarySize;
-
-    Array.Fill(head, -1);
-
-    // Кандидаты совпадений текущей позиции (≤ MaxChainLength: по одному улучшению на узел цепочки).
-    Span<LzmaMatch> matches = stackalloc LzmaMatch[MaxChainLength];
-
-    int i = 0;
-    while (i < n)
-    {
-      int count = FindMatchesCyclic(input, i, maxMatch, maxDistance, head, prev, windowMask, matches);
-
-      // Greedy: самый длинный кандидат — последний в списке (длины строго возрастают).
-      LzmaMatch best = count > 0 ? matches[count - 1] : default;
-
-      if (best.Length >= MinMatch)
-      {
-        sink.Emit(LzmaEncodeOp.Match(best.Distance, best.Length));
-
-        int end = i + best.Length;
-        while (i < end)
-        {
-          InsertCyclic(input, i, head, prev, windowMask);
-          i++;
-        }
-      }
-      else
-      {
-        sink.Emit(LzmaEncodeOp.Lit(input[i]));
-        InsertCyclic(input, i, head, prev, windowMask);
-        i++;
-      }
-    }
-  }
-
-  /// <summary>
   /// Находит совпадения для позиции <paramref name="pos"/> по хеш-цепочке и записывает их в
   /// <paramref name="matches"/> с возрастающей длиной (и дистанцией): каждый элемент — это
   /// «ступенька» вверх по достижимой длине с лучшей (наименьшей) дистанцией для неё. Возвращает

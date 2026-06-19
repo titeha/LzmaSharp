@@ -110,23 +110,104 @@ public static class Lzma2LzmaEncoder
 
     // Несущий словарь: match finder проходит ВЕСЬ вход со скользящим окном (совпадения
     // могут ссылаться через границы чанков, вплоть до dictionarySize назад), а один
-    // LzmaEncoder кодирует поток операций, сохраняя словарь и модели между чанками.
-    // Операции потоково (без материализации списка) уходят в ChunkingSink, который
-    // кодирует их на лету и нарезает LZMA2-чанки. Первый LZMA-чанк сбрасывает словарь/
-    // состояние/props (0xE0), последующие сохраняют всё и лишь переинициализируют range
-    // coder (0x80) — как и ожидает декодер.
+    // LzmaEncoder кодирует операции, сохраняя словарь и модели между чанками. Первый
+    // LZMA-чанк сбрасывает словарь/состояние/props (0xE0), последующие сохраняют всё и
+    // лишь переинициализируют range coder (0x80) — как и ожидает декодер.
+    //
+    // Выбор операций — с учётом rep-дистанций (упрощённый optimal parsing): на каждой
+    // позиции сравниваем самый длинный обычный матч и самый длинный rep-матч (по одной
+    // из 4 последних дистанций). rep кодируется заметно дешевле (без полной дистанции),
+    // поэтому предпочитаем его, когда он почти не короче обычного. greedy этого не делал.
     int windowSize = WindowSizePow2(Math.Min(dictionarySize, data.Length));
     int[] head = new int[LzmaMatchFinder.HashTableSize];
+    Array.Fill(head, -1);
     int[] prev = new int[windowSize];
+    int windowMask = windowSize - 1;
 
     var encoder = new LzmaEncoder(lzmaProperties, dictionarySize);
     var sink = new ChunkingSink(ms, encoder, propsByte, maxUnpackChunkSize);
 
-    LzmaMatchFinder.ParseAll(data, dictionarySize, head, prev, windowSize - 1, sink);
+    Span<LzmaMatch> matches = stackalloc LzmaMatch[256];
+
+    int i = 0;
+    int n = data.Length;
+    while (i < n)
+    {
+      int count = LzmaMatchFinder.FindMatchesCyclic(
+          data, i, LzmaConstants.MatchMaxLen, dictionarySize, head, prev, windowMask, matches);
+
+      // Самый длинный обычный матч — последний кандидат.
+      int normalLen = count > 0 ? matches[count - 1].Length : 0;
+      int normalDist = count > 0 ? matches[count - 1].Distance : 0;
+
+      // Самый длинный rep-матч по текущим rep-дистанциям.
+      int repLen = 0;
+      int repDist = 0;
+      for (int r = 0; r < 4; r++)
+      {
+        int d = encoder.CurrentRepDistance(r);
+        if (d > i)
+          continue; // нельзя ссылаться раньше начала данных
+
+        int len = RepMatchLength(data, i, d, LzmaConstants.MatchMaxLen);
+        if (len > repLen)
+        {
+          repLen = len;
+          repDist = d;
+        }
+      }
+
+      LzmaEncodeOp op;
+      int advance;
+
+      // rep почти не короче длиннейшего обычного матча → берём его (дешевле кодируется).
+      if (repLen >= MinMatch && repLen + 1 >= normalLen)
+      {
+        op = LzmaEncodeOp.Match(repDist, repLen);
+        advance = repLen;
+      }
+      else if (normalLen >= MinMatch)
+      {
+        op = LzmaEncodeOp.Match(normalDist, normalLen);
+        advance = normalLen;
+      }
+      else
+      {
+        op = LzmaEncodeOp.Lit(data[i]);
+        advance = 1;
+      }
+
+      sink.Emit(op);
+
+      int end = i + advance;
+      while (i < end)
+      {
+        LzmaMatchFinder.InsertCyclic(data, i, head, prev, windowMask);
+        i++;
+      }
+    }
+
     sink.Finish();
 
     ms.WriteByte(0x00);
     return ms.ToArray();
+  }
+
+  /// <summary>Минимальная длина матча, которую мы кодируем (как в match finder).</summary>
+  private const int MinMatch = 3;
+
+  /// <summary>
+  /// Длина совпадения данных в позиции <paramref name="pos"/> с байтами на дистанции
+  /// <paramref name="distance"/> назад (1-based), не больше <paramref name="maxMatch"/> и
+  /// остатка входа. Перекрытие (длина &gt; дистанции) допускается, как в RLE.
+  /// </summary>
+  private static int RepMatchLength(ReadOnlySpan<byte> data, int pos, int distance, int maxMatch)
+  {
+    int limit = Math.Min(maxMatch, data.Length - pos);
+    if (limit <= 0)
+      return 0;
+
+    return data.Slice(pos - distance, limit).CommonPrefixLength(data.Slice(pos, limit));
   }
 
   /// <summary>
@@ -136,7 +217,6 @@ public static class Lzma2LzmaEncoder
   /// только range coder).
   /// </summary>
   private sealed class ChunkingSink(MemoryStream ms, LzmaEncoder encoder, byte propsByte, int maxUnpackChunkSize)
-      : Lzma1.ILzmaOpSink
   {
     // Граница чанка по packed-размеру: с запасом до 64 КБ, т.к. packSize в заголовке 16-битный.
     private const int PackLimit = 60000;

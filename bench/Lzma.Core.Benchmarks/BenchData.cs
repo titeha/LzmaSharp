@@ -48,4 +48,32 @@ internal static class BenchData
 
     return output;
   }
+
+  /// <summary>
+  /// Детерминированные структурированные данные с повторяющимися фрагментами на
+  /// регулярных дистанциях (как логи/таблицы/код). Здесь rep-матчи реально помогают.
+  /// </summary>
+  public static byte[] MakePeriodic(int size)
+  {
+    string[] templates =
+    [
+      "2026-06-19 12:00:00 [INFO ] request id=000000 user=alice status=200 path=/api/v1/items\n",
+      "2026-06-19 12:00:00 [WARN ] request id=000000 user=bobby status=404 path=/api/v1/items\n",
+      "2026-06-19 12:00:00 [ERROR] request id=000000 user=carol status=500 path=/api/v1/items\n",
+    ];
+
+    var output = new byte[size];
+    var random = new Random(20260619);
+    int pos = 0;
+
+    while (pos < size)
+    {
+      byte[] line = System.Text.Encoding.ASCII.GetBytes(templates[random.Next(templates.Length)]);
+      int take = Math.Min(line.Length, size - pos);
+      Array.Copy(line, 0, output, pos, take);
+      pos += take;
+    }
+
+    return output;
+  }
 }

@@ -343,6 +343,13 @@ public sealed class LzmaEncoder
   }
 
   /// <summary>
+  /// Текущая rep-дистанция с индексом <paramref name="index"/> (0..3) как настоящая
+  /// дистанция (1-based). reps хранят distance-1, поэтому возвращаем <c>_reps[index] + 1</c>.
+  /// Нужна парсеру для поиска rep-матчей.
+  /// </summary>
+  internal int CurrentRepDistance(int index) => _reps[index] + 1;
+
+  /// <summary>
   /// Возвращает индекс rep-дистанции (0..3), равной <paramref name="distMinus1"/> (distance-1),
   /// или -1, если совпадения нет. Меньший индекс предпочтительнее (он дешевле кодируется).
   /// </summary>
