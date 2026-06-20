@@ -33,9 +33,7 @@ public static partial class SevenZipArchiveWriter
 
     if (entries is null
         || options is null
-        || options.Password is null
-        || options.Salt is null
-        || options.InitializationVector is null)
+        || options.Password is null)
       return SevenZipArchiveWriteResult.InvalidData;
 
     if (entries.Count == 0)
@@ -50,10 +48,14 @@ public static partial class SevenZipArchiveWriter
     if (!SevenZipGostCoder.IsSupportedNumCyclesPower(options.NumCyclesPower))
       return SevenZipArchiveWriteResult.NotSupported;
 
-    if (options.Salt.Length > SevenZipGostCoder.MaxSaltSize)
+    // Соль и IV: при отсутствии генерируем криптослучайно; явно заданные — как есть.
+    byte[] salt = options.Salt ?? RandomNumberGenerator.GetBytes(SevenZipGostEncryptionOptions.DefaultSaltSize);
+    byte[] initializationVector = options.InitializationVector ?? RandomNumberGenerator.GetBytes(requiredIvSize);
+
+    if (salt.Length > SevenZipGostCoder.MaxSaltSize)
       return SevenZipArchiveWriteResult.InvalidData;
 
-    if (options.InitializationVector.Length != requiredIvSize)
+    if (initializationVector.Length != requiredIvSize)
       return SevenZipArchiveWriteResult.InvalidData;
 
     // Без файловых данных шифровать нечего: пишем архив только из empty entries.
@@ -66,8 +68,8 @@ public static partial class SevenZipArchiveWriter
         version: SevenZipGostCoder.CurrentPropertiesVersion,
         flags: 0,
         numCyclesPower: options.NumCyclesPower,
-        salt: options.Salt,
-        initializationVector: options.InitializationVector);
+        salt: salt,
+        initializationVector: initializationVector);
 
     byte[] key = new byte[SevenZipGostKeyDerivation.Gost256KeySize];
     bool directKey = options.NumCyclesPower == SevenZipGostCoder.DirectKeyNumCyclesPower;
@@ -100,8 +102,8 @@ public static partial class SevenZipArchiveWriter
           entries,
           methodId,
           numCyclesPower: options.NumCyclesPower,
-          salt: options.Salt,
-          baseInitializationVector: options.InitializationVector,
+          salt: salt,
+          baseInitializationVector: initializationVector,
           key,
           out archive);
     }
