@@ -149,6 +149,49 @@ public static class SevenZipGostCoder
 
     return true;
   }
+
+  /// <summary>
+  /// Пытается сериализовать свойства экспериментального GOST-кодера в байты
+  /// формата версии 1 (см. <see cref="TryParseProperties"/>).
+  /// </summary>
+  /// <param name="properties">Свойства для сериализации.</param>
+  /// <param name="serialized">Сериализованные байты при успехе; иначе пустой массив.</param>
+  /// <returns>
+  /// <see langword="true"/>, если свойства корректны и сериализованы;
+  /// иначе <see langword="false"/>.
+  /// </returns>
+  public static bool TrySerializeProperties(
+      SevenZipGostProperties properties,
+      out byte[] serialized)
+  {
+    ArgumentNullException.ThrowIfNull(properties);
+
+    serialized = [];
+
+    if (properties.Version != CurrentPropertiesVersion)
+      return false;
+
+    if (properties.Flags != 0)
+      return false;
+
+    if (properties.Salt.Length > MaxSaltSize
+        || properties.InitializationVector.Length > MaxInitializationVectorSize)
+      return false;
+
+    var result = new byte[5 + properties.Salt.Length + properties.InitializationVector.Length];
+
+    result[0] = properties.Version;
+    result[1] = properties.Flags;
+    result[2] = properties.NumCyclesPower;
+    result[3] = (byte)properties.Salt.Length;
+    result[4] = (byte)properties.InitializationVector.Length;
+
+    properties.Salt.CopyTo(result.AsSpan(5));
+    properties.InitializationVector.CopyTo(result.AsSpan(5 + properties.Salt.Length));
+
+    serialized = result;
+    return true;
+  }
 }
 
 /// <summary>
