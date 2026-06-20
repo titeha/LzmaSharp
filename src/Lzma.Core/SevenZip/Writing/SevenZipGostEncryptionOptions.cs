@@ -9,7 +9,7 @@ namespace Lzma.Core.SevenZip;
 /// writer шифрует не более одного непустого файла на архив, поэтому достаточно одного
 /// IV; при расширении на несколько потоков потребуется свой IV на каждый поток.
 /// </remarks>
-public sealed class SevenZipGostEncryptionOptions
+public sealed record SevenZipGostEncryptionOptions
 {
   /// <summary>Выбранный шифр.</summary>
   public required SevenZipGostCipher Cipher { get; init; }
@@ -31,4 +31,10 @@ public sealed class SevenZipGostEncryptionOptions
   /// Вектор инициализации: 8 байт для Кузнечика, 4 байта для Магмы.
   /// </summary>
   public required byte[] InitializationVector { get; init; }
+
+  /// <summary>
+  /// Сжимать содержимое LZMA2 перед шифрованием (folder из двух coder-ов:
+  /// LZMA2 → ГОСТ). По умолчанию <see langword="false"/> — только шифрование.
+  /// </summary>
+  public bool CompressWithLzma2 { get; init; }
 }

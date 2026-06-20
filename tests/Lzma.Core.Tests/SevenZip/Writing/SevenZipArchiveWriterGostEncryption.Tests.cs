@@ -215,6 +215,122 @@ public sealed class SevenZipArchiveWriterGostEncryptionTests
     Assert.Equal(2, entries.Length);
   }
 
+  // ---- LZMA2 → ГОСТ (сжатие + шифрование) ----
+
+  [Fact]
+  public void BuildGostEncryptedArchive_КузнечикDirectKeyСLzma2_ОдинФайл_RoundTrip()
+  {
+    byte[] content = Encoding.UTF8.GetBytes(
+        string.Concat(Enumerable.Repeat("LzmaSharp GOST+LZMA2 compress-then-encrypt round-trip\r\n", 40)));
+    const string fileName = "secret.txt";
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    var options = KuznyechikDirectKey(password) with { CompressWithLzma2 = true };
+
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildGostEncryptedArchive(
+        [new SevenZipArchiveWriterEntry(fileName, content)],
+        options,
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
+
+    SevenZipArchiveDecodeResult decodeResult = SevenZipArchiveDecoder.DecodeSingleFileToArray(
+        archiveBytes: archive,
+        options: SevenZipDecodeOptions.WithPassword(password),
+        fileBytes: out byte[] fileBytes,
+        fileName: out string decodedName,
+        bytesConsumed: out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, decodeResult);
+    Assert.Equal(archive.Length, bytesConsumed);
+    Assert.Equal(fileName, decodedName);
+    Assert.Equal(content, fileBytes);
+
+    // Содержимое сильно повторяющееся — после сжатия архив заметно меньше исходных данных,
+    // значит LZMA2 действительно отработал (а не просто скопировал).
+    Assert.True(archive.Length < content.Length);
+  }
+
+  [Fact]
+  public void BuildGostEncryptedArchive_МагмаStribogKdfСLzma2_ОдинФайл_RoundTrip()
+  {
+    byte[] content = Encoding.UTF8.GetBytes(
+        string.Concat(Enumerable.Repeat("ГОСТ Магма + LZMA2: сжать, потом зашифровать.\r\n", 30)));
+    const string fileName = "данные.bin";
+
+    using SevenZipPassword password = SevenZipPassword.FromString("пароль");
+
+    var options = MagmaStribogKdf(password) with { CompressWithLzma2 = true };
+
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildGostEncryptedArchive(
+        [new SevenZipArchiveWriterEntry(fileName, content)],
+        options,
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
+
+    SevenZipArchiveDecodeResult decodeResult = SevenZipArchiveDecoder.DecodeSingleFileToArray(
+        archiveBytes: archive,
+        options: SevenZipDecodeOptions.WithPassword(password),
+        fileBytes: out byte[] fileBytes,
+        fileName: out string decodedName,
+        bytesConsumed: out _);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, decodeResult);
+    Assert.Equal(fileName, decodedName);
+    Assert.Equal(content, fileBytes);
+  }
+
+  [Fact]
+  public void BuildGostEncryptedArchive_Lzma2СНевернымПаролем_ДекодерВозвращаетInvalidData()
+  {
+    byte[] content = Encoding.UTF8.GetBytes(
+        string.Concat(Enumerable.Repeat("wrong password fails CRC after decrypt+decompress\r\n", 20)));
+
+    using SevenZipPassword writePassword = SevenZipPassword.FromString("ab");
+
+    var options = KuznyechikDirectKey(writePassword) with { CompressWithLzma2 = true };
+
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildGostEncryptedArchive(
+        [new SevenZipArchiveWriterEntry("secret.txt", content)],
+        options,
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
+
+    using SevenZipPassword wrongPassword = SevenZipPassword.FromString("zz");
+
+    SevenZipArchiveDecodeResult decodeResult = SevenZipArchiveDecoder.DecodeSingleFileToArray(
+        archiveBytes: archive,
+        options: SevenZipDecodeOptions.WithPassword(wrongPassword),
+        fileBytes: out byte[] fileBytes,
+        fileName: out _,
+        bytesConsumed: out _);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.InvalidData, decodeResult);
+    Assert.Empty(fileBytes);
+  }
+
+  [Fact]
+  public void BuildGostEncryptedArchive_Lzma2_ШифртекстНеСодержитИсходныйТекст()
+  {
+    byte[] content = Encoding.UTF8.GetBytes(
+        string.Concat(Enumerable.Repeat("MARKER plaintext must not survive compress+encrypt\r\n", 10)));
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    var options = KuznyechikDirectKey(password) with { CompressWithLzma2 = true };
+
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildGostEncryptedArchive(
+        [new SevenZipArchiveWriterEntry("secret.txt", content)],
+        options,
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
+    Assert.False(ContainsSubsequence(archive, Encoding.UTF8.GetBytes("MARKER plaintext")));
+  }
+
   // Проверяет, встречается ли needle как непрерывная подпоследовательность в haystack.
   private static bool ContainsSubsequence(byte[] haystack, byte[] needle)
   {
