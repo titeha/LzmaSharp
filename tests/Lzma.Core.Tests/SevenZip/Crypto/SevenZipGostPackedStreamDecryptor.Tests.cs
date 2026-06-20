@@ -1,3 +1,5 @@
+using System.Text;
+
 using Lzma.Core.Crypto.Gost;
 using Lzma.Core.SevenZip;
 
@@ -145,10 +147,16 @@ public sealed class SevenZipGostPackedStreamDecryptorTests
   }
 
   [Fact]
-  public void TryDecrypt_МагмаПокаВозвращаетNotSupported()
+  public void TryDecrypt_МагмаПоОфициальномуCtrВектору_ВозвращаетИсходныйPlaintext()
   {
-    byte[] key = new byte[32];
-    byte[] ciphertext = new byte[16];
+    byte[] key = Convert.FromHexString(
+        "ffeeddccbbaa99887766554433221100f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff");
+
+    byte[] ciphertext = Convert.FromHexString(
+        "4e98110c97b7b93c3e250d93d6e85d69136d868807b2dbef568eb680ab52a12d");
+
+    byte[] expectedPlaintext = Convert.FromHexString(
+        "92def06b3c130a59db54c704f8189d204a98fb2e67a8024c8912409b17b57e41");
 
     var properties = new SevenZipGostProperties(
         version: 1,
@@ -164,7 +172,31 @@ public sealed class SevenZipGostPackedStreamDecryptorTests
         ciphertext: ciphertext,
         plaintext: out byte[] plaintext);
 
-    Assert.Equal(SevenZipGostDecryptResult.NotSupported, result);
+    Assert.Equal(SevenZipGostDecryptResult.Ok, result);
+    Assert.Equal(expectedPlaintext, plaintext);
+  }
+
+  [Fact]
+  public void TryDecrypt_МагмаСНекорректнойДлинойIv_ВозвращаетInvalidData()
+  {
+    byte[] key = new byte[32];
+    byte[] ciphertext = new byte[8];
+
+    var properties = new SevenZipGostProperties(
+        version: 1,
+        flags: 0,
+        numCyclesPower: 3,
+        salt: [],
+        initializationVector: [0x12, 0x34, 0x56]); // должно быть 4 байта
+
+    SevenZipGostDecryptResult result = SevenZipGostPackedStreamDecryptor.TryDecrypt(
+        methodId: SevenZipGostCoder.MagmaMethodId,
+        properties: properties,
+        key: key,
+        ciphertext: ciphertext,
+        plaintext: out byte[] plaintext);
+
+    Assert.Equal(SevenZipGostDecryptResult.InvalidData, result);
     Assert.Empty(plaintext);
   }
 
@@ -324,26 +356,33 @@ public sealed class SevenZipGostPackedStreamDecryptorTests
   }
 
   [Fact]
-  public void TryDecrypt_МагмаСПаролем_ПокаВозвращаетNotSupported()
+  public void TryDecrypt_МагмаDirectKeyССольюИПаролем_ДелаетRoundtrip()
   {
     var properties = new SevenZipGostProperties(
         version: SevenZipGostCoder.CurrentPropertiesVersion,
         flags: 0,
         numCyclesPower: SevenZipGostCoder.DirectKeyNumCyclesPower,
-        salt: [],
+        salt: [0xA1, 0xA2],
         initializationVector: [0x12, 0x34, 0x56, 0x78]);
 
-    using SevenZipPassword password = SevenZipPassword.FromString("");
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    byte[] plain = Encoding.ASCII.GetBytes("LzmaSharp GOST Magma direct key test");
+
+    Span<byte> key = stackalloc byte[SevenZipGostKeyDerivation.Gost256KeySize];
+    Assert.True(SevenZipGostKeyDerivation.TryDeriveDirectKey(properties, password, key));
+    Assert.True(SevenZipGostInitializationVector.TryBuildMagmaCtr(properties, out byte[] iv));
+    Assert.True(GostMagmaCtrTransform.TryTransform(key, iv, plain, out byte[] ciphertext));
 
     SevenZipGostDecryptResult result = SevenZipGostPackedStreamDecryptor.TryDecrypt(
         methodId: SevenZipGostCoder.MagmaMethodId,
         properties: properties,
         password: password,
-        ciphertext: new byte[16],
+        ciphertext: ciphertext,
         plaintext: out byte[] plaintext);
 
-    Assert.Equal(SevenZipGostDecryptResult.NotSupported, result);
-    Assert.Empty(plaintext);
+    Assert.Equal(SevenZipGostDecryptResult.Ok, result);
+    Assert.Equal(plain, plaintext);
   }
 
   [Fact]

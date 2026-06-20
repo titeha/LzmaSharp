@@ -60,13 +60,7 @@ public static class SevenZipGostPackedStreamDecryptor
 
     plaintext = [];
 
-    if (SevenZipGostCoder.IsMagmaMethodId(methodId))
-    {
-      plaintext = [];
-      return SevenZipGostDecryptResult.NotSupported;
-    }
-
-    if (!SevenZipGostCoder.IsKuznyechikMethodId(methodId))
+    if (!SevenZipGostCoder.IsGostMethodId(methodId))
     {
       plaintext = [];
       return SevenZipGostDecryptResult.InvalidData;
@@ -160,8 +154,32 @@ public static class SevenZipGostPackedStreamDecryptor
 
     if (SevenZipGostCoder.IsMagmaMethodId(methodId))
     {
-      plaintext = [];
-      return SevenZipGostDecryptResult.NotSupported;
+      if (!SevenZipGostInitializationVector.TryBuildMagmaCtr(
+          properties,
+          out byte[] initializationVector))
+      {
+        plaintext = [];
+        return SevenZipGostDecryptResult.InvalidData;
+      }
+
+      try
+      {
+        if (!GostMagmaCtrTransform.TryTransform(
+            key,
+            initializationVector,
+            ciphertext,
+            out plaintext))
+        {
+          plaintext = [];
+          return SevenZipGostDecryptResult.InvalidData;
+        }
+
+        return SevenZipGostDecryptResult.Ok;
+      }
+      finally
+      {
+        Array.Clear(initializationVector);
+      }
     }
 
     plaintext = [];

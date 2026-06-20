@@ -137,30 +137,92 @@ public sealed class SevenZipFolderDecoderGostDecryptTests
   }
 
   [Fact]
-  public void DecodeFolderToArray_MagmaCopyPipeline_ПокаВозвращаетNotSupported()
+  public void DecodeFolderToArray_MagmaCopyPipeline_СDirectKey_ДекодируетЗашифрованныйВход()
   {
+    byte[] plain = System.Text.Encoding.UTF8.GetBytes(
+        "LzmaSharp GOST Magma FolderDecoder test");
+
     byte[] properties = CreateGostDirectProperties(
-        salt: [],
+        salt: [0xA1, 0xA2],
         iv: [0x12, 0x34, 0x56, 0x78]);
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    byte[] encrypted = EncryptMagmaDirectKeyForTest(properties, password, plain);
 
     SevenZipStreamsInfo streamsInfo = CreateGostThenCopyStreamsInfo(
         methodId: SevenZipGostCoder.MagmaMethodId.ToArray(),
         gostProperties: properties,
-        gostUnpackSize: 16UL,
-        finalUnpackSize: 16UL,
-        packSize: 16UL);
-
-    using SevenZipPassword password = SevenZipPassword.FromString("");
+        gostUnpackSize: (ulong)plain.Length,
+        finalUnpackSize: (ulong)plain.Length,
+        packSize: (ulong)encrypted.Length);
 
     SevenZipFolderDecodeResult result = SevenZipFolderDecoder.DecodeFolderToArray(
         streamsInfo: streamsInfo,
-        packedStreams: new byte[16],
+        packedStreams: encrypted,
         folderIndex: 0,
         options: SevenZipDecodeOptions.WithPassword(password),
         output: out byte[] output);
 
+    Assert.Equal(SevenZipFolderDecodeResult.Ok, result);
+    Assert.Equal(plain, output);
+  }
+
+  [Fact]
+  public void DecodeFolderToArray_MagmaCopyPipeline_БезПароля_ВозвращаетNotSupported()
+  {
+    byte[] plain = new byte[16];
+
+    byte[] properties = CreateGostDirectProperties(
+        salt: [],
+        iv: [0x12, 0x34, 0x56, 0x78]);
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+    byte[] encrypted = EncryptMagmaDirectKeyForTest(properties, password, plain);
+
+    SevenZipStreamsInfo streamsInfo = CreateGostThenCopyStreamsInfo(
+        methodId: SevenZipGostCoder.MagmaMethodId.ToArray(),
+        gostProperties: properties,
+        gostUnpackSize: (ulong)plain.Length,
+        finalUnpackSize: (ulong)plain.Length,
+        packSize: (ulong)encrypted.Length);
+
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.DecodeFolderToArray(
+        streamsInfo: streamsInfo,
+        packedStreams: encrypted,
+        folderIndex: 0,
+        options: SevenZipDecodeOptions.Default,
+        output: out _);
+
     Assert.Equal(SevenZipFolderDecodeResult.NotSupported, result);
-    Assert.Empty(output);
+  }
+
+  private static byte[] EncryptMagmaDirectKeyForTest(
+      byte[] propertiesBytes,
+      SevenZipPassword password,
+      byte[] plain)
+  {
+    Assert.True(SevenZipGostCoder.TryParseProperties(
+        propertiesBytes,
+        out SevenZipGostProperties? properties));
+
+    byte[] key = new byte[SevenZipGostKeyDerivation.Gost256KeySize];
+
+    try
+    {
+      Assert.True(SevenZipGostKeyDerivation.TryDeriveDirectKey(properties!, password, key));
+      Assert.True(GostMagmaCtrTransform.TryTransform(
+          key,
+          properties!.InitializationVector,
+          plain,
+          out byte[] encrypted));
+
+      return encrypted;
+    }
+    finally
+    {
+      Array.Clear(key);
+    }
   }
 
   [Fact]
@@ -541,29 +603,35 @@ public sealed class SevenZipFolderDecoderGostDecryptTests
   }
 
   [Fact]
-  public void DecodeFolderToArray_MagmaSingleCoder_ПокаВозвращаетNotSupported()
+  public void DecodeFolderToArray_MagmaSingleCoder_СDirectKey_ДекодируетЗашифрованныйВход()
   {
+    var plain = new byte[64];
+    for (int i = 0; i < plain.Length; i++)
+      plain[i] = unchecked((byte)(i * 17 + 3));
+
     byte[] properties = CreateGostDirectProperties(
-        salt: [],
-        iv: [0x12, 0x34, 0x56, 0x78]);
+        salt: [0x11, 0x22],
+        iv: [0x10, 0x32, 0x54, 0x76]);
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    byte[] encrypted = EncryptMagmaDirectKeyForTest(properties, password, plain);
 
     SevenZipStreamsInfo streamsInfo = CreateSingleGostCoderStreamsInfo(
         methodId: SevenZipGostCoder.MagmaMethodId.ToArray(),
         gostProperties: properties,
-        unpackSize: 16UL,
-        packSize: 16UL);
-
-    using SevenZipPassword password = SevenZipPassword.FromString("");
+        unpackSize: (ulong)plain.Length,
+        packSize: (ulong)encrypted.Length);
 
     SevenZipFolderDecodeResult result = SevenZipFolderDecoder.DecodeFolderToArray(
         streamsInfo: streamsInfo,
-        packedStreams: new byte[16],
+        packedStreams: encrypted,
         folderIndex: 0,
         options: SevenZipDecodeOptions.WithPassword(password),
         output: out byte[] output);
 
-    Assert.Equal(SevenZipFolderDecodeResult.NotSupported, result);
-    Assert.Empty(output);
+    Assert.Equal(SevenZipFolderDecodeResult.Ok, result);
+    Assert.Equal(plain, output);
   }
 
   private static SevenZipStreamsInfo CreateSingleGostCoderStreamsInfo(

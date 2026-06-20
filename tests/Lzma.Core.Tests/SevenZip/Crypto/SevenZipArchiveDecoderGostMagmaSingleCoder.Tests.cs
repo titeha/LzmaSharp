@@ -1,6 +1,7 @@
 using System.Text;
 
 using Lzma.Core.Checksums;
+using Lzma.Core.Crypto.Gost;
 using Lzma.Core.SevenZip;
 
 namespace Lzma.Core.Tests.SevenZip;
@@ -8,15 +9,12 @@ namespace Lzma.Core.Tests.SevenZip;
 public sealed class SevenZipArchiveDecoderGostMagmaSingleCoderTests
 {
   [Fact]
-  public void DecodeSingleFileToArray_GostMagmaSingleCoder_СПаролем_ВозвращаетNotSupported()
+  public void DecodeSingleFileToArray_GostMagmaSingleCoder_СПаролем_ВозвращаетФайл()
   {
-    byte[] packed = CreatePackedForTest();
-
+    byte[] plain = CreatePlainForTest();
     using SevenZipPassword password = SevenZipPassword.FromString("ab");
 
-    byte[] archive = Build7zArchive_SingleFile_GostMagmaSingleCoder(
-        packedBytes: packed,
-        fileName: "gost-magma-single-coder.bin");
+    byte[] archive = Build7zArchive_SingleFile_GostMagmaSingleCoder(plain, "gost-magma.bin", password);
 
     SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeSingleFileToArray(
         archiveBytes: archive,
@@ -25,20 +23,19 @@ public sealed class SevenZipArchiveDecoderGostMagmaSingleCoderTests
         fileName: out string decodedFileName,
         bytesConsumed: out int bytesConsumed);
 
-    Assert.Equal(SevenZipArchiveDecodeResult.NotSupported, result);
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, result);
     Assert.Equal(archive.Length, bytesConsumed);
-    Assert.Empty(fileBytes);
-    Assert.Equal(string.Empty, decodedFileName);
+    Assert.Equal("gost-magma.bin", decodedFileName);
+    Assert.Equal(plain, fileBytes);
   }
 
   [Fact]
   public void DecodeSingleFileToArray_GostMagmaSingleCoder_БезПароля_ВозвращаетNotSupported()
   {
-    byte[] packed = CreatePackedForTest();
+    byte[] plain = CreatePlainForTest();
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
 
-    byte[] archive = Build7zArchive_SingleFile_GostMagmaSingleCoder(
-        packedBytes: packed,
-        fileName: "gost-magma-single-coder.bin");
+    byte[] archive = Build7zArchive_SingleFile_GostMagmaSingleCoder(plain, "gost-magma.bin", password);
 
     SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeSingleFileToArray(
         archiveBytes: archive,
@@ -54,19 +51,57 @@ public sealed class SevenZipArchiveDecoderGostMagmaSingleCoderTests
   }
 
   [Fact]
-  public void ExtractToDirectory_GostMagmaSingleCoder_СПаролем_ВозвращаетNotSupportedИНичегоНеПишет()
+  public void DecodeSingleFileToArray_GostMagmaSingleCoder_СНевернымПаролем_ВозвращаетInvalidData()
   {
-    byte[] packed = CreatePackedForTest();
-    const string fileName = "gost-magma-single-coder.bin";
+    byte[] plain = CreatePlainForTest();
+    using SevenZipPassword correct = SevenZipPassword.FromString("ab");
 
+    byte[] archive = Build7zArchive_SingleFile_GostMagmaSingleCoder(plain, "gost-magma.bin", correct);
+
+    using SevenZipPassword wrong = SevenZipPassword.FromString("wrong");
+
+    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeSingleFileToArray(
+        archiveBytes: archive,
+        options: SevenZipDecodeOptions.WithPassword(wrong),
+        fileBytes: out byte[] fileBytes,
+        fileName: out _,
+        bytesConsumed: out _);
+
+    // Неверный ключ даёт мусор, который не сходится с folder-CRC.
+    Assert.Equal(SevenZipArchiveDecodeResult.InvalidData, result);
+    Assert.Empty(fileBytes);
+  }
+
+  [Fact]
+  public void DecodeToEntries_GostMagmaSingleCoder_СПаролем_ВозвращаетФайл()
+  {
+    byte[] plain = CreatePlainForTest();
     using SevenZipPassword password = SevenZipPassword.FromString("ab");
 
-    byte[] archive = Build7zArchive_SingleFile_GostMagmaSingleCoder(
-        packedBytes: packed,
-        fileName: fileName);
+    byte[] archive = Build7zArchive_SingleFile_GostMagmaSingleCoder(plain, "gost-magma.bin", password);
 
-    string root = CreateTempRoot();
+    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeToEntries(
+        archive: archive,
+        options: SevenZipDecodeOptions.WithPassword(password),
+        entries: out SevenZipDecodedEntry[] entries,
+        bytesConsumed: out _);
 
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, result);
+    SevenZipDecodedEntry entry = Assert.Single(entries);
+    Assert.Equal(plain, entry.Bytes);
+  }
+
+  [Fact]
+  public void ExtractToDirectory_GostMagmaSingleCoder_СПаролем_ПишетФайл()
+  {
+    byte[] plain = CreatePlainForTest();
+    const string fileName = "gost-magma.bin";
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    byte[] archive = Build7zArchive_SingleFile_GostMagmaSingleCoder(plain, fileName, password);
+
+    string root = Path.Combine(Path.GetTempPath(), "LzmaSharpTests", "GostMagma", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
     try
     {
       SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.ExtractToDirectory(
@@ -74,211 +109,73 @@ public sealed class SevenZipArchiveDecoderGostMagmaSingleCoderTests
           options: SevenZipDecodeOptions.WithPassword(password),
           destinationDirectory: root,
           overwrite: false,
-          bytesConsumed: out int bytesConsumed);
+          bytesConsumed: out _);
 
-      Assert.Equal(SevenZipArchiveDecodeResult.NotSupported, result);
-      Assert.Equal(archive.Length, bytesConsumed);
-      AssertDestinationIsEmptyOrMissing(root, fileName);
+      Assert.Equal(SevenZipArchiveDecodeResult.Ok, result);
+      Assert.Equal(plain, File.ReadAllBytes(Path.Combine(root, fileName)));
     }
     finally
     {
-      TryDeleteTree(root);
+      try { Directory.Delete(root, recursive: true); } catch { /* best-effort */ }
     }
   }
 
-  [Fact]
-  public void ExtractToDirectory_GostMagmaSingleCoder_БезПароля_ВозвращаетNotSupportedИНичегоНеПишет()
+  private static byte[] CreatePlainForTest()
   {
-    byte[] packed = CreatePackedForTest();
-    const string fileName = "gost-magma-single-coder.bin";
+    var plain = new byte[200]; // не кратно блоку Магмы (8) — проверяем хвост CTR
+    for (int i = 0; i < plain.Length; i++)
+      plain[i] = unchecked((byte)(i * 29 + 11));
 
-    byte[] archive = Build7zArchive_SingleFile_GostMagmaSingleCoder(
-        packedBytes: packed,
-        fileName: fileName);
-
-    string root = CreateTempRoot();
-
-    try
-    {
-      SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.ExtractToDirectory(
-          archive: archive,
-          options: SevenZipDecodeOptions.Default,
-          destinationDirectory: root,
-          overwrite: false,
-          bytesConsumed: out int bytesConsumed);
-
-      Assert.Equal(SevenZipArchiveDecodeResult.NotSupported, result);
-      Assert.Equal(archive.Length, bytesConsumed);
-      AssertDestinationIsEmptyOrMissing(root, fileName);
-    }
-    finally
-    {
-      TryDeleteTree(root);
-    }
+    return plain;
   }
 
-  [Fact]
-  public void DecodeToArray_GostMagmaSingleCoder_СПаролем_ВозвращаетNotSupported()
+  private static byte[] EncryptMagmaDirectKeyForTest(
+      byte[] propertiesBytes,
+      SevenZipPassword password,
+      byte[] plain)
   {
-    byte[] packed = CreatePackedForTest();
+    Assert.True(SevenZipGostCoder.TryParseProperties(propertiesBytes, out SevenZipGostProperties? properties));
 
-    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+    Span<byte> key = stackalloc byte[SevenZipGostKeyDerivation.Gost256KeySize];
+    Assert.True(SevenZipGostKeyDerivation.TryDeriveDirectKey(properties!, password, key));
+    Assert.True(SevenZipGostInitializationVector.TryBuildMagmaCtr(properties!, out byte[] iv));
+    Assert.True(GostMagmaCtrTransform.TryTransform(key, iv, plain, out byte[] encrypted));
 
-    byte[] archive = Build7zArchive_SingleFile_GostMagmaSingleCoder(
-        packedBytes: packed,
-        fileName: "gost-magma-single-coder.bin");
-
-    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeToArray(
-        archive: archive,
-        options: SevenZipDecodeOptions.WithPassword(password),
-        files: out SevenZipDecodedFile[] files,
-        bytesConsumed: out int bytesConsumed);
-
-    Assert.Equal(SevenZipArchiveDecodeResult.NotSupported, result);
-    Assert.Equal(archive.Length, bytesConsumed);
-    Assert.Empty(files);
-  }
-
-  [Fact]
-  public void DecodeToArray_GostMagmaSingleCoder_БезПароля_ВозвращаетNotSupported()
-  {
-    byte[] packed = CreatePackedForTest();
-
-    byte[] archive = Build7zArchive_SingleFile_GostMagmaSingleCoder(
-        packedBytes: packed,
-        fileName: "gost-magma-single-coder.bin");
-
-    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeToArray(
-        archive: archive,
-        options: SevenZipDecodeOptions.Default,
-        files: out SevenZipDecodedFile[] files,
-        bytesConsumed: out int bytesConsumed);
-
-    Assert.Equal(SevenZipArchiveDecodeResult.NotSupported, result);
-    Assert.Equal(archive.Length, bytesConsumed);
-    Assert.Empty(files);
-  }
-
-  [Fact]
-  public void DecodeToEntries_GostMagmaSingleCoder_СПаролем_ВозвращаетNotSupported()
-  {
-    byte[] packed = CreatePackedForTest();
-
-    using SevenZipPassword password = SevenZipPassword.FromString("ab");
-
-    byte[] archive = Build7zArchive_SingleFile_GostMagmaSingleCoder(
-        packedBytes: packed,
-        fileName: "gost-magma-single-coder.bin");
-
-    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeToEntries(
-        archive: archive,
-        options: SevenZipDecodeOptions.WithPassword(password),
-        entries: out SevenZipDecodedEntry[] entries,
-        bytesConsumed: out int bytesConsumed);
-
-    Assert.Equal(SevenZipArchiveDecodeResult.NotSupported, result);
-    Assert.Equal(archive.Length, bytesConsumed);
-    Assert.Empty(entries);
-  }
-
-  [Fact]
-  public void DecodeToEntries_GostMagmaSingleCoder_БезПароля_ВозвращаетNotSupported()
-  {
-    byte[] packed = CreatePackedForTest();
-
-    byte[] archive = Build7zArchive_SingleFile_GostMagmaSingleCoder(
-        packedBytes: packed,
-        fileName: "gost-magma-single-coder.bin");
-
-    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeToEntries(
-        archive: archive,
-        options: SevenZipDecodeOptions.Default,
-        entries: out SevenZipDecodedEntry[] entries,
-        bytesConsumed: out int bytesConsumed);
-
-    Assert.Equal(SevenZipArchiveDecodeResult.NotSupported, result);
-    Assert.Equal(archive.Length, bytesConsumed);
-    Assert.Empty(entries);
-  }
-
-  private static string CreateTempRoot()
-  {
-    return Path.Combine(
-        Path.GetTempPath(),
-        "LzmaSharpTests",
-        nameof(SevenZipArchiveDecoderGostMagmaSingleCoderTests),
-        Guid.NewGuid().ToString("N"));
-  }
-
-  private static void AssertDestinationIsEmptyOrMissing(
-      string root,
-      string fileName)
-  {
-    Assert.False(File.Exists(Path.Combine(root, fileName)));
-
-    if (Directory.Exists(root))
-      Assert.Empty(Directory.GetFileSystemEntries(root));
-  }
-
-  private static void TryDeleteTree(string path)
-  {
-    try
-    {
-      if (Directory.Exists(path))
-      {
-        Directory.Delete(path, recursive: true);
-      }
-    }
-    catch
-    {
-      // Best-effort cleanup для тестового каталога.
-    }
-  }
-
-  private static byte[] CreatePackedForTest()
-  {
-    var packed = new byte[32];
-
-    for (int i = 0; i < packed.Length; i++)
-      packed[i] = unchecked((byte)(i * 13 + 5));
-
-    return packed;
+    return encrypted;
   }
 
   private static byte[] Build7zArchive_SingleFile_GostMagmaSingleCoder(
-      ReadOnlySpan<byte> packedBytes,
-      string fileName)
+      byte[] plain,
+      string fileName,
+      SevenZipPassword password)
   {
-    byte[] packedBytesArray = packedBytes.ToArray();
-
     byte[] salt = [0xA1, 0xA2];
     byte[] iv = [0x12, 0x34, 0x56, 0x78];
     byte[] gostProperties = CreateGostDirectProperties(salt, iv);
 
+    byte[] encrypted = EncryptMagmaDirectKeyForTest(gostProperties, password, plain);
+
     byte[] nextHeader = BuildHeaderSingleFolderGostMagmaSingleCoder(
-        packSize: (ulong)packedBytesArray.Length,
+        packSize: (ulong)encrypted.Length,
         gostProperties: gostProperties,
-        unpackSize: (ulong)packedBytesArray.Length,
-        fileName: fileName);
+        unpackSize: (ulong)plain.Length,
+        fileName: fileName,
+        folderCrc: Crc32.Compute(plain));
 
     uint nextHeaderCrc = Crc32.Compute(nextHeader);
 
     var signatureHeader = new SevenZipSignatureHeader(
-        NextHeaderOffset: (ulong)packedBytesArray.Length,
+        NextHeaderOffset: (ulong)encrypted.Length,
         NextHeaderSize: (ulong)nextHeader.Length,
         NextHeaderCrc: nextHeaderCrc);
 
     byte[] signatureHeaderBytes = new byte[SevenZipSignatureHeader.TotalSize];
     signatureHeader.Write(signatureHeaderBytes);
 
-    byte[] archive = new byte[
-        signatureHeaderBytes.Length +
-        packedBytesArray.Length +
-        nextHeader.Length];
-
+    byte[] archive = new byte[signatureHeaderBytes.Length + encrypted.Length + nextHeader.Length];
     signatureHeaderBytes.CopyTo(archive.AsSpan(0));
-    packedBytesArray.CopyTo(archive.AsSpan(signatureHeaderBytes.Length));
-    nextHeader.CopyTo(archive.AsSpan(signatureHeaderBytes.Length + packedBytesArray.Length));
+    encrypted.CopyTo(archive.AsSpan(signatureHeaderBytes.Length));
+    nextHeader.CopyTo(archive.AsSpan(signatureHeaderBytes.Length + encrypted.Length));
 
     return archive;
   }
@@ -287,18 +184,13 @@ public sealed class SevenZipArchiveDecoderGostMagmaSingleCoderTests
       ulong packSize,
       byte[] gostProperties,
       ulong unpackSize,
-      string fileName)
+      string fileName,
+      uint folderCrc)
   {
     var header = new List<byte>(256);
 
     WriteNid(header, SevenZipNid.Header);
-
-    WriteStreamsInfo(
-        header,
-        packSize: packSize,
-        gostProperties: gostProperties,
-        unpackSize: unpackSize);
-
+    WriteStreamsInfo(header, packSize, gostProperties, unpackSize, folderCrc);
     WriteFilesInfo(header, fileName);
     WriteNid(header, SevenZipNid.End);
 
@@ -309,63 +201,49 @@ public sealed class SevenZipArchiveDecoderGostMagmaSingleCoderTests
       List<byte> output,
       ulong packSize,
       byte[] gostProperties,
-      ulong unpackSize)
+      ulong unpackSize,
+      uint folderCrc)
   {
     WriteNid(output, SevenZipNid.MainStreamsInfo);
     WritePackInfo(output, packSize);
-
-    WriteUnpackInfo(
-        output,
-        gostProperties: gostProperties,
-        unpackSize: unpackSize);
-
-    WriteSubStreamsInfoEmpty(output);
+    WriteUnpackInfo(output, gostProperties, unpackSize, folderCrc);
     WriteNid(output, SevenZipNid.End);
   }
 
-  private static void WritePackInfo(
-      List<byte> output,
-      ulong packSize)
+  private static void WritePackInfo(List<byte> output, ulong packSize)
   {
     WriteNid(output, SevenZipNid.PackInfo);
-
-    // Данные файла начинаются сразу после SignatureHeader.
     WriteEncodedUInt64(output, 0);
-
-    // Один packed stream.
     WriteEncodedUInt64(output, 1);
-
     WriteNid(output, SevenZipNid.Size);
     WriteEncodedUInt64(output, packSize);
-
     WriteNid(output, SevenZipNid.End);
   }
 
   private static void WriteUnpackInfo(
       List<byte> output,
       byte[] gostProperties,
-      ulong unpackSize)
+      ulong unpackSize,
+      uint folderCrc)
   {
     WriteNid(output, SevenZipNid.UnpackInfo);
     WriteNid(output, SevenZipNid.Folder);
-
-    // Один folder.
     WriteEncodedUInt64(output, 1);
-
-    // Folder описан прямо в header, не external.
     WriteByte(output, 0);
-
     WriteFolderGostMagmaSingleCoder(output, gostProperties);
 
     WriteNid(output, SevenZipNid.CodersUnpackSize);
     WriteEncodedUInt64(output, unpackSize);
 
+    // CRC распакованного folder-а: AllAreDefined=1, затем один digest.
+    WriteNid(output, SevenZipNid.Crc);
+    WriteByte(output, 0x01);
+    WriteUInt32LittleEndian(output, folderCrc);
+
     WriteNid(output, SevenZipNid.End);
   }
 
-  private static void WriteFolderGostMagmaSingleCoder(
-      List<byte> output,
-      byte[] gostProperties)
+  private static void WriteFolderGostMagmaSingleCoder(List<byte> output, byte[] gostProperties)
   {
     var gostCoder = new SevenZipCoderInfo(
         methodId: SevenZipGostCoder.MagmaMethodId.ToArray(),
@@ -375,32 +253,15 @@ public sealed class SevenZipArchiveDecoderGostMagmaSingleCoderTests
 
     WriteEncodedUInt64(output, 1);
     WriteCoderInfo(output, gostCoder);
-
-    // BindPairs не пишем: одиночный coder не имеет внутренних связей.
-    // PackedStreamIndices тоже не пишем: при одном packed stream parser
-    // вычисляет единственный входной stream сам.
   }
 
-  private static void WriteSubStreamsInfoEmpty(List<byte> output)
-  {
-    WriteNid(output, SevenZipNid.SubStreamsInfo);
-    WriteNid(output, SevenZipNid.End);
-  }
-
-  private static void WriteFilesInfo(
-      List<byte> output,
-      string fileName)
+  private static void WriteFilesInfo(List<byte> output, string fileName)
   {
     WriteNid(output, SevenZipNid.FilesInfo);
-
-    // Один файл.
     WriteEncodedUInt64(output, 1);
-
     WriteNid(output, SevenZipNid.Name);
 
     byte[] nameBytes = Encoding.Unicode.GetBytes(fileName + "\0");
-
-    // В property payload первым байтом идёт external-флаг.
     WriteEncodedUInt64(output, (ulong)(1 + nameBytes.Length));
     WriteByte(output, 0);
     output.AddRange(nameBytes);
@@ -408,34 +269,23 @@ public sealed class SevenZipArchiveDecoderGostMagmaSingleCoderTests
     WriteNid(output, SevenZipNid.End);
   }
 
-  private static byte[] CreateGostDirectProperties(
-      byte[] salt,
-      byte[] iv)
+  private static byte[] CreateGostDirectProperties(byte[] salt, byte[] iv)
   {
-    Assert.InRange(salt.Length, 0, byte.MaxValue);
-    Assert.InRange(iv.Length, 0, byte.MaxValue);
-
     var properties = new byte[5 + salt.Length + iv.Length];
-
     properties[0] = SevenZipGostCoder.CurrentPropertiesVersion;
     properties[1] = 0x00;
     properties[2] = SevenZipGostCoder.DirectKeyNumCyclesPower;
     properties[3] = (byte)salt.Length;
     properties[4] = (byte)iv.Length;
-
     salt.CopyTo(properties.AsSpan(5));
     iv.CopyTo(properties.AsSpan(5 + salt.Length));
 
     return properties;
   }
 
-  private static void WriteCoderInfo(
-      List<byte> output,
-      SevenZipCoderInfo coder)
+  private static void WriteCoderInfo(List<byte> output, SevenZipCoderInfo coder)
   {
     int methodIdSize = coder.MethodId.Length;
-    Assert.InRange(methodIdSize, 1, 15);
-
     bool isComplexCoder = coder.NumInStreams != 1 || coder.NumOutStreams != 1;
     bool hasProperties = coder.Properties.Length != 0;
 
@@ -460,28 +310,22 @@ public sealed class SevenZipArchiveDecoderGostMagmaSingleCoderTests
     }
   }
 
-  private static void WriteNid(
-      List<byte> output,
-      byte nid) => output.Add(nid);
+  private static void WriteNid(List<byte> output, byte nid) => output.Add(nid);
 
-  private static void WriteByte(
-      List<byte> output,
-      byte value) => output.Add(value);
+  private static void WriteByte(List<byte> output, byte value) => output.Add(value);
 
-  private static void WriteEncodedUInt64(
-      List<byte> output,
-      ulong value)
+  private static void WriteUInt32LittleEndian(List<byte> output, uint value)
+  {
+    output.Add((byte)value);
+    output.Add((byte)(value >> 8));
+    output.Add((byte)(value >> 16));
+    output.Add((byte)(value >> 24));
+  }
+
+  private static void WriteEncodedUInt64(List<byte> output, ulong value)
   {
     Span<byte> buffer = stackalloc byte[9];
-
-    SevenZipEncodedUInt64.WriteResult result = SevenZipEncodedUInt64.TryWrite(
-        value,
-        buffer,
-        out int bytesWritten);
-
-    Assert.Equal(SevenZipEncodedUInt64.WriteResult.Ok, result);
-    Assert.True(bytesWritten > 0);
-
+    SevenZipEncodedUInt64.TryWrite(value, buffer, out int bytesWritten);
     output.AddRange(buffer[..bytesWritten].ToArray());
   }
 }

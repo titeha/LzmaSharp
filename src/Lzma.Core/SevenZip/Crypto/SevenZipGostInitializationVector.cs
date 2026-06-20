@@ -65,4 +65,30 @@ public static class SevenZipGostInitializationVector
 
     return true;
   }
+
+  /// <summary>
+  /// Размер вектора инициализации в байтах для сценария Магма + CTR (половина 64-битного блока).
+  /// </summary>
+  public const int MagmaCtrInitializationVectorSize = 4;
+
+  /// <summary>
+  /// Пытается построить вектор инициализации для сценария Магма + CTR.
+  /// </summary>
+  public static bool TryBuildMagmaCtr(
+      SevenZipGostProperties properties,
+      out byte[] initializationVector)
+  {
+    ArgumentNullException.ThrowIfNull(properties);
+
+    initializationVector = new byte[MagmaCtrInitializationVectorSize];
+
+    if (properties.InitializationVector.Length != MagmaCtrInitializationVectorSize)
+    {
+      initializationVector = [];
+      return false;
+    }
+
+    properties.InitializationVector.CopyTo(initializationVector);
+    return true;
+  }
 }
