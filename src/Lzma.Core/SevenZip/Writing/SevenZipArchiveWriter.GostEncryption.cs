@@ -60,21 +60,14 @@ public static partial class SevenZipArchiveWriter
     if (AllEntriesHaveNoContent(entries))
       return BuildEmptyEntriesArchive(entries, out archive);
 
-    // Несколько непустых файлов потребовали бы свой IV на поток — пока не поддержано.
-    if (CountNonEmptyFiles(entries) > 1)
-      return SevenZipArchiveWriteResult.NotSupported;
-
-    var properties = new SevenZipGostProperties(
+    // Формирование ключа не зависит от IV (использует соль/пароль/numCyclesPower),
+    // поэтому ключ выводим один раз; уникальность IV обеспечиваем на каждый поток.
+    var keyProperties = new SevenZipGostProperties(
         version: SevenZipGostCoder.CurrentPropertiesVersion,
         flags: 0,
         numCyclesPower: options.NumCyclesPower,
         salt: options.Salt,
         initializationVector: options.InitializationVector);
-
-    if (!SevenZipGostCoder.TrySerializeProperties(properties, out byte[] propertyBytes))
-      return SevenZipArchiveWriteResult.InvalidData;
-
-    byte[] coderBytes = BuildGostCoderBytes(methodId, propertyBytes);
 
     byte[] key = new byte[SevenZipGostKeyDerivation.Gost256KeySize];
     bool directKey = options.NumCyclesPower == SevenZipGostCoder.DirectKeyNumCyclesPower;
@@ -82,46 +75,239 @@ public static partial class SevenZipArchiveWriter
     try
     {
       bool derived = directKey
-          ? SevenZipGostKeyDerivation.TryDeriveDirectKey(properties, options.Password, key)
-          : SevenZipGostKeyDerivation.TryDeriveStribogKey(properties, options.Password, key);
+          ? SevenZipGostKeyDerivation.TryDeriveDirectKey(keyProperties, options.Password, key)
+          : SevenZipGostKeyDerivation.TryDeriveStribogKey(keyProperties, options.Password, key);
 
       if (!derived)
         return SevenZipArchiveWriteResult.InvalidData;
 
       if (options.CompressWithLzma2)
-        return BuildGostLzma2EntriesArchive(entries, methodId, properties, coderBytes, key, out archive);
-
-      bool encryptFailed = false;
-
-      byte[] Encrypt(byte[] content)
       {
-        SevenZipGostEncryptResult result = SevenZipGostPackedStreamEncryptor.TryEncrypt(
-            methodId, properties, key, content, out byte[] ciphertext);
+        // Цепочка LZMA2 → ГОСТ пока только для одного непустого файла.
+        if (CountNonEmptyFiles(entries) > 1)
+          return SevenZipArchiveWriteResult.NotSupported;
 
-        if (result != SevenZipGostEncryptResult.Ok)
-        {
-          encryptFailed = true;
-          return [];
-        }
+        if (!SevenZipGostCoder.TrySerializeProperties(keyProperties, out byte[] lzma2GostPropertyBytes))
+          return SevenZipArchiveWriteResult.InvalidData;
 
-        return ciphertext;
+        byte[] lzma2GostCoderBytes = BuildGostCoderBytes(methodId, lzma2GostPropertyBytes);
+
+        return BuildGostLzma2EntriesArchive(
+            entries, methodId, keyProperties, lzma2GostCoderBytes, key, out archive);
       }
 
-      SevenZipArchiveWriteResult writeResult = BuildCompressedEntriesArchive(
-          entries, Encrypt, coderBytes, out archive);
-
-      if (encryptFailed)
-      {
-        archive = [];
-        return SevenZipArchiveWriteResult.InternalError;
-      }
-
-      return writeResult;
+      return BuildGostMultiFileArchive(
+          entries,
+          methodId,
+          numCyclesPower: options.NumCyclesPower,
+          salt: options.Salt,
+          baseInitializationVector: options.InitializationVector,
+          key,
+          out archive);
     }
     finally
     {
       CryptographicOperations.ZeroMemory(key);
     }
+  }
+
+  /// <summary>
+  /// Строит архив, шифруя каждый непустой файл отдельным folder-ом с собственным ГОСТ-coder-ом.
+  /// Ключ общий, а IV у каждого потока свой (база + индекс потока), что безопасно для CTR.
+  /// </summary>
+  /// <remarks>
+  /// Замечание про Магму: при IV в 4 байта блок-счётчик занимает только младшие 4 байта,
+  /// поэтому пространства гаммы соседних потоков (IV и IV+1) расходятся лишь на 2^32 блока
+  /// (≈32 ГБ). Для одного файла больше этого размера потоки могли бы пересечься — на практике
+  /// нереалистично, но это ограничение текущей схемы.
+  /// </remarks>
+  private static SevenZipArchiveWriteResult BuildGostMultiFileArchive(
+      IReadOnlyList<SevenZipArchiveWriterEntry> entries,
+      byte[] methodId,
+      byte numCyclesPower,
+      byte[] salt,
+      byte[] baseInitializationVector,
+      ReadOnlySpan<byte> key,
+      out byte[] archive)
+  {
+    archive = [];
+
+    int count = CountNonEmptyFiles(entries);
+    var packSizes = new int[count];
+    var unpackSizes = new int[count];
+    var unpackCrcs = new uint[count];
+    var coderBytesPerFolder = new byte[count][];
+    var encryptedStreams = new List<byte[]>(count);
+
+    long totalLength = 0;
+    int streamIndex = 0;
+
+    for (int i = 0; i < entries.Count; i++)
+    {
+      SevenZipArchiveWriterEntry entry = entries[i];
+
+      if (!IsNonEmptyFile(entry))
+        continue;
+
+      if (!TryDeriveStreamInitializationVector(baseInitializationVector, streamIndex, out byte[] iv))
+        return SevenZipArchiveWriteResult.NotSupported;
+
+      var properties = new SevenZipGostProperties(
+          version: SevenZipGostCoder.CurrentPropertiesVersion,
+          flags: 0,
+          numCyclesPower: numCyclesPower,
+          salt: salt,
+          initializationVector: iv);
+
+      if (!SevenZipGostCoder.TrySerializeProperties(properties, out byte[] propertyBytes))
+        return SevenZipArchiveWriteResult.InternalError;
+
+      coderBytesPerFolder[streamIndex] = BuildGostCoderBytes(methodId, propertyBytes);
+
+      SevenZipGostEncryptResult encryptResult = SevenZipGostPackedStreamEncryptor.TryEncrypt(
+          methodId, properties, key, entry.Content, out byte[] ciphertext);
+
+      if (encryptResult != SevenZipGostEncryptResult.Ok)
+        return SevenZipArchiveWriteResult.InternalError;
+
+      encryptedStreams.Add(ciphertext);
+      packSizes[streamIndex] = ciphertext.Length;
+      unpackSizes[streamIndex] = entry.Content.Length;
+      unpackCrcs[streamIndex] = Crc32.Compute(entry.Content);
+
+      totalLength += ciphertext.Length;
+      if (totalLength > int.MaxValue)
+        return SevenZipArchiveWriteResult.InternalError;
+
+      streamIndex++;
+    }
+
+    byte[] packedData = new byte[(int)totalLength];
+    int outputOffset = 0;
+    for (int i = 0; i < encryptedStreams.Count; i++)
+    {
+      encryptedStreams[i].CopyTo(packedData.AsSpan(outputOffset));
+      outputOffset += encryptedStreams[i].Length;
+    }
+
+    if (!TryBuildGostMultiFileNextHeader(
+        entries, packSizes, unpackSizes, unpackCrcs, coderBytesPerFolder, out byte[] nextHeaderBytes))
+      return SevenZipArchiveWriteResult.InternalError;
+
+    archive = BuildArchiveWithPackedData(packedData, nextHeaderBytes);
+
+    return SevenZipArchiveWriteResult.Ok;
+  }
+
+  /// <summary>Строит next header для multi-file ГОСТ-сценария (по folder-у на файл).</summary>
+  private static bool TryBuildGostMultiFileNextHeader(
+      IReadOnlyList<SevenZipArchiveWriterEntry> entries,
+      int[] packSizes,
+      int[] unpackSizes,
+      uint[] unpackCrcs,
+      byte[][] coderBytesPerFolder,
+      out byte[] nextHeaderBytes)
+  {
+    nextHeaderBytes = [];
+
+    List<byte> header = new(256)
+    {
+        SevenZipNid.Header,
+        SevenZipNid.MainStreamsInfo,
+    };
+
+    if (!TryWriteCompressedStreamsPackInfo(header, packSizes))
+      return false;
+
+    if (!TryWriteGostMultiFolderUnpackInfo(header, unpackSizes, unpackCrcs, coderBytesPerFolder))
+      return false;
+
+    header.Add(SevenZipNid.End);
+
+    if (AllEntriesAreNonEmptyFiles(entries))
+    {
+      if (!TryWriteAllNonEmptyCopyEntriesFilesInfo(header, entries))
+        return false;
+    }
+    else if (!TryWriteMixedCopyEntriesFilesInfo(header, entries))
+      return false;
+
+    header.Add(SevenZipNid.End);
+
+    nextHeaderBytes = [.. header];
+
+    return true;
+  }
+
+  /// <summary>Пишет UnpackInfo, где у каждого folder-а собственный ГОСТ-coder (свой IV).</summary>
+  private static bool TryWriteGostMultiFolderUnpackInfo(
+      List<byte> header,
+      int[] unpackSizes,
+      uint[] unpackCrcs,
+      byte[][] coderBytesPerFolder)
+  {
+    header.Add(SevenZipNid.UnpackInfo);
+
+    header.Add(SevenZipNid.Folder);
+
+    if (!TryWriteUInt64(header, (ulong)unpackSizes.Length))
+      return false;
+
+    header.Add(0x00);
+
+    for (int i = 0; i < unpackSizes.Length; i++)
+    {
+      if (!TryWriteUInt64(header, 1)) // один coder на folder
+        return false;
+
+      header.AddRange(coderBytesPerFolder[i]);
+    }
+
+    header.Add(SevenZipNid.CodersUnpackSize);
+
+    for (int i = 0; i < unpackSizes.Length; i++)
+    {
+      if (!TryWriteUInt64(header, (ulong)unpackSizes[i]))
+        return false;
+    }
+
+    header.Add(SevenZipNid.Crc);
+    WriteAllDefinedCrcDigests(header, unpackCrcs);
+
+    header.Add(SevenZipNid.End);
+
+    return true;
+  }
+
+  /// <summary>
+  /// Строит IV потока как (база + индекс) в big-endian. Возвращает <see langword="false"/>,
+  /// если сложение выходит за разрядность поля IV (на практике недостижимо).
+  /// </summary>
+  private static bool TryDeriveStreamInitializationVector(
+      byte[] baseInitializationVector,
+      int streamIndex,
+      out byte[] initializationVector)
+  {
+    initializationVector = (byte[])baseInitializationVector.Clone();
+
+    ulong addend = (ulong)streamIndex;
+    int position = initializationVector.Length - 1;
+
+    while (addend != 0)
+    {
+      if (position < 0)
+      {
+        initializationVector = [];
+        return false;
+      }
+
+      ulong sum = (ulong)initializationVector[position] + (addend & 0xFF);
+      initializationVector[position] = (byte)(sum & 0xFF);
+      addend = (addend >> 8) + (sum >> 8);
+      position--;
+    }
+
+    return true;
   }
 
   /// <summary>

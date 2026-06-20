@@ -151,16 +151,91 @@ public sealed class SevenZipArchiveWriterGostEncryptionTests
   }
 
   [Fact]
-  public void BuildGostEncryptedArchive_НесколькоНепустыхФайлов_ВозвращаетNotSupported()
+  public void BuildGostEncryptedArchive_НесколькоФайлов_КузнечикDirectKey_RoundTrip()
+  {
+    byte[] a = Encoding.UTF8.GetBytes("first file contents");
+    byte[] b = Encoding.UTF8.GetBytes("second file — другое содержимое");
+    byte[] c = Encoding.UTF8.GetBytes("third");
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildGostEncryptedArchive(
+        [
+          new SevenZipArchiveWriterEntry("a.txt", a),
+          new SevenZipArchiveWriterEntry("b.txt", b),
+          new SevenZipArchiveWriterEntry("c.txt", c),
+        ],
+        MagmaStribogKdf(password),
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
+
+    SevenZipArchiveDecodeResult decodeResult = SevenZipArchiveDecoder.DecodeToArray(
+        archive: archive,
+        options: SevenZipDecodeOptions.WithPassword(password),
+        files: out SevenZipDecodedFile[] files,
+        bytesConsumed: out _);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, decodeResult);
+    Assert.Equal(3, files.Length);
+
+    Dictionary<string, byte[]> byName = files.ToDictionary(f => f.Name, f => f.Bytes);
+    Assert.Equal(a, byName["a.txt"]);
+    Assert.Equal(b, byName["b.txt"]);
+    Assert.Equal(c, byName["c.txt"]);
+  }
+
+  [Fact]
+  public void BuildGostEncryptedArchive_НесколькоФайловСОдинаковымСодержимым_ШифртекстРазный()
+  {
+    // Одинаковый открытый текст в двух файлах: при своём IV на поток шифртекст должен
+    // отличаться (иначе была бы катастрофическая повторная гамма CTR).
+    byte[] same = Encoding.UTF8.GetBytes("IDENTICAL CONTENT IN BOTH FILES, MUST ENCRYPT DIFFERENTLY");
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildGostEncryptedArchive(
+        [
+          new SevenZipArchiveWriterEntry("a.txt", same),
+          new SevenZipArchiveWriterEntry("b.txt", same),
+        ],
+        KuznyechikDirectKey(password),
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
+
+    // Два зашифрованных потока идут подряд после сигнатурного заголовка.
+    // Их длины равны длине открытого текста (CTR), сравним два соседних блока.
+    int start = SevenZipSignatureHeader.TotalSize;
+    byte[] stream0 = archive.AsSpan(start, same.Length).ToArray();
+    byte[] stream1 = archive.AsSpan(start + same.Length, same.Length).ToArray();
+    Assert.NotEqual(stream0, stream1);
+
+    // И при этом оба корректно расшифровываются обратно.
+    SevenZipArchiveDecodeResult decodeResult = SevenZipArchiveDecoder.DecodeToArray(
+        archive: archive,
+        options: SevenZipDecodeOptions.WithPassword(password),
+        files: out SevenZipDecodedFile[] files,
+        bytesConsumed: out _);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, decodeResult);
+    Assert.Equal(2, files.Length);
+    Assert.All(files, f => Assert.Equal(same, f.Bytes));
+  }
+
+  [Fact]
+  public void BuildGostEncryptedArchive_НесколькоФайловСLzma2_ПокаВозвращаетNotSupported()
   {
     using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    var options = KuznyechikDirectKey(password) with { CompressWithLzma2 = true };
 
     SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildGostEncryptedArchive(
         [
           new SevenZipArchiveWriterEntry("a.txt", Encoding.UTF8.GetBytes("first")),
           new SevenZipArchiveWriterEntry("b.txt", Encoding.UTF8.GetBytes("second")),
         ],
-        KuznyechikDirectKey(password),
+        options,
         out byte[] archive);
 
     Assert.Equal(SevenZipArchiveWriteResult.NotSupported, writeResult);
