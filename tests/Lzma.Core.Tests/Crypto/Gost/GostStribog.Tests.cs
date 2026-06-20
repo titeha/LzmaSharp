@@ -57,4 +57,5 @@ public sealed class GostStribogTests
     byte[] hash = GostStribog.Hash512([]);
     Assert.Equal(64, hash.Length);
   }
+
 }
