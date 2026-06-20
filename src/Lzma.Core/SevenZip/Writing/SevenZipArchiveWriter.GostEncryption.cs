@@ -6,20 +6,15 @@ using Lzma.Core.Lzma2;
 
 namespace Lzma.Core.SevenZip;
 
-// Экспериментальный ГОСТ-writer: шифрует упакованный поток Кузнечиком или Магмой в режиме
-// CTR (один folder = один GOST coder). Контейнерная обвязка переиспользует общий сжатый
-// путь (SevenZipArchiveWriter.Compressed.cs): "encode" здесь — это шифрование, а не сжатие.
+// Экспериментальный ГОСТ-writer: шифрует каждый непустой файл отдельным folder-ом
+// Кузнечиком или Магмой в режиме CTR, опционально предварительно сжимая LZMA2.
+// Один folder = один файл; ключ общий, IV у каждого потока свой (база + индекс).
 public static partial class SevenZipArchiveWriter
 {
   /// <summary>
-  /// Строит 7z-архив, зашифрованный экспериментальным ГОСТ-кодером (без сжатия).
+  /// Строит 7z-архив, зашифрованный экспериментальным ГОСТ-кодером (опционально со сжатием
+  /// LZMA2). Каждый непустой файл шифруется отдельным folder-ом со своим IV.
   /// </summary>
-  /// <remarks>
-  /// Сейчас поддержан не более чем один непустой файл на архив: режим CTR требует
-  /// уникального IV на поток, а текущий контейнерный путь использует общие байты coder-а
-  /// (значит, общий IV) для всех folder-ов. Несколько непустых файлов вернут
-  /// <see cref="SevenZipArchiveWriteResult.NotSupported"/>.
-  /// </remarks>
   /// <param name="entries">Элементы архива.</param>
   /// <param name="options">Параметры ГОСТ-шифрования.</param>
   /// <param name="archive">Построенный архив при успешном результате.</param>
@@ -83,27 +78,13 @@ public static partial class SevenZipArchiveWriter
       if (!derived)
         return SevenZipArchiveWriteResult.InvalidData;
 
-      if (options.CompressWithLzma2)
-      {
-        // Цепочка LZMA2 → ГОСТ пока только для одного непустого файла.
-        if (CountNonEmptyFiles(entries) > 1)
-          return SevenZipArchiveWriteResult.NotSupported;
-
-        if (!SevenZipGostCoder.TrySerializeProperties(keyProperties, out byte[] lzma2GostPropertyBytes))
-          return SevenZipArchiveWriteResult.InvalidData;
-
-        byte[] lzma2GostCoderBytes = BuildGostCoderBytes(methodId, lzma2GostPropertyBytes);
-
-        return BuildGostLzma2EntriesArchive(
-            entries, methodId, keyProperties, lzma2GostCoderBytes, key, out archive);
-      }
-
-      return BuildGostMultiFileArchive(
+      return BuildGostFoldersArchive(
           entries,
           methodId,
           numCyclesPower: options.NumCyclesPower,
           salt: salt,
           baseInitializationVector: initializationVector,
+          compressWithLzma2: options.CompressWithLzma2,
           key,
           out archive);
     }
@@ -114,8 +95,9 @@ public static partial class SevenZipArchiveWriter
   }
 
   /// <summary>
-  /// Строит архив, шифруя каждый непустой файл отдельным folder-ом с собственным ГОСТ-coder-ом.
-  /// Ключ общий, а IV у каждого потока свой (база + индекс потока), что безопасно для CTR.
+  /// Строит архив, в котором каждый непустой файл — отдельный folder с собственным
+  /// ГОСТ-coder-ом (и, при сжатии, дополнительным LZMA2-coder-ом). Ключ общий, IV у каждого
+  /// потока свой (база + индекс потока), что безопасно для режима CTR.
   /// </summary>
   /// <remarks>
   /// Замечание про Магму: при IV в 4 байта блок-счётчик занимает только младшие 4 байта,
@@ -123,12 +105,13 @@ public static partial class SevenZipArchiveWriter
   /// (≈32 ГБ). Для одного файла больше этого размера потоки могли бы пересечься — на практике
   /// нереалистично, но это ограничение текущей схемы.
   /// </remarks>
-  private static SevenZipArchiveWriteResult BuildGostMultiFileArchive(
+  private static SevenZipArchiveWriteResult BuildGostFoldersArchive(
       IReadOnlyList<SevenZipArchiveWriterEntry> entries,
       byte[] methodId,
       byte numCyclesPower,
       byte[] salt,
       byte[] baseInitializationVector,
+      bool compressWithLzma2,
       ReadOnlySpan<byte> key,
       out byte[] archive)
   {
@@ -136,10 +119,21 @@ public static partial class SevenZipArchiveWriter
 
     int count = CountNonEmptyFiles(entries);
     var packSizes = new int[count];
-    var unpackSizes = new int[count];
-    var unpackCrcs = new uint[count];
-    var coderBytesPerFolder = new byte[count][];
-    var encryptedStreams = new List<byte[]>(count);
+    var finalCrcs = new uint[count];
+    var folderBodies = new byte[count][];
+    var coderUnpackSizes = new int[count][];
+    var packedStreams = new List<byte[]>(count);
+
+    byte lzma2PropertiesByte = 0;
+    LzmaProperties lzmaProperties = default;
+
+    if (compressWithLzma2)
+    {
+      if (!Lzma2Properties.TryEncode(Lzma2DictionarySize, out lzma2PropertiesByte))
+        return SevenZipArchiveWriteResult.InternalError;
+
+      lzmaProperties = new LzmaProperties(3, 0, 2);
+    }
 
     long totalLength = 0;
     int streamIndex = 0;
@@ -164,18 +158,33 @@ public static partial class SevenZipArchiveWriter
       if (!SevenZipGostCoder.TrySerializeProperties(properties, out byte[] propertyBytes))
         return SevenZipArchiveWriteResult.InternalError;
 
-      coderBytesPerFolder[streamIndex] = BuildGostCoderBytes(methodId, propertyBytes);
+      byte[] gostCoderBytes = BuildGostCoderBytes(methodId, propertyBytes);
+
+      byte[] toEncrypt;
+
+      if (compressWithLzma2)
+      {
+        byte[] lzma2Packed = Lzma2LzmaEncoder.Encode(entry.Content, lzmaProperties, Lzma2DictionarySize);
+        toEncrypt = lzma2Packed;
+        folderBodies[streamIndex] = BuildGostLzma2FolderBody(gostCoderBytes, lzma2PropertiesByte);
+        coderUnpackSizes[streamIndex] = [lzma2Packed.Length, entry.Content.Length];
+      }
+      else
+      {
+        toEncrypt = entry.Content;
+        folderBodies[streamIndex] = BuildGostSingleCoderFolderBody(gostCoderBytes);
+        coderUnpackSizes[streamIndex] = [entry.Content.Length];
+      }
 
       SevenZipGostEncryptResult encryptResult = SevenZipGostPackedStreamEncryptor.TryEncrypt(
-          methodId, properties, key, entry.Content, out byte[] ciphertext);
+          methodId, properties, key, toEncrypt, out byte[] ciphertext);
 
       if (encryptResult != SevenZipGostEncryptResult.Ok)
         return SevenZipArchiveWriteResult.InternalError;
 
-      encryptedStreams.Add(ciphertext);
+      packedStreams.Add(ciphertext);
       packSizes[streamIndex] = ciphertext.Length;
-      unpackSizes[streamIndex] = entry.Content.Length;
-      unpackCrcs[streamIndex] = Crc32.Compute(entry.Content);
+      finalCrcs[streamIndex] = Crc32.Compute(entry.Content);
 
       totalLength += ciphertext.Length;
       if (totalLength > int.MaxValue)
@@ -186,14 +195,14 @@ public static partial class SevenZipArchiveWriter
 
     byte[] packedData = new byte[(int)totalLength];
     int outputOffset = 0;
-    for (int i = 0; i < encryptedStreams.Count; i++)
+    for (int i = 0; i < packedStreams.Count; i++)
     {
-      encryptedStreams[i].CopyTo(packedData.AsSpan(outputOffset));
-      outputOffset += encryptedStreams[i].Length;
+      packedStreams[i].CopyTo(packedData.AsSpan(outputOffset));
+      outputOffset += packedStreams[i].Length;
     }
 
-    if (!TryBuildGostMultiFileNextHeader(
-        entries, packSizes, unpackSizes, unpackCrcs, coderBytesPerFolder, out byte[] nextHeaderBytes))
+    if (!TryBuildGostFoldersNextHeader(
+        entries, packSizes, folderBodies, coderUnpackSizes, finalCrcs, out byte[] nextHeaderBytes))
       return SevenZipArchiveWriteResult.InternalError;
 
     archive = BuildArchiveWithPackedData(packedData, nextHeaderBytes);
@@ -201,13 +210,13 @@ public static partial class SevenZipArchiveWriter
     return SevenZipArchiveWriteResult.Ok;
   }
 
-  /// <summary>Строит next header для multi-file ГОСТ-сценария (по folder-у на файл).</summary>
-  private static bool TryBuildGostMultiFileNextHeader(
+  /// <summary>Строит next header для ГОСТ-сценария: по folder-у на каждый непустой файл.</summary>
+  private static bool TryBuildGostFoldersNextHeader(
       IReadOnlyList<SevenZipArchiveWriterEntry> entries,
       int[] packSizes,
-      int[] unpackSizes,
-      uint[] unpackCrcs,
-      byte[][] coderBytesPerFolder,
+      byte[][] folderBodies,
+      int[][] coderUnpackSizes,
+      uint[] finalCrcs,
       out byte[] nextHeaderBytes)
   {
     nextHeaderBytes = [];
@@ -221,7 +230,7 @@ public static partial class SevenZipArchiveWriter
     if (!TryWriteCompressedStreamsPackInfo(header, packSizes))
       return false;
 
-    if (!TryWriteGostMultiFolderUnpackInfo(header, unpackSizes, unpackCrcs, coderBytesPerFolder))
+    if (!TryWriteGostFoldersUnpackInfo(header, folderBodies, coderUnpackSizes, finalCrcs))
       return false;
 
     header.Add(SevenZipNid.End);
@@ -241,44 +250,86 @@ public static partial class SevenZipArchiveWriter
     return true;
   }
 
-  /// <summary>Пишет UnpackInfo, где у каждого folder-а собственный ГОСТ-coder (свой IV).</summary>
-  private static bool TryWriteGostMultiFolderUnpackInfo(
+  /// <summary>
+  /// Пишет UnpackInfo, где у каждого folder-а собственное тело (один или два coder-а) и свои
+  /// размеры выходов coder-ов; CRC задаётся по одному на folder (для финального выхода).
+  /// </summary>
+  private static bool TryWriteGostFoldersUnpackInfo(
       List<byte> header,
-      int[] unpackSizes,
-      uint[] unpackCrcs,
-      byte[][] coderBytesPerFolder)
+      byte[][] folderBodies,
+      int[][] coderUnpackSizes,
+      uint[] finalCrcs)
   {
     header.Add(SevenZipNid.UnpackInfo);
 
     header.Add(SevenZipNid.Folder);
 
-    if (!TryWriteUInt64(header, (ulong)unpackSizes.Length))
+    if (!TryWriteUInt64(header, (ulong)folderBodies.Length))
       return false;
 
-    header.Add(0x00);
+    header.Add(0x00); // external = 0, folder-ы заданы по месту
 
-    for (int i = 0; i < unpackSizes.Length; i++)
-    {
-      if (!TryWriteUInt64(header, 1)) // один coder на folder
-        return false;
-
-      header.AddRange(coderBytesPerFolder[i]);
-    }
+    for (int i = 0; i < folderBodies.Length; i++)
+      header.AddRange(folderBodies[i]);
 
     header.Add(SevenZipNid.CodersUnpackSize);
 
-    for (int i = 0; i < unpackSizes.Length; i++)
+    for (int i = 0; i < coderUnpackSizes.Length; i++)
     {
-      if (!TryWriteUInt64(header, (ulong)unpackSizes[i]))
-        return false;
+      for (int j = 0; j < coderUnpackSizes[i].Length; j++)
+      {
+        if (!TryWriteUInt64(header, (ulong)coderUnpackSizes[i][j]))
+          return false;
+      }
     }
 
     header.Add(SevenZipNid.Crc);
-    WriteAllDefinedCrcDigests(header, unpackCrcs);
+    WriteAllDefinedCrcDigests(header, finalCrcs);
 
     header.Add(SevenZipNid.End);
 
     return true;
+  }
+
+  /// <summary>Строит тело folder-а из одного ГОСТ-coder-а (numCoders + сам coder).</summary>
+  private static byte[] BuildGostSingleCoderFolderBody(byte[] gostCoderBytes)
+  {
+    List<byte> body = new(1 + gostCoderBytes.Length);
+
+    TryWriteUInt64(body, 1); // один coder
+    body.AddRange(gostCoderBytes);
+
+    return [.. body];
+  }
+
+  /// <summary>
+  /// Строит тело folder-а из двух coder-ов: ГОСТ (coder 0) и LZMA2 (coder 1), связанных
+  /// bind pair-ом ГОСТ.out0 → LZMA2.in1. Порядок раскодирования: packed → ГОСТ
+  /// расшифровывает → LZMA2 распаковывает → финальный выход.
+  /// </summary>
+  private static byte[] BuildGostLzma2FolderBody(byte[] gostCoderBytes, byte lzma2PropertiesByte)
+  {
+    List<byte> body = new(8 + gostCoderBytes.Length);
+
+    TryWriteUInt64(body, 2); // два coder-а
+
+    // coder 0: ГОСТ.
+    body.AddRange(gostCoderBytes);
+
+    // coder 1: LZMA2 — flags 0x21 (idSize 1 | attributes 0x20), method id 0x21,
+    // размер properties = 1, properties = байт размера словаря.
+    body.Add(0x21);
+    body.Add(Lzma2MethodId);
+    body.Add(0x01);
+    body.Add(lzma2PropertiesByte);
+
+    // Bind pair (число = coders - 1 = 1, не пишется): InIndex = 1 (вход LZMA2),
+    // OutIndex = 0 (выход ГОСТ). Единственный packed stream идёт на свободный вход
+    // ГОСТ (in0) — индексы packed stream-ов при одном потоке не пишутся.
+    TryWriteUInt64(body, 1);
+    TryWriteUInt64(body, 0);
+
+    return [.. body];
   }
 
   /// <summary>
@@ -308,167 +359,6 @@ public static partial class SevenZipArchiveWriter
       addend = (addend >> 8) + (sum >> 8);
       position--;
     }
-
-    return true;
-  }
-
-  /// <summary>
-  /// Строит архив из одного непустого файла, сжатого LZMA2 и затем зашифрованного ГОСТ-ом
-  /// (folder из двух coder-ов: GOST → LZMA2 в порядке декодирования).
-  /// </summary>
-  private static SevenZipArchiveWriteResult BuildGostLzma2EntriesArchive(
-      IReadOnlyList<SevenZipArchiveWriterEntry> entries,
-      byte[] gostMethodId,
-      SevenZipGostProperties properties,
-      byte[] gostCoderBytes,
-      ReadOnlySpan<byte> key,
-      out byte[] archive)
-  {
-    archive = [];
-
-    byte[]? content = null;
-
-    for (int i = 0; i < entries.Count; i++)
-    {
-      if (IsNonEmptyFile(entries[i]))
-      {
-        content = entries[i].Content;
-        break;
-      }
-    }
-
-    if (content is null)
-      return SevenZipArchiveWriteResult.InternalError;
-
-    if (!Lzma2Properties.TryEncode(Lzma2DictionarySize, out byte lzma2PropertiesByte))
-      return SevenZipArchiveWriteResult.InternalError;
-
-    var lzmaProperties = new LzmaProperties(3, 0, 2);
-    byte[] lzma2Packed = Lzma2LzmaEncoder.Encode(content, lzmaProperties, Lzma2DictionarySize);
-
-    SevenZipGostEncryptResult encryptResult = SevenZipGostPackedStreamEncryptor.TryEncrypt(
-        gostMethodId, properties, key, lzma2Packed, out byte[] encrypted);
-
-    if (encryptResult != SevenZipGostEncryptResult.Ok)
-      return SevenZipArchiveWriteResult.InternalError;
-
-    uint contentCrc = Crc32.Compute(content);
-
-    if (!TryBuildGostLzma2NextHeader(
-        entries,
-        packSize: encrypted.Length,
-        gostUnpackSize: lzma2Packed.Length,
-        finalUnpackSize: content.Length,
-        finalCrc: contentCrc,
-        gostCoderBytes: gostCoderBytes,
-        lzma2PropertiesByte: lzma2PropertiesByte,
-        out byte[] nextHeaderBytes))
-      return SevenZipArchiveWriteResult.InternalError;
-
-    archive = BuildArchiveWithPackedData(encrypted, nextHeaderBytes);
-
-    return SevenZipArchiveWriteResult.Ok;
-  }
-
-  /// <summary>Строит next header для сценария LZMA2 → ГОСТ (folder из двух coder-ов).</summary>
-  private static bool TryBuildGostLzma2NextHeader(
-      IReadOnlyList<SevenZipArchiveWriterEntry> entries,
-      int packSize,
-      int gostUnpackSize,
-      int finalUnpackSize,
-      uint finalCrc,
-      byte[] gostCoderBytes,
-      byte lzma2PropertiesByte,
-      out byte[] nextHeaderBytes)
-  {
-    nextHeaderBytes = [];
-
-    List<byte> header = new(256)
-    {
-        SevenZipNid.Header,
-        SevenZipNid.MainStreamsInfo,
-    };
-
-    if (!TryWriteCompressedStreamsPackInfo(header, [packSize]))
-      return false;
-
-    if (!TryWriteGostLzma2FolderUnpackInfo(
-        header, gostCoderBytes, lzma2PropertiesByte, gostUnpackSize, finalUnpackSize, finalCrc))
-      return false;
-
-    header.Add(SevenZipNid.End);
-
-    if (AllEntriesAreNonEmptyFiles(entries))
-    {
-      if (!TryWriteAllNonEmptyCopyEntriesFilesInfo(header, entries))
-        return false;
-    }
-    else if (!TryWriteMixedCopyEntriesFilesInfo(header, entries))
-      return false;
-
-    header.Add(SevenZipNid.End);
-
-    nextHeaderBytes = [.. header];
-
-    return true;
-  }
-
-  /// <summary>
-  /// Пишет UnpackInfo для одного folder-а из двух coder-ов: GOST (coder 0) и LZMA2 (coder 1),
-  /// связанных bind pair-ом GOST.out0 → LZMA2.in1. Порядок раскодирования: packed →
-  /// GOST расшифровывает → LZMA2 распаковывает → финальный выход.
-  /// </summary>
-  private static bool TryWriteGostLzma2FolderUnpackInfo(
-      List<byte> header,
-      byte[] gostCoderBytes,
-      byte lzma2PropertiesByte,
-      int gostUnpackSize,
-      int finalUnpackSize,
-      uint finalCrc)
-  {
-    header.Add(SevenZipNid.UnpackInfo);
-
-    header.Add(SevenZipNid.Folder);
-
-    if (!TryWriteUInt64(header, 1)) // один folder
-      return false;
-
-    header.Add(0x00); // external = 0, folder-ы заданы по месту
-
-    if (!TryWriteUInt64(header, 2)) // два coder-а
-      return false;
-
-    // coder 0: ГОСТ (id size | hasProperties) + method id + размер + properties.
-    header.AddRange(gostCoderBytes);
-
-    // coder 1: LZMA2 — flags 0x21 (idSize 1 | attributes 0x20), method id 0x21,
-    // размер properties = 1, properties = байт размера словаря.
-    header.Add(0x21);
-    header.Add(Lzma2MethodId);
-    header.Add(0x01);
-    header.Add(lzma2PropertiesByte);
-
-    // Bind pair (число = coders - 1 = 1, не пишется): InIndex = 1 (вход LZMA2),
-    // OutIndex = 0 (выход ГОСТ). Единственный packed stream идёт на свободный вход
-    // ГОСТ (in0) — индексы packed stream-ов при одном потоке не пишутся.
-    if (!TryWriteUInt64(header, 1))
-      return false;
-
-    if (!TryWriteUInt64(header, 0))
-      return false;
-
-    header.Add(SevenZipNid.CodersUnpackSize);
-
-    if (!TryWriteUInt64(header, (ulong)gostUnpackSize)) // выход coder 0 (ГОСТ)
-      return false;
-
-    if (!TryWriteUInt64(header, (ulong)finalUnpackSize)) // выход coder 1 (LZMA2)
-      return false;
-
-    header.Add(SevenZipNid.Crc);
-    WriteAllDefinedCrcDigests(header, [finalCrc]);
-
-    header.Add(SevenZipNid.End);
 
     return true;
   }

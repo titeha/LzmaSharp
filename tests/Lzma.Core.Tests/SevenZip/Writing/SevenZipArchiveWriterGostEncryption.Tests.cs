@@ -224,22 +224,42 @@ public sealed class SevenZipArchiveWriterGostEncryptionTests
   }
 
   [Fact]
-  public void BuildGostEncryptedArchive_НесколькоФайловСLzma2_ПокаВозвращаетNotSupported()
+  public void BuildGostEncryptedArchive_НесколькоФайловСLzma2_RoundTrip()
   {
+    byte[] a = Encoding.UTF8.GetBytes(
+        string.Concat(Enumerable.Repeat("first file, repeated to compress well\r\n", 30)));
+    byte[] b = Encoding.UTF8.GetBytes(
+        string.Concat(Enumerable.Repeat("second file, другое повторяющееся содержимое\r\n", 25)));
+    byte[] c = Encoding.UTF8.GetBytes("short third");
+
     using SevenZipPassword password = SevenZipPassword.FromString("ab");
 
-    var options = KuznyechikDirectKey(password) with { CompressWithLzma2 = true };
+    var options = MagmaStribogKdf(password) with { CompressWithLzma2 = true };
 
     SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildGostEncryptedArchive(
         [
-          new SevenZipArchiveWriterEntry("a.txt", Encoding.UTF8.GetBytes("first")),
-          new SevenZipArchiveWriterEntry("b.txt", Encoding.UTF8.GetBytes("second")),
+          new SevenZipArchiveWriterEntry("a.txt", a),
+          new SevenZipArchiveWriterEntry("b.txt", b),
+          new SevenZipArchiveWriterEntry("c.txt", c),
         ],
         options,
         out byte[] archive);
 
-    Assert.Equal(SevenZipArchiveWriteResult.NotSupported, writeResult);
-    Assert.Empty(archive);
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
+
+    SevenZipArchiveDecodeResult decodeResult = SevenZipArchiveDecoder.DecodeToArray(
+        archive: archive,
+        options: SevenZipDecodeOptions.WithPassword(password),
+        files: out SevenZipDecodedFile[] files,
+        bytesConsumed: out _);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, decodeResult);
+    Assert.Equal(3, files.Length);
+
+    Dictionary<string, byte[]> byName = files.ToDictionary(f => f.Name, f => f.Bytes);
+    Assert.Equal(a, byName["a.txt"]);
+    Assert.Equal(b, byName["b.txt"]);
+    Assert.Equal(c, byName["c.txt"]);
   }
 
   [Fact]
