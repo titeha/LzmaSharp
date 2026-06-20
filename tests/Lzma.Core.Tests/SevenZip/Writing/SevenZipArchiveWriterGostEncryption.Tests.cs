@@ -1,0 +1,232 @@
+using System.Text;
+
+using Lzma.Core.SevenZip;
+
+namespace Lzma.Core.Tests.SevenZip.Writing;
+
+public sealed class SevenZipArchiveWriterGostEncryptionTests
+{
+  private static SevenZipGostEncryptionOptions KuznyechikDirectKey(SevenZipPassword password)
+      => new()
+      {
+        Cipher = SevenZipGostCipher.Kuznyechik,
+        Password = password,
+        NumCyclesPower = SevenZipGostCoder.DirectKeyNumCyclesPower,
+        Salt = [0xA1, 0xA2],
+        InitializationVector = [0x12, 0x34, 0x56, 0x78, 0x90, 0xAB, 0xCE, 0xF0],
+      };
+
+  private static SevenZipGostEncryptionOptions MagmaStribogKdf(SevenZipPassword password)
+      => new()
+      {
+        Cipher = SevenZipGostCipher.Magma,
+        Password = password,
+        NumCyclesPower = 5,
+        Salt = [0xB1, 0xB2, 0xB3],
+        InitializationVector = [0x10, 0x32, 0x54, 0x76],
+      };
+
+  [Fact]
+  public void BuildGostEncryptedArchive_КузнечикDirectKey_ОдинФайл_RoundTrip()
+  {
+    byte[] content = Encoding.UTF8.GetBytes("LzmaSharp GOST writer Kuznyechik direct-key round-trip");
+    const string fileName = "secret.txt";
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildGostEncryptedArchive(
+        [new SevenZipArchiveWriterEntry(fileName, content)],
+        KuznyechikDirectKey(password),
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
+
+    SevenZipArchiveDecodeResult decodeResult = SevenZipArchiveDecoder.DecodeSingleFileToArray(
+        archiveBytes: archive,
+        options: SevenZipDecodeOptions.WithPassword(password),
+        fileBytes: out byte[] fileBytes,
+        fileName: out string decodedName,
+        bytesConsumed: out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, decodeResult);
+    Assert.Equal(archive.Length, bytesConsumed);
+    Assert.Equal(fileName, decodedName);
+    Assert.Equal(content, fileBytes);
+  }
+
+  [Fact]
+  public void BuildGostEncryptedArchive_МагмаStribogKdf_ОдинФайл_RoundTrip()
+  {
+    byte[] content = Encoding.UTF8.GetBytes("LzmaSharp GOST writer Magma Stribog KDF round-trip\r\n");
+    const string fileName = "data.bin";
+
+    using SevenZipPassword password = SevenZipPassword.FromString("пароль");
+
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildGostEncryptedArchive(
+        [new SevenZipArchiveWriterEntry(fileName, content)],
+        MagmaStribogKdf(password),
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
+
+    SevenZipArchiveDecodeResult decodeResult = SevenZipArchiveDecoder.DecodeSingleFileToArray(
+        archiveBytes: archive,
+        options: SevenZipDecodeOptions.WithPassword(password),
+        fileBytes: out byte[] fileBytes,
+        fileName: out string decodedName,
+        bytesConsumed: out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, decodeResult);
+    Assert.Equal(fileName, decodedName);
+    Assert.Equal(content, fileBytes);
+  }
+
+  [Fact]
+  public void BuildGostEncryptedArchive_ШифртекстНеСовпадаетСИсходными()
+  {
+    byte[] content = Encoding.UTF8.GetBytes("plaintext must not appear in the archive body");
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildGostEncryptedArchive(
+        [new SevenZipArchiveWriterEntry("secret.txt", content)],
+        KuznyechikDirectKey(password),
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
+
+    // Тело архива не должно содержать исходный текст в открытом виде.
+    Assert.False(ContainsSubsequence(archive, content));
+  }
+
+  [Fact]
+  public void BuildGostEncryptedArchive_СНевернымПаролем_ДекодерВозвращаетInvalidData()
+  {
+    byte[] content = Encoding.UTF8.GetBytes("wrong password should fail CRC after decrypt");
+
+    using SevenZipPassword writePassword = SevenZipPassword.FromString("ab");
+
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildGostEncryptedArchive(
+        [new SevenZipArchiveWriterEntry("secret.txt", content)],
+        KuznyechikDirectKey(writePassword),
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
+
+    using SevenZipPassword wrongPassword = SevenZipPassword.FromString("zz");
+
+    SevenZipArchiveDecodeResult decodeResult = SevenZipArchiveDecoder.DecodeSingleFileToArray(
+        archiveBytes: archive,
+        options: SevenZipDecodeOptions.WithPassword(wrongPassword),
+        fileBytes: out byte[] fileBytes,
+        fileName: out _,
+        bytesConsumed: out _);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.InvalidData, decodeResult);
+    Assert.Empty(fileBytes);
+  }
+
+  [Fact]
+  public void BuildGostEncryptedArchive_БезПароля_ДекодерВозвращаетNotSupported()
+  {
+    byte[] content = Encoding.UTF8.GetBytes("needs a password to decode");
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildGostEncryptedArchive(
+        [new SevenZipArchiveWriterEntry("secret.txt", content)],
+        KuznyechikDirectKey(password),
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
+
+    SevenZipArchiveDecodeResult decodeResult = SevenZipArchiveDecoder.DecodeSingleFileToArray(
+        archiveBytes: archive,
+        options: SevenZipDecodeOptions.Default,
+        fileBytes: out _,
+        fileName: out _,
+        bytesConsumed: out _);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.NotSupported, decodeResult);
+  }
+
+  [Fact]
+  public void BuildGostEncryptedArchive_НесколькоНепустыхФайлов_ВозвращаетNotSupported()
+  {
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildGostEncryptedArchive(
+        [
+          new SevenZipArchiveWriterEntry("a.txt", Encoding.UTF8.GetBytes("first")),
+          new SevenZipArchiveWriterEntry("b.txt", Encoding.UTF8.GetBytes("second")),
+        ],
+        KuznyechikDirectKey(password),
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.NotSupported, writeResult);
+    Assert.Empty(archive);
+  }
+
+  [Fact]
+  public void BuildGostEncryptedArchive_НекорректнаяДлинаIvДляКузнечика_ВозвращаетInvalidData()
+  {
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    var options = new SevenZipGostEncryptionOptions
+    {
+      Cipher = SevenZipGostCipher.Kuznyechik,
+      Password = password,
+      NumCyclesPower = SevenZipGostCoder.DirectKeyNumCyclesPower,
+      Salt = [0xA1],
+      InitializationVector = [0x12, 0x34, 0x56, 0x78], // 4 байта — для Магмы, не Кузнечика
+    };
+
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildGostEncryptedArchive(
+        [new SevenZipArchiveWriterEntry("secret.txt", Encoding.UTF8.GetBytes("x"))],
+        options,
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.InvalidData, writeResult);
+    Assert.Empty(archive);
+  }
+
+  [Fact]
+  public void BuildGostEncryptedArchive_ТолькоПустыеEntries_RoundTripБезШифрования()
+  {
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    SevenZipArchiveWriteResult writeResult = SevenZipArchiveWriter.BuildGostEncryptedArchive(
+        [
+          new SevenZipArchiveWriterEntry("empty.txt", []),
+          new SevenZipArchiveWriterEntry("dir", [], IsDirectory: true),
+        ],
+        KuznyechikDirectKey(password),
+        out byte[] archive);
+
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, writeResult);
+
+    SevenZipArchiveDecodeResult decodeResult = SevenZipArchiveDecoder.DecodeToEntries(
+        archive: archive,
+        options: SevenZipDecodeOptions.Default,
+        entries: out SevenZipDecodedEntry[] entries,
+        bytesConsumed: out _);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, decodeResult);
+    Assert.Equal(2, entries.Length);
+  }
+
+  // Проверяет, встречается ли needle как непрерывная подпоследовательность в haystack.
+  private static bool ContainsSubsequence(byte[] haystack, byte[] needle)
+  {
+    if (needle.Length == 0 || haystack.Length < needle.Length)
+      return false;
+
+    for (int i = 0; i + needle.Length <= haystack.Length; i++)
+    {
+      if (haystack.AsSpan(i, needle.Length).SequenceEqual(needle))
+        return true;
+    }
+
+    return false;
+  }
+}
