@@ -29,9 +29,10 @@ public enum SevenZipGostDecryptResult
 /// Расшифровка упакованных потоков для экспериментальных ГОСТ-кодеров.
 /// </summary>
 /// <remarks>
-/// Сейчас поддержан только Кузнечик в режиме CTR и только тестовый direct-key
-/// режим формирования ключа. Магма и полноценный ГОСТ-KDF пока возвращают
-/// <see cref="SevenZipGostDecryptResult.NotSupported"/>.
+/// Поддержаны Кузнечик и Магма в режиме CTR. Формирование ключа: тестовый
+/// direct-key режим (<see cref="SevenZipGostCoder.DirectKeyNumCyclesPower"/>)
+/// и парольный KDF через Стрибог-256 для numCyclesPower в пределах
+/// <see cref="SevenZipGostCoder.SupportedNumCyclesPowerMax"/>.
 /// </remarks>
 public static class SevenZipGostPackedStreamDecryptor
 {
@@ -39,8 +40,9 @@ public static class SevenZipGostPackedStreamDecryptor
   /// Пытается расшифровать упакованный поток через парольный материал.
   /// </summary>
   /// <remarks>
-  /// Этот overload сам формирует ключ из свойств ГОСТ-кодера и пароля.
-  /// Пока поддержан только direct-key режим <see cref="SevenZipGostCoder.DirectKeyNumCyclesPower"/>.
+  /// Этот overload сам формирует ключ из свойств ГОСТ-кодера и пароля:
+  /// direct-key режим <see cref="SevenZipGostCoder.DirectKeyNumCyclesPower"/>
+  /// либо парольный KDF через Стрибог-256 для остальных numCyclesPower.
   /// </remarks>
   /// <param name="methodId">Идентификатор метода ГОСТ-кодера.</param>
   /// <param name="properties">Разобранные свойства ГОСТ-кодера.</param>
@@ -66,20 +68,23 @@ public static class SevenZipGostPackedStreamDecryptor
       return SevenZipGostDecryptResult.InvalidData;
     }
 
-    if (properties.NumCyclesPower != SevenZipGostCoder.DirectKeyNumCyclesPower)
+    if (!SevenZipGostCoder.IsSupportedNumCyclesPower(properties.NumCyclesPower))
     {
       plaintext = [];
       return SevenZipGostDecryptResult.NotSupported;
     }
 
+    bool directKey = properties.NumCyclesPower == SevenZipGostCoder.DirectKeyNumCyclesPower;
+
     Span<byte> key = stackalloc byte[SevenZipGostKeyDerivation.Gost256KeySize];
 
     try
     {
-      if (!SevenZipGostKeyDerivation.TryDeriveDirectKey(
-          properties,
-          password,
-          key))
+      bool derived = directKey
+          ? SevenZipGostKeyDerivation.TryDeriveDirectKey(properties, password, key)
+          : SevenZipGostKeyDerivation.TryDeriveStribogKey(properties, password, key);
+
+      if (!derived)
       {
         plaintext = [];
         return SevenZipGostDecryptResult.InvalidData;

@@ -310,7 +310,7 @@ public sealed class SevenZipGostPackedStreamDecryptorTests
   }
 
   [Fact]
-  public void TryDecrypt_КузнечикБезDirectKey_ВозвращаетNotSupported()
+  public void TryDecrypt_КузнечикStribogKdfБезСоли_ДелаетRoundtrip()
   {
     var properties = new SevenZipGostProperties(
         version: SevenZipGostCoder.CurrentPropertiesVersion,
@@ -321,15 +321,22 @@ public sealed class SevenZipGostPackedStreamDecryptorTests
 
     using SevenZipPassword password = SevenZipPassword.FromString("secret");
 
+    byte[] plain = Encoding.ASCII.GetBytes("LzmaSharp GOST Stribog KDF no-salt round-trip");
+
+    Span<byte> key = stackalloc byte[SevenZipGostKeyDerivation.Gost256KeySize];
+    Assert.True(SevenZipGostKeyDerivation.TryDeriveStribogKey(properties, password, key));
+    Assert.True(SevenZipGostInitializationVector.TryBuildKuznyechikCtr(properties, out byte[] iv));
+    Assert.True(GostKuznyechikCtrTransform.TryTransform(key, iv, plain, out byte[] ciphertext));
+
     SevenZipGostDecryptResult result = SevenZipGostPackedStreamDecryptor.TryDecrypt(
         methodId: SevenZipGostCoder.KuznyechikMethodId,
         properties: properties,
         password: password,
-        ciphertext: new byte[16],
+        ciphertext: ciphertext,
         plaintext: out byte[] plaintext);
 
-    Assert.Equal(SevenZipGostDecryptResult.NotSupported, result);
-    Assert.Empty(plaintext);
+    Assert.Equal(SevenZipGostDecryptResult.Ok, result);
+    Assert.Equal(plain, plaintext);
   }
 
   [Fact]
@@ -383,6 +390,121 @@ public sealed class SevenZipGostPackedStreamDecryptorTests
 
     Assert.Equal(SevenZipGostDecryptResult.Ok, result);
     Assert.Equal(plain, plaintext);
+  }
+
+  [Fact]
+  public void TryDecrypt_КузнечикStribogKdfССольюИПаролем_ДелаетRoundtrip()
+  {
+    var properties = new SevenZipGostProperties(
+        version: SevenZipGostCoder.CurrentPropertiesVersion,
+        flags: 0,
+        numCyclesPower: 4, // 2^4 = 16 раундов — парольный KDF, не direct-key
+        salt: [0xA1, 0xA2, 0xA3, 0xA4],
+        initializationVector: [0x12, 0x34, 0x56, 0x78, 0x90, 0xAB, 0xCE, 0xF0]);
+
+    using SevenZipPassword password = SevenZipPassword.FromString("пароль");
+
+    byte[] plain = Encoding.ASCII.GetBytes("LzmaSharp GOST Kuznyechik Stribog KDF round-trip");
+
+    Span<byte> key = stackalloc byte[SevenZipGostKeyDerivation.Gost256KeySize];
+    Assert.True(SevenZipGostKeyDerivation.TryDeriveStribogKey(properties, password, key));
+    Assert.True(SevenZipGostInitializationVector.TryBuildKuznyechikCtr(properties, out byte[] iv));
+    Assert.True(GostKuznyechikCtrTransform.TryTransform(key, iv, plain, out byte[] ciphertext));
+
+    SevenZipGostDecryptResult result = SevenZipGostPackedStreamDecryptor.TryDecrypt(
+        methodId: SevenZipGostCoder.KuznyechikMethodId,
+        properties: properties,
+        password: password,
+        ciphertext: ciphertext,
+        plaintext: out byte[] plaintext);
+
+    Assert.Equal(SevenZipGostDecryptResult.Ok, result);
+    Assert.Equal(plain, plaintext);
+  }
+
+  [Fact]
+  public void TryDecrypt_МагмаStribogKdfССольюИПаролем_ДелаетRoundtrip()
+  {
+    var properties = new SevenZipGostProperties(
+        version: SevenZipGostCoder.CurrentPropertiesVersion,
+        flags: 0,
+        numCyclesPower: 5, // 2^5 = 32 раунда — парольный KDF
+        salt: [0xB1, 0xB2],
+        initializationVector: [0x10, 0x32, 0x54, 0x76]);
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    byte[] plain = Encoding.ASCII.GetBytes("LzmaSharp GOST Magma Stribog KDF round-trip");
+
+    Span<byte> key = stackalloc byte[SevenZipGostKeyDerivation.Gost256KeySize];
+    Assert.True(SevenZipGostKeyDerivation.TryDeriveStribogKey(properties, password, key));
+    Assert.True(SevenZipGostInitializationVector.TryBuildMagmaCtr(properties, out byte[] iv));
+    Assert.True(GostMagmaCtrTransform.TryTransform(key, iv, plain, out byte[] ciphertext));
+
+    SevenZipGostDecryptResult result = SevenZipGostPackedStreamDecryptor.TryDecrypt(
+        methodId: SevenZipGostCoder.MagmaMethodId,
+        properties: properties,
+        password: password,
+        ciphertext: ciphertext,
+        plaintext: out byte[] plaintext);
+
+    Assert.Equal(SevenZipGostDecryptResult.Ok, result);
+    Assert.Equal(plain, plaintext);
+  }
+
+  [Fact]
+  public void TryDecrypt_НеверныйПарольСStribogKdf_ДаётДругойPlaintext()
+  {
+    var properties = new SevenZipGostProperties(
+        version: SevenZipGostCoder.CurrentPropertiesVersion,
+        flags: 0,
+        numCyclesPower: 4,
+        salt: [0xA1, 0xA2, 0xA3, 0xA4],
+        initializationVector: [0x12, 0x34, 0x56, 0x78, 0x90, 0xAB, 0xCE, 0xF0]);
+
+    byte[] plain = Encoding.ASCII.GetBytes("LzmaSharp GOST wrong password test");
+
+    using SevenZipPassword right = SevenZipPassword.FromString("правильный");
+    Span<byte> key = stackalloc byte[SevenZipGostKeyDerivation.Gost256KeySize];
+    Assert.True(SevenZipGostKeyDerivation.TryDeriveStribogKey(properties, right, key));
+    Assert.True(SevenZipGostInitializationVector.TryBuildKuznyechikCtr(properties, out byte[] iv));
+    Assert.True(GostKuznyechikCtrTransform.TryTransform(key, iv, plain, out byte[] ciphertext));
+
+    using SevenZipPassword wrong = SevenZipPassword.FromString("неверный");
+    SevenZipGostDecryptResult result = SevenZipGostPackedStreamDecryptor.TryDecrypt(
+        methodId: SevenZipGostCoder.KuznyechikMethodId,
+        properties: properties,
+        password: wrong,
+        ciphertext: ciphertext,
+        plaintext: out byte[] plaintext);
+
+    // На уровне CTR неверный пароль не обнаруживается — он просто даёт другой
+    // открытый текст (несовпадение поймает CRC на уровне фолдера/архива).
+    Assert.Equal(SevenZipGostDecryptResult.Ok, result);
+    Assert.NotEqual(plain, plaintext);
+  }
+
+  [Fact]
+  public void TryDecrypt_СлишкомБольшойNumCyclesPowerСПаролем_ВозвращаетNotSupported()
+  {
+    var properties = new SevenZipGostProperties(
+        version: SevenZipGostCoder.CurrentPropertiesVersion,
+        flags: 0,
+        numCyclesPower: (byte)(SevenZipGostCoder.SupportedNumCyclesPowerMax + 1),
+        salt: [0xA1],
+        initializationVector: [0x12, 0x34, 0x56, 0x78, 0x90, 0xAB, 0xCE, 0xF0]);
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    SevenZipGostDecryptResult result = SevenZipGostPackedStreamDecryptor.TryDecrypt(
+        methodId: SevenZipGostCoder.KuznyechikMethodId,
+        properties: properties,
+        password: password,
+        ciphertext: new byte[16],
+        plaintext: out byte[] plaintext);
+
+    Assert.Equal(SevenZipGostDecryptResult.NotSupported, result);
+    Assert.Empty(plaintext);
   }
 
   [Fact]

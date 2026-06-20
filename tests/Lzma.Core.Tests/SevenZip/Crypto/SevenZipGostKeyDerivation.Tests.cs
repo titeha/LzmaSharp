@@ -1,3 +1,4 @@
+using Lzma.Core.Crypto.Gost;
 using Lzma.Core.SevenZip;
 
 namespace Lzma.Core.Tests.SevenZip;
@@ -236,5 +237,122 @@ public sealed class SevenZipGostKeyDerivationTests
             properties,
             null!,
             new byte[SevenZipGostKeyDerivation.Gost256KeySize]));
+  }
+
+  // ---- Парольный KDF через Стрибог ----
+
+  // Собирает один блок KDF: соль || пароль(UTF-16LE) || счётчик(8 байт LE).
+  private static byte[] BuildKdfBlock(byte[] salt, byte[] passwordUtf16Le, ulong counter)
+  {
+    byte[] block = new byte[salt.Length + passwordUtf16Le.Length + 8];
+    salt.CopyTo(block, 0);
+    passwordUtf16Le.CopyTo(block, salt.Length);
+    System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(
+        block.AsSpan(block.Length - 8, 8), counter);
+    return block;
+  }
+
+  [Fact]
+  public void TryDeriveStribogKey_ОдинРаунд_РавенHash256ОтОдногоБлока()
+  {
+    byte[] salt = [0xA1, 0xA2];
+    byte[] passwordUtf16Le = [0x61, 0x00, 0x62, 0x00]; // "ab"
+
+    var properties = new SevenZipGostProperties(
+        version: SevenZipGostCoder.CurrentPropertiesVersion,
+        flags: 0,
+        numCyclesPower: 0, // 2^0 = 1 раунд
+        salt: salt,
+        initializationVector: []);
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    byte[] key = new byte[SevenZipGostKeyDerivation.Gost256KeySize];
+    Assert.True(SevenZipGostKeyDerivation.TryDeriveStribogKey(properties, password, key));
+
+    byte[] expected = GostStribog.Hash256(BuildKdfBlock(salt, passwordUtf16Le, 0))
+        .AsSpan(0, SevenZipGostKeyDerivation.Gost256KeySize).ToArray();
+
+    Assert.Equal(expected, key);
+  }
+
+  [Fact]
+  public void TryDeriveStribogKey_ДваРаунда_РавенHash256ОтКонкатенацииДвухБлоков()
+  {
+    byte[] salt = [0x11, 0x22, 0x33];
+    byte[] passwordUtf16Le = [0x70, 0x00]; // "p"
+
+    var properties = new SevenZipGostProperties(
+        version: SevenZipGostCoder.CurrentPropertiesVersion,
+        flags: 0,
+        numCyclesPower: 1, // 2^1 = 2 раунда
+        salt: salt,
+        initializationVector: []);
+
+    using SevenZipPassword password = SevenZipPassword.FromString("p");
+
+    byte[] key = new byte[SevenZipGostKeyDerivation.Gost256KeySize];
+    Assert.True(SevenZipGostKeyDerivation.TryDeriveStribogKey(properties, password, key));
+
+    byte[] block0 = BuildKdfBlock(salt, passwordUtf16Le, 0);
+    byte[] block1 = BuildKdfBlock(salt, passwordUtf16Le, 1);
+    byte[] message = [.. block0, .. block1];
+
+    byte[] expected = GostStribog.Hash256(message)
+        .AsSpan(0, SevenZipGostKeyDerivation.Gost256KeySize).ToArray();
+
+    Assert.Equal(expected, key);
+  }
+
+  [Fact]
+  public void TryDeriveStribogKey_ДляDirectKey_ВозвращаетFalse()
+  {
+    var properties = new SevenZipGostProperties(
+        version: SevenZipGostCoder.CurrentPropertiesVersion,
+        flags: 0,
+        numCyclesPower: SevenZipGostCoder.DirectKeyNumCyclesPower,
+        salt: [0x01],
+        initializationVector: []);
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    byte[] key = new byte[SevenZipGostKeyDerivation.Gost256KeySize];
+    Assert.False(SevenZipGostKeyDerivation.TryDeriveStribogKey(properties, password, key));
+  }
+
+  [Fact]
+  public void TryDeriveStribogKey_ПриСлишкомБольшомNumCyclesPower_ВозвращаетFalse()
+  {
+    var properties = new SevenZipGostProperties(
+        version: SevenZipGostCoder.CurrentPropertiesVersion,
+        flags: 0,
+        numCyclesPower: (byte)(SevenZipGostCoder.SupportedNumCyclesPowerMax + 1),
+        salt: [0x01],
+        initializationVector: []);
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    byte[] key = new byte[SevenZipGostKeyDerivation.Gost256KeySize];
+    Assert.False(SevenZipGostKeyDerivation.TryDeriveStribogKey(properties, password, key));
+  }
+
+  [Fact]
+  public void TryDeriveStribogKey_РазнаяСоль_ДаётРазныеКлючи()
+  {
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    byte[] keyA = new byte[SevenZipGostKeyDerivation.Gost256KeySize];
+    byte[] keyB = new byte[SevenZipGostKeyDerivation.Gost256KeySize];
+
+    Assert.True(SevenZipGostKeyDerivation.TryDeriveStribogKey(
+        new SevenZipGostProperties(SevenZipGostCoder.CurrentPropertiesVersion, 0, 3, [0xAA], []),
+        password,
+        keyA));
+    Assert.True(SevenZipGostKeyDerivation.TryDeriveStribogKey(
+        new SevenZipGostProperties(SevenZipGostCoder.CurrentPropertiesVersion, 0, 3, [0xBB], []),
+        password,
+        keyB));
+
+    Assert.NotEqual(keyA, keyB);
   }
 }

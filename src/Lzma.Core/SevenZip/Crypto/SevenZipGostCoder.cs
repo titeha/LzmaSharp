@@ -25,6 +25,26 @@ public static class SevenZipGostCoder
   public const byte DirectKeyNumCyclesPower = 0x3F;
 
   /// <summary>
+  /// Максимальное поддержанное значение numCyclesPower для парольного KDF.
+  /// </summary>
+  /// <remarks>
+  /// Парольный KDF использует one-shot Стрибог над конкатенацией всех раундов,
+  /// поэтому объём буфера = 2^numCyclesPower × (соль+пароль+8). Ограничение
+  /// держит этот буфер в разумных пределах; при появлении потокового Стрибога
+  /// предел можно будет поднять.
+  /// </remarks>
+  public const byte SupportedNumCyclesPowerMax = 20;
+
+  /// <summary>
+  /// Проверяет, поддержано ли значение numCyclesPower (парольный KDF или direct-key).
+  /// </summary>
+  public static bool IsSupportedNumCyclesPower(byte numCyclesPower)
+  {
+    return numCyclesPower <= SupportedNumCyclesPowerMax
+        || numCyclesPower == DirectKeyNumCyclesPower;
+  }
+
+  /// <summary>
   /// Максимальный размер соли в свойствах экспериментального GOST-кодера.
   /// </summary>
   public const int MaxSaltSize = 32;

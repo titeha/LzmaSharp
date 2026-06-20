@@ -226,36 +226,37 @@ public sealed class SevenZipFolderDecoderGostDecryptTests
   }
 
   [Fact]
-  public void DecodeFolderToArray_KuznyechikCopyPipeline_БезDirectKey_ВозвращаетNotSupported()
+  public void DecodeFolderToArray_KuznyechikCopyPipeline_СStribogKdf_ДекодируетЗашифрованныйВход()
   {
-    byte[] properties =
-    [
-      SevenZipGostCoder.CurrentPropertiesVersion,
-      0x00,
-      0x03, // обычный KDF пока не подключён
-      0x00,
-      0x08,
-      0x12, 0x34, 0x56, 0x78, 0x90, 0xAB, 0xCE, 0xF0,
-    ];
+    byte[] plain = System.Text.Encoding.UTF8.GetBytes(
+        "LzmaSharp GOST Kuznyechik Stribog KDF FolderDecoder test");
+
+    // numCyclesPower=4 (16 раундов) — парольный KDF через Стрибог, не direct-key.
+    byte[] properties = CreateGostProperties(
+        numCyclesPower: 4,
+        salt: [0xA1, 0xA2, 0xA3, 0xA4],
+        iv: [0x12, 0x34, 0x56, 0x78, 0x90, 0xAB, 0xCE, 0xF0]);
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    byte[] encrypted = EncryptKuznyechikStribogKeyForTest(properties, password, plain);
 
     SevenZipStreamsInfo streamsInfo = CreateGostThenCopyStreamsInfo(
         methodId: SevenZipGostCoder.KuznyechikMethodId.ToArray(),
         gostProperties: properties,
-        gostUnpackSize: 16UL,
-        finalUnpackSize: 16UL,
-        packSize: 16UL);
-
-    using SevenZipPassword password = SevenZipPassword.FromString("");
+        gostUnpackSize: (ulong)plain.Length,
+        finalUnpackSize: (ulong)plain.Length,
+        packSize: (ulong)encrypted.Length);
 
     SevenZipFolderDecodeResult result = SevenZipFolderDecoder.DecodeFolderToArray(
         streamsInfo: streamsInfo,
-        packedStreams: new byte[16],
+        packedStreams: encrypted,
         folderIndex: 0,
         options: SevenZipDecodeOptions.WithPassword(password),
         output: out byte[] output);
 
-    Assert.Equal(SevenZipFolderDecodeResult.NotSupported, result);
-    Assert.Empty(output);
+    Assert.Equal(SevenZipFolderDecodeResult.Ok, result);
+    Assert.Equal(plain, output);
   }
 
   [Fact]
@@ -564,42 +565,36 @@ public sealed class SevenZipFolderDecoderGostDecryptTests
   }
 
   [Fact]
-  public void DecodeFolderToArray_KuznyechikSingleCoder_БезDirectKey_ВозвращаетNotSupported()
+  public void DecodeFolderToArray_KuznyechikSingleCoder_СStribogKdf_ДекодируетЗашифрованныйВход()
   {
-    byte[] properties =
-    [
-        SevenZipGostCoder.CurrentPropertiesVersion,
-        0x00,
-        0x03, // обычный KDF пока не подключён
-        0x00,
-        0x08,
-        0x12,
-        0x34,
-        0x56,
-        0x78,
-        0x90,
-        0xAB,
-        0xCE,
-        0xF0,
-    ];
+    var plain = new byte[64];
+    for (int i = 0; i < plain.Length; i++)
+      plain[i] = unchecked((byte)(i * 23 + 7));
+
+    byte[] properties = CreateGostProperties(
+        numCyclesPower: 4,
+        salt: [0x11, 0x22],
+        iv: [0x12, 0x34, 0x56, 0x78, 0x90, 0xAB, 0xCE, 0xF0]);
+
+    using SevenZipPassword password = SevenZipPassword.FromString("ab");
+
+    byte[] encrypted = EncryptKuznyechikStribogKeyForTest(properties, password, plain);
 
     SevenZipStreamsInfo streamsInfo = CreateSingleGostCoderStreamsInfo(
         methodId: SevenZipGostCoder.KuznyechikMethodId.ToArray(),
         gostProperties: properties,
-        unpackSize: 16UL,
-        packSize: 16UL);
-
-    using SevenZipPassword password = SevenZipPassword.FromString("");
+        unpackSize: (ulong)plain.Length,
+        packSize: (ulong)encrypted.Length);
 
     SevenZipFolderDecodeResult result = SevenZipFolderDecoder.DecodeFolderToArray(
         streamsInfo: streamsInfo,
-        packedStreams: new byte[16],
+        packedStreams: encrypted,
         folderIndex: 0,
         options: SevenZipDecodeOptions.WithPassword(password),
         output: out byte[] output);
 
-    Assert.Equal(SevenZipFolderDecodeResult.NotSupported, result);
-    Assert.Empty(output);
+    Assert.Equal(SevenZipFolderDecodeResult.Ok, result);
+    Assert.Equal(plain, output);
   }
 
   [Fact]
@@ -673,6 +668,12 @@ public sealed class SevenZipFolderDecoderGostDecryptTests
   private static byte[] CreateGostDirectProperties(
       byte[] salt,
       byte[] iv)
+      => CreateGostProperties(SevenZipGostCoder.DirectKeyNumCyclesPower, salt, iv);
+
+  private static byte[] CreateGostProperties(
+      byte numCyclesPower,
+      byte[] salt,
+      byte[] iv)
   {
     Assert.InRange(salt.Length, 0, byte.MaxValue);
     Assert.InRange(iv.Length, 0, byte.MaxValue);
@@ -681,7 +682,7 @@ public sealed class SevenZipFolderDecoderGostDecryptTests
 
     properties[0] = SevenZipGostCoder.CurrentPropertiesVersion;
     properties[1] = 0x00;
-    properties[2] = SevenZipGostCoder.DirectKeyNumCyclesPower;
+    properties[2] = numCyclesPower;
     properties[3] = (byte)salt.Length;
     properties[4] = (byte)iv.Length;
 
@@ -689,6 +690,34 @@ public sealed class SevenZipFolderDecoderGostDecryptTests
     iv.CopyTo(properties.AsSpan(5 + salt.Length));
 
     return properties;
+  }
+
+  private static byte[] EncryptKuznyechikStribogKeyForTest(
+      byte[] propertiesBytes,
+      SevenZipPassword password,
+      byte[] plain)
+  {
+    Assert.True(SevenZipGostCoder.TryParseProperties(
+        propertiesBytes,
+        out SevenZipGostProperties? properties));
+
+    byte[] key = new byte[SevenZipGostKeyDerivation.Gost256KeySize];
+
+    try
+    {
+      Assert.True(SevenZipGostKeyDerivation.TryDeriveStribogKey(properties!, password, key));
+      Assert.True(GostKuznyechikCtrTransform.TryTransform(
+          key,
+          properties!.InitializationVector,
+          plain,
+          out byte[] encrypted));
+
+      return encrypted;
+    }
+    finally
+    {
+      Array.Clear(key);
+    }
   }
 
   private static byte[] EncryptKuznyechikDirectKeyForTest(

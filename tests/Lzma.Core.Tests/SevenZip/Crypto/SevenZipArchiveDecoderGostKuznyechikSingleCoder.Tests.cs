@@ -345,15 +345,17 @@ public sealed class SevenZipArchiveDecoderGostKuznyechikSingleCoderTests
   }
 
   [Fact]
-  public void DecodeSingleFileToArray_GostKuznyechikSingleCoder_БезDirectKeyKdf_ВозвращаетNotSupported()
+  public void DecodeSingleFileToArray_GostKuznyechikSingleCoder_СStribogKdf_ВозвращаетФайл()
   {
-    byte[] packed = CreatePackedForUnsupportedKdfTest();
+    byte[] plain = CreatePlainForTest();
+    const string fileName = "gost-single-coder-stribog-kdf.bin";
 
     using SevenZipPassword password = SevenZipPassword.FromString("ab");
 
-    byte[] archive = Build7zArchive_SingleFile_GostKuznyechikSingleCoder_UnsupportedKdf(
-        packedBytes: packed,
-        fileName: "gost-single-coder-unsupported-kdf.bin");
+    byte[] archive = Build7zArchive_SingleFile_GostKuznyechikSingleCoder_StribogKdf(
+        plainFileBytes: plain,
+        fileName: fileName,
+        password: password);
 
     SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeSingleFileToArray(
         archiveBytes: archive,
@@ -362,23 +364,51 @@ public sealed class SevenZipArchiveDecoderGostKuznyechikSingleCoderTests
         fileName: out string decodedFileName,
         bytesConsumed: out int bytesConsumed);
 
-    Assert.Equal(SevenZipArchiveDecodeResult.NotSupported, result);
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, result);
+    Assert.Equal(archive.Length, bytesConsumed);
+    Assert.Equal(fileName, decodedFileName);
+    Assert.Equal(plain, fileBytes);
+  }
+
+  [Fact]
+  public void DecodeSingleFileToArray_GostKuznyechikSingleCoder_StribogKdfСНевернымПаролем_ВозвращаетInvalidData()
+  {
+    byte[] plain = CreatePlainForTest();
+
+    using SevenZipPassword correctPassword = SevenZipPassword.FromString("ab");
+
+    byte[] archive = Build7zArchive_SingleFile_GostKuznyechikSingleCoder_StribogKdf(
+        plainFileBytes: plain,
+        fileName: "gost-single-coder-stribog-kdf.bin",
+        password: correctPassword);
+
+    using SevenZipPassword wrongPassword = SevenZipPassword.FromString("wrong");
+
+    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeSingleFileToArray(
+        archiveBytes: archive,
+        options: SevenZipDecodeOptions.WithPassword(wrongPassword),
+        fileBytes: out byte[] fileBytes,
+        fileName: out string decodedFileName,
+        bytesConsumed: out int bytesConsumed);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.InvalidData, result);
     Assert.Equal(archive.Length, bytesConsumed);
     Assert.Empty(fileBytes);
     Assert.Equal(string.Empty, decodedFileName);
   }
 
   [Fact]
-  public void ExtractToDirectory_GostKuznyechikSingleCoder_БезDirectKeyKdf_ВозвращаетNotSupportedИНичегоНеПишет()
+  public void ExtractToDirectory_GostKuznyechikSingleCoder_СStribogKdf_ЗаписываетФайл()
   {
-    byte[] packed = CreatePackedForUnsupportedKdfTest();
-    const string fileName = "gost-single-coder-unsupported-kdf.bin";
+    byte[] plain = CreatePlainForTest();
+    const string fileName = "gost-single-coder-stribog-kdf.bin";
 
     using SevenZipPassword password = SevenZipPassword.FromString("ab");
 
-    byte[] archive = Build7zArchive_SingleFile_GostKuznyechikSingleCoder_UnsupportedKdf(
-        packedBytes: packed,
-        fileName: fileName);
+    byte[] archive = Build7zArchive_SingleFile_GostKuznyechikSingleCoder_StribogKdf(
+        plainFileBytes: plain,
+        fileName: fileName,
+        password: password);
 
     string root = CreateTempRoot();
 
@@ -391,9 +421,12 @@ public sealed class SevenZipArchiveDecoderGostKuznyechikSingleCoderTests
           overwrite: false,
           bytesConsumed: out int bytesConsumed);
 
-      Assert.Equal(SevenZipArchiveDecodeResult.NotSupported, result);
+      Assert.Equal(SevenZipArchiveDecodeResult.Ok, result);
       Assert.Equal(archive.Length, bytesConsumed);
-      AssertDestinationIsEmptyOrMissing(root, fileName);
+
+      string filePath = Path.Combine(root, fileName);
+      Assert.True(File.Exists(filePath));
+      Assert.Equal(plain, File.ReadAllBytes(filePath));
     }
     finally
     {
@@ -402,15 +435,17 @@ public sealed class SevenZipArchiveDecoderGostKuznyechikSingleCoderTests
   }
 
   [Fact]
-  public void DecodeToArray_GostKuznyechikSingleCoder_БезDirectKeyKdf_ВозвращаетNotSupported()
+  public void DecodeToArray_GostKuznyechikSingleCoder_СStribogKdf_ВозвращаетФайл()
   {
-    byte[] packed = CreatePackedForUnsupportedKdfTest();
+    byte[] plain = CreatePlainForTest();
+    const string fileName = "gost-single-coder-stribog-kdf.bin";
 
     using SevenZipPassword password = SevenZipPassword.FromString("ab");
 
-    byte[] archive = Build7zArchive_SingleFile_GostKuznyechikSingleCoder_UnsupportedKdf(
-        packedBytes: packed,
-        fileName: "gost-single-coder-unsupported-kdf.bin");
+    byte[] archive = Build7zArchive_SingleFile_GostKuznyechikSingleCoder_StribogKdf(
+        plainFileBytes: plain,
+        fileName: fileName,
+        password: password);
 
     SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeToArray(
         archive: archive,
@@ -418,21 +453,25 @@ public sealed class SevenZipArchiveDecoderGostKuznyechikSingleCoderTests
         files: out SevenZipDecodedFile[] files,
         bytesConsumed: out int bytesConsumed);
 
-    Assert.Equal(SevenZipArchiveDecodeResult.NotSupported, result);
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, result);
     Assert.Equal(archive.Length, bytesConsumed);
-    Assert.Empty(files);
+    SevenZipDecodedFile file = Assert.Single(files);
+    Assert.Equal(fileName, file.Name);
+    Assert.Equal(plain, file.Bytes);
   }
 
   [Fact]
-  public void DecodeToEntries_GostKuznyechikSingleCoder_БезDirectKeyKdf_ВозвращаетNotSupported()
+  public void DecodeToEntries_GostKuznyechikSingleCoder_СStribogKdf_ВозвращаетФайловыйEntry()
   {
-    byte[] packed = CreatePackedForUnsupportedKdfTest();
+    byte[] plain = CreatePlainForTest();
+    const string fileName = "gost-single-coder-stribog-kdf.bin";
 
     using SevenZipPassword password = SevenZipPassword.FromString("ab");
 
-    byte[] archive = Build7zArchive_SingleFile_GostKuznyechikSingleCoder_UnsupportedKdf(
-        packedBytes: packed,
-        fileName: "gost-single-coder-unsupported-kdf.bin");
+    byte[] archive = Build7zArchive_SingleFile_GostKuznyechikSingleCoder_StribogKdf(
+        plainFileBytes: plain,
+        fileName: fileName,
+        password: password);
 
     SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeToEntries(
         archive: archive,
@@ -440,9 +479,12 @@ public sealed class SevenZipArchiveDecoderGostKuznyechikSingleCoderTests
         entries: out SevenZipDecodedEntry[] entries,
         bytesConsumed: out int bytesConsumed);
 
-    Assert.Equal(SevenZipArchiveDecodeResult.NotSupported, result);
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, result);
     Assert.Equal(archive.Length, bytesConsumed);
-    Assert.Empty(entries);
+    SevenZipDecodedEntry entry = Assert.Single(entries);
+    Assert.Equal(fileName, entry.Name);
+    Assert.False(entry.IsDirectory);
+    Assert.Equal(plain, entry.Bytes);
   }
 
   [Fact]
@@ -599,37 +641,34 @@ public sealed class SevenZipArchiveDecoderGostKuznyechikSingleCoderTests
     return archive;
   }
 
-  private static byte[] CreatePackedForUnsupportedKdfTest()
+  private static byte[] Build7zArchive_SingleFile_GostKuznyechikSingleCoder_StribogKdf(
+      ReadOnlySpan<byte> plainFileBytes,
+      string fileName,
+      SevenZipPassword password)
   {
-    var packed = new byte[32];
+    byte[] plainFileBytesArray = plainFileBytes.ToArray();
 
-    for (int i = 0; i < packed.Length; i++)
-      packed[i] = unchecked((byte)(i * 19 + 7));
-
-    return packed;
-  }
-
-  private static byte[] Build7zArchive_SingleFile_GostKuznyechikSingleCoder_UnsupportedKdf(
-      ReadOnlySpan<byte> packedBytes,
-      string fileName)
-  {
-    byte[] packedBytesArray = packedBytes.ToArray();
-
-    byte[] salt = [0xA1, 0xA2];
+    byte[] salt = [0xA1, 0xA2, 0xA3, 0xA4];
     byte[] iv = [0x12, 0x34, 0x56, 0x78, 0x90, 0xAB, 0xCE, 0xF0];
-    byte[] gostProperties = CreateGostUnsupportedKdfProperties(salt, iv);
+    // numCyclesPower=4 (16 раундов) — парольный KDF через Стрибог, не direct-key.
+    byte[] gostProperties = CreateGostStribogKdfProperties(numCyclesPower: 4, salt, iv);
+
+    byte[] encrypted = EncryptKuznyechikStribogKeyForTest(
+        propertiesBytes: gostProperties,
+        password: password,
+        plain: plainFileBytesArray);
 
     byte[] nextHeader = BuildHeaderSingleFolderGostKuznyechikSingleCoder(
-        packSize: (ulong)packedBytesArray.Length,
+        packSize: (ulong)encrypted.Length,
         gostProperties: gostProperties,
-        unpackSize: (ulong)packedBytesArray.Length,
+        unpackSize: (ulong)plainFileBytesArray.Length,
         fileName: fileName,
-        folderCrc: null);
+        folderCrc: Crc32.Compute(plainFileBytesArray));
 
     uint nextHeaderCrc = Crc32.Compute(nextHeader);
 
     var signatureHeader = new SevenZipSignatureHeader(
-        NextHeaderOffset: (ulong)packedBytesArray.Length,
+        NextHeaderOffset: (ulong)encrypted.Length,
         NextHeaderSize: (ulong)nextHeader.Length,
         NextHeaderCrc: nextHeaderCrc);
 
@@ -638,17 +677,18 @@ public sealed class SevenZipArchiveDecoderGostKuznyechikSingleCoderTests
 
     byte[] archive = new byte[
         signatureHeaderBytes.Length +
-        packedBytesArray.Length +
+        encrypted.Length +
         nextHeader.Length];
 
     signatureHeaderBytes.CopyTo(archive.AsSpan(0));
-    packedBytesArray.CopyTo(archive.AsSpan(signatureHeaderBytes.Length));
-    nextHeader.CopyTo(archive.AsSpan(signatureHeaderBytes.Length + packedBytesArray.Length));
+    encrypted.CopyTo(archive.AsSpan(signatureHeaderBytes.Length));
+    nextHeader.CopyTo(archive.AsSpan(signatureHeaderBytes.Length + encrypted.Length));
 
     return archive;
   }
 
-  private static byte[] CreateGostUnsupportedKdfProperties(
+  private static byte[] CreateGostStribogKdfProperties(
+      byte numCyclesPower,
       byte[] salt,
       byte[] iv)
   {
@@ -659,7 +699,7 @@ public sealed class SevenZipArchiveDecoderGostKuznyechikSingleCoderTests
 
     properties[0] = SevenZipGostCoder.CurrentPropertiesVersion;
     properties[1] = 0x00;
-    properties[2] = 0x03; // Обычный GOST-KDF пока не реализован.
+    properties[2] = numCyclesPower;
     properties[3] = (byte)salt.Length;
     properties[4] = (byte)iv.Length;
 
@@ -667,6 +707,34 @@ public sealed class SevenZipArchiveDecoderGostKuznyechikSingleCoderTests
     iv.CopyTo(properties.AsSpan(5 + salt.Length));
 
     return properties;
+  }
+
+  private static byte[] EncryptKuznyechikStribogKeyForTest(
+      byte[] propertiesBytes,
+      SevenZipPassword password,
+      byte[] plain)
+  {
+    Assert.True(SevenZipGostCoder.TryParseProperties(
+        propertiesBytes,
+        out SevenZipGostProperties? properties));
+
+    byte[] key = new byte[SevenZipGostKeyDerivation.Gost256KeySize];
+
+    try
+    {
+      Assert.True(SevenZipGostKeyDerivation.TryDeriveStribogKey(properties!, password, key));
+      Assert.True(GostKuznyechikCtrTransform.TryTransform(
+          key,
+          properties!.InitializationVector,
+          plain,
+          out byte[] encrypted));
+
+      return encrypted;
+    }
+    finally
+    {
+      Array.Clear(key);
+    }
   }
 
   private static string CreateTempRoot()

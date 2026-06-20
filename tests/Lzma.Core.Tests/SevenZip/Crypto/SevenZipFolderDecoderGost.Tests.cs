@@ -61,8 +61,13 @@ public sealed class SevenZipFolderDecoderGostTests
 
   [Theory]
   [MemberData(nameof(KnownGostMethodIds))]
-  public void DecodeFolderToArray_GostСПереданнымПаролем_ПокаВозвращаетNotSupported(byte[] methodId)
+  public void DecodeFolderToArray_GostСПаролемИПустымIv_ВозвращаетInvalidData(byte[] methodId)
   {
+    // numCyclesPower=0x03 теперь обрабатывается парольным KDF через Стрибог
+    // (путь с паролем больше не NotSupported). При пустом IV (ivSize=0) шифр
+    // отвергает вектор инициализации — для обоих шифров это InvalidData
+    // (Кузнечик ждёт 8 байт, Магма — 4). Криптокорректность round-trip
+    // проверяется отдельно в SevenZipFolderDecoderGostDecryptTests.
     SevenZipStreamsInfo streamsInfo = CreateSingleGostCoderStreamsInfo(
         methodId: methodId,
         gostProperties:
@@ -84,7 +89,7 @@ public sealed class SevenZipFolderDecoderGostTests
         options: options,
         output: out byte[] output);
 
-    Assert.Equal(SevenZipFolderDecodeResult.NotSupported, result);
+    Assert.Equal(SevenZipFolderDecodeResult.InvalidData, result);
     Assert.Empty(output);
   }
 
