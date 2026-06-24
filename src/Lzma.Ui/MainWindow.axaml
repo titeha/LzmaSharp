@@ -3,15 +3,51 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:vm="using:Lzma.Ui.ViewModels"
-        mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
+        xmlns:models="using:Lzma.Ui.Models"
+        mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="560"
         x:Class="Lzma.Ui.MainWindow"
         x:DataType="vm:MainViewModel"
         Title="{Binding Title}"
         Width="900" Height="560"
         WindowStartupLocation="CenterScreen">
-    <TextBlock Text="Откройте архив, чтобы просмотреть его содержимое."
-               HorizontalAlignment="Center"
-               VerticalAlignment="Center"
-               Foreground="Gray"
-               Margin="24" />
+
+    <DockPanel>
+
+        <!-- Тулбар -->
+        <Border DockPanel.Dock="Top" Padding="8" BorderThickness="0,0,0,1"
+                BorderBrush="{DynamicResource ThemeBorderMidBrush}">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Content="Открыть…" Command="{Binding OpenCommand}" />
+            </StackPanel>
+        </Border>
+
+        <!-- Статусная строка -->
+        <Border DockPanel.Dock="Bottom" Padding="8,6"
+                IsVisible="{Binding StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+            <TextBlock Text="{Binding StatusMessage}" TextWrapping="Wrap" Foreground="Gray" />
+        </Border>
+
+        <!-- Содержимое -->
+        <Panel>
+            <!-- Пустое состояние -->
+            <TextBlock Text="Откройте архив, чтобы просмотреть его содержимое."
+                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                       Foreground="Gray" Margin="24"
+                       IsVisible="{Binding !HasArchive}" />
+
+            <!-- Список содержимого -->
+            <ListBox ItemsSource="{Binding Items}" IsVisible="{Binding HasArchive}">
+                <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="models:ArchiveItem">
+                        <Grid ColumnDefinitions="*,Auto,70">
+                            <TextBlock Grid.Column="0" Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Grid.Column="1" Text="{Binding DisplaySize}" Margin="12,0" Foreground="Gray" />
+                            <TextBlock Grid.Column="2" Text="{Binding Kind}" Foreground="Gray" />
+                        </Grid>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+        </Panel>
+
+    </DockPanel>
 </Window>
