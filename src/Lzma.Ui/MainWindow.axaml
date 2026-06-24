@@ -18,6 +18,9 @@
                 BorderBrush="{DynamicResource ThemeBorderMidBrush}">
             <StackPanel Orientation="Horizontal" Spacing="8">
                 <Button Content="Открыть…" Command="{Binding OpenCommand}" />
+                <Button Content="Вверх" Command="{Binding NavigateUpCommand}" />
+                <TextBlock Text="{Binding CurrentPath}" VerticalAlignment="Center"
+                           Foreground="Gray" TextTrimming="CharacterEllipsis" />
             </StackPanel>
         </Border>
 
@@ -35,18 +38,35 @@
                        Foreground="Gray" Margin="24"
                        IsVisible="{Binding !HasArchive}" />
 
-            <!-- Список содержимого -->
-            <ListBox ItemsSource="{Binding Items}" IsVisible="{Binding HasArchive}">
-                <ListBox.ItemTemplate>
-                    <DataTemplate x:DataType="models:ArchiveItem">
-                        <Grid ColumnDefinitions="*,Auto,70">
-                            <TextBlock Grid.Column="0" Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
-                            <TextBlock Grid.Column="1" Text="{Binding DisplaySize}" Margin="12,0" Foreground="Gray" />
-                            <TextBlock Grid.Column="2" Text="{Binding Kind}" Foreground="Gray" />
-                        </Grid>
-                    </DataTemplate>
-                </ListBox.ItemTemplate>
-            </ListBox>
+            <!-- Таблица содержимого -->
+            <Grid IsVisible="{Binding HasArchive}" RowDefinitions="Auto,*">
+
+                <!-- Заголовок таблицы -->
+                <Border Grid.Row="0" Padding="14,6" BorderThickness="0,0,0,1"
+                        BorderBrush="{DynamicResource ThemeBorderMidBrush}"
+                        Background="{DynamicResource ThemeBackgroundBrush}">
+                    <Grid ColumnDefinitions="24,*,120,90">
+                        <TextBlock Grid.Column="1" Text="Имя" FontWeight="SemiBold" />
+                        <TextBlock Grid.Column="2" Text="Размер" FontWeight="SemiBold" />
+                        <TextBlock Grid.Column="3" Text="Тип" FontWeight="SemiBold" />
+                    </Grid>
+                </Border>
+
+                <ListBox Grid.Row="1" ItemsSource="{Binding Items}"
+                         SelectionMode="Single"
+                         DoubleTapped="OnItemDoubleTapped">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate x:DataType="models:ArchiveItem">
+                            <Grid ColumnDefinitions="24,*,120,90">
+                                <TextBlock Grid.Column="0" Text="{Binding Icon}" />
+                                <TextBlock Grid.Column="1" Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
+                                <TextBlock Grid.Column="2" Text="{Binding DisplaySize}" Foreground="Gray" />
+                                <TextBlock Grid.Column="3" Text="{Binding Kind}" Foreground="Gray" />
+                            </Grid>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </Grid>
         </Panel>
 
     </DockPanel>

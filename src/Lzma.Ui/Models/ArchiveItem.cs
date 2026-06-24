@@ -20,6 +20,9 @@ public sealed class ArchiveItem
   /// <summary>Тип элемента для колонки.</summary>
   public string Kind => IsDirectory ? "папка" : "файл";
 
+  /// <summary>Значок элемента (папка/файл).</summary>
+  public string Icon => IsDirectory ? "📁" : "📄";
+
   private static string FormatSize(long bytes)
   {
     string[] units = ["Б", "КБ", "МБ", "ГБ", "ТБ"];
