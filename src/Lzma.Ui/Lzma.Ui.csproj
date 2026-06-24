@@ -22,4 +22,8 @@
   <ItemGroup>
     <ProjectReference Include="..\Lzma.Core\Lzma.Core.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Lzma.Ui.Tests" />
+  </ItemGroup>
 </Project>
