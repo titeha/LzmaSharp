@@ -4,11 +4,12 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
         x:Class="Lzma.Ui.MainWindow"
-        Title="LzmaSharp"
+        Title="LzmaSharp — архиватор"
         Width="900" Height="560"
         WindowStartupLocation="CenterScreen">
-    <TextBlock Text="LzmaSharp — каркас UI (Avalonia). Шаг 1: пустое окно."
+    <TextBlock Text="Откройте архив, чтобы просмотреть его содержимое."
                HorizontalAlignment="Center"
                VerticalAlignment="Center"
+               Foreground="Gray"
                Margin="24" />
 </Window>
