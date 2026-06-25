@@ -172,6 +172,13 @@ public sealed class Lzma2IncrementalDecoder
 
           if (header.Kind == Lzma2ChunkKind.Copy)
           {
+            // Байты несжатого чанка должны попасть в словарь LZMA (для матчей из будущих
+            // LZMA-чанков). Поэтому держим экземпляр декодера-владельца словаря.
+            _lzma ??= new Lzma1.LzmaDecoder(new Lzma1.LzmaProperties(3, 0, 2), _dictionarySize);
+
+            if (header.ResetDictionary)
+              _lzma.ResetDictionaryForCopyChunk();
+
             _copyRemaining = (uint)header.UnpackSize;
             _state = DecoderState.CopyingPayload;
             continue;
@@ -247,7 +254,10 @@ public sealed class Lzma2IncrementalDecoder
 
           int copyNow = (int)Math.Min(_copyRemaining, (uint)Math.Min(input.Length, output.Length));
 
-          input[..copyNow].CopyTo(output);
+          // Пишем в выход И в словарь LZMA (через декодер-владельца словаря).
+          int copyOutPos = 0;
+          _lzma!.AppendUncompressed(input[..copyNow], output, ref copyOutPos);
+
           input = input[copyNow..];
           output = output[copyNow..];
 

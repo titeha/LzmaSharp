@@ -101,6 +101,45 @@ public sealed class LzmaDictionary
   }
 
   /// <summary>
+  /// <para>Добавляет сырые (несжатые) байты в словарь и одновременно в выход.</para>
+  /// <para>
+  /// Нужно для несжатых (copy) чанков LZMA2: их байты обязаны попасть в словарь,
+  /// чтобы последующие LZMA-чанки могли ссылаться на них матчами. Копирует столько,
+  /// сколько помещается в выход (<paramref name="output"/>), и возвращает это число.
+  /// </para>
+  /// </summary>
+  public int AppendBytes(ReadOnlySpan<byte> src, Span<byte> output, ref int outputPos)
+  {
+    if ((uint)outputPos > (uint)output.Length)
+      throw new ArgumentOutOfRangeException(nameof(outputPos), "outputPos не может быть больше длины выходного буфера.");
+
+    int total = Math.Min(src.Length, output.Length - outputPos);
+    int copied = 0;
+
+    while (copied < total)
+    {
+      int seg = total - copied;
+      int posToEnd = _buffer.Length - _pos;
+      if (seg > posToEnd)
+        seg = posToEnd;
+
+      ReadOnlySpan<byte> chunk = src.Slice(copied, seg);
+      chunk.CopyTo(_buffer.AsSpan(_pos, seg));        // в словарь
+      chunk.CopyTo(output.Slice(outputPos, seg));     // в выход
+
+      _pos += seg;
+      if (_pos == _buffer.Length)
+        _pos = 0;
+
+      outputPos += seg;
+      copied += seg;
+    }
+
+    _totalWritten += copied;
+    return copied;
+  }
+
+  /// <summary>
   /// <para>Копирует "матч" (distance, length): берёт байты из словаря на distance назад и пишет length байт в выход.</para>
   /// <para>Важно: копирование может перекрываться, поэтому копируем по одному байту.</para>
   /// </summary>

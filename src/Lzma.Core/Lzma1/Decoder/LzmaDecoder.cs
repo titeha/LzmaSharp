@@ -772,4 +772,29 @@ public sealed class LzmaDecoder
     if (resetState) // Actual state/probability reset happens in Step.RangeInit after range init bytes are read.
       _step = Step.RangeInit;
   }
+
+  /// <summary>
+  /// Добавляет байты несжатого (copy) LZMA2-чанка в словарь и в выход. Эти байты обязаны
+  /// попасть в словарь, чтобы последующие LZMA-чанки могли ссылаться на них матчами.
+  /// Возвращает число записанных байт (ограничено размером выходного буфера).
+  /// </summary>
+  internal int AppendUncompressed(ReadOnlySpan<byte> src, Span<byte> output, ref int outputPos)
+  {
+    int copied = _dictionary.AppendBytes(src, output, ref outputPos);
+
+    if (copied > 0)
+      _previousByte = src[copied - 1]; // контекст для последующих литералов
+
+    return copied;
+  }
+
+  /// <summary>
+  /// Сбрасывает словарь для несжатого (copy) LZMA2-чанка с reset-флагом (control 0x01).
+  /// LZMA-состояние/модели не трогаются (у copy-чанков их нет).
+  /// </summary>
+  internal void ResetDictionaryForCopyChunk()
+  {
+    _dictionary.Reset(clearBuffer: false);
+    _previousByte = 0;
+  }
 }
