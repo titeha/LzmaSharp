@@ -67,7 +67,7 @@ public sealed class MainViewModelTests
   }
 
   [Fact]
-  public void ApplyResult_NotSupported_СбрасываетИПоказываетПодсказкуПроПароль()
+  public void ApplyResult_NotSupported_СбрасываетИСообщаетОНеподдержке()
   {
     MainViewModel vm = CreateViewModel();
     vm.ApplyResult("x.7z", SevenZipArchiveDecodeResult.Ok, [new("a", [1], false)]);
@@ -78,7 +78,9 @@ public sealed class MainViewModelTests
     Assert.Empty(vm.Items);
     Assert.Equal(MainViewModel.DefaultTitle, vm.Title);
     Assert.NotNull(vm.StatusMessage);
-    Assert.Contains("парол", vm.StatusMessage);
+    // Сообщение про неподдерживаемую возможность, а НЕ про неверный пароль.
+    Assert.Contains("неподдерж", vm.StatusMessage);
+    Assert.DoesNotContain("парол", vm.StatusMessage);
   }
 
   [Fact]
