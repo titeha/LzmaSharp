@@ -21,7 +21,8 @@ public partial class App : Application
             var window = new MainWindow();
             var picker = new AvaloniaArchivePicker(window);
             var passwordPrompt = new AvaloniaPasswordPrompt(window);
-            window.DataContext = new MainViewModel(picker, passwordPrompt);
+            var folderPicker = new AvaloniaFolderPicker(window);
+            window.DataContext = new MainViewModel(picker, passwordPrompt, folderPicker);
             desktop.MainWindow = window;
         }
 

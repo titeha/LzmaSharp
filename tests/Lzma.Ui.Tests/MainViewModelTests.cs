@@ -23,8 +23,14 @@ public sealed class MainViewModelTests
         => Task.FromResult<string?>(null);
   }
 
+  // Стаб выбора папки по умолчанию: всегда отмена (извлечение в этих тестах не используется).
+  private sealed class CancellingFolderPicker : IFolderPicker
+  {
+    public Task<string?> PickFolderAsync() => Task.FromResult<string?>(null);
+  }
+
   private static MainViewModel CreateViewModel(PickedArchive? picked = null)
-      => new(new StubArchivePicker(picked), new CancellingPasswordPrompt());
+      => new(new StubArchivePicker(picked), new CancellingPasswordPrompt(), new CancellingFolderPicker());
 
   // ---- ApplyResult: чистая логика отображения результата ----
 

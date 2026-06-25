@@ -20,9 +20,14 @@ public sealed class MainViewModelNavigationTests
         => Task.FromResult<string?>(null);
   }
 
+  private sealed class NullFolderPicker : IFolderPicker
+  {
+    public Task<string?> PickFolderAsync() => Task.FromResult<string?>(null);
+  }
+
   private static MainViewModel CreateOpened(params SevenZipDecodedEntry[] entries)
   {
-    var vm = new MainViewModel(new NullPicker(), new NullPasswordPrompt());
+    var vm = new MainViewModel(new NullPicker(), new NullPasswordPrompt(), new NullFolderPicker());
     vm.ApplyResult("test.7z", SevenZipArchiveDecodeResult.Ok, entries);
     return vm;
   }

@@ -17,6 +17,11 @@ public sealed class MainViewModelPasswordTests
     public Task<PickedArchive?> PickAsync() => Task.FromResult(result);
   }
 
+  private sealed class NullFolderPicker : IFolderPicker
+  {
+    public Task<string?> PickFolderAsync() => Task.FromResult<string?>(null);
+  }
+
   // Очередь ответов на запрос пароля; фиксирует число вызовов и флаги «прошлая попытка неверна».
   private sealed class QueuedPasswordPrompt(params string?[] responses) : IPasswordPrompt
   {
@@ -63,7 +68,7 @@ public sealed class MainViewModelPasswordTests
   {
     (byte[] archive, _) = BuildEncryptedArchive();
     var prompt = new QueuedPasswordPrompt(CorrectPassword);
-    var vm = new MainViewModel(new StubPicker(new PickedArchive("enc.7z", archive)), prompt);
+    var vm = new MainViewModel(new StubPicker(new PickedArchive("enc.7z", archive)), prompt, new NullFolderPicker());
 
     await vm.OpenCommand.ExecuteAsync();
 
@@ -79,7 +84,7 @@ public sealed class MainViewModelPasswordTests
   {
     (byte[] archive, _) = BuildEncryptedArchive();
     var prompt = new QueuedPasswordPrompt("wrong", CorrectPassword);
-    var vm = new MainViewModel(new StubPicker(new PickedArchive("enc.7z", archive)), prompt);
+    var vm = new MainViewModel(new StubPicker(new PickedArchive("enc.7z", archive)), prompt, new NullFolderPicker());
 
     await vm.OpenCommand.ExecuteAsync();
 
@@ -95,7 +100,7 @@ public sealed class MainViewModelPasswordTests
   {
     (byte[] archive, _) = BuildEncryptedArchive();
     var prompt = new QueuedPasswordPrompt((string?)null); // сразу отмена
-    var vm = new MainViewModel(new StubPicker(new PickedArchive("enc.7z", archive)), prompt);
+    var vm = new MainViewModel(new StubPicker(new PickedArchive("enc.7z", archive)), prompt, new NullFolderPicker());
 
     await vm.OpenCommand.ExecuteAsync();
 
@@ -126,7 +131,7 @@ public sealed class MainViewModelPasswordTests
   {
     byte[] archive = ReadRealArchive(fileName);
     var prompt = new QueuedPasswordPrompt("LzmaSharp-AES-Stage15");
-    var vm = new MainViewModel(new StubPicker(new PickedArchive(fileName, archive)), prompt);
+    var vm = new MainViewModel(new StubPicker(new PickedArchive(fileName, archive)), prompt, new NullFolderPicker());
 
     await vm.OpenCommand.ExecuteAsync();
 
@@ -138,7 +143,7 @@ public sealed class MainViewModelPasswordTests
   {
     (byte[] archive, _) = BuildEncryptedArchive();
     var prompt = new QueuedPasswordPrompt("wrong", null);
-    var vm = new MainViewModel(new StubPicker(new PickedArchive("enc.7z", archive)), prompt);
+    var vm = new MainViewModel(new StubPicker(new PickedArchive("enc.7z", archive)), prompt, new NullFolderPicker());
 
     await vm.OpenCommand.ExecuteAsync();
 

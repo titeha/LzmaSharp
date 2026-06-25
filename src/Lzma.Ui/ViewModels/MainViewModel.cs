@@ -20,6 +20,11 @@ public sealed class MainViewModel : ObservableObject
 
   private readonly IArchivePicker _picker;
   private readonly IPasswordPrompt _passwordPrompt;
+  private readonly IFolderPicker _folderPicker;
+
+  // Байты и пароль успешно открытого архива — нужны для извлечения без повторного открытия.
+  private byte[]? _archiveBytes;
+  private string? _archivePassword;
 
   // Узел виртуального дерева содержимого архива.
   private sealed class Node(string name, bool isDirectory, Node? parent)
@@ -39,14 +44,17 @@ public sealed class MainViewModel : ObservableObject
   private bool _hasArchive;
   private string _currentPath = string.Empty;
   private bool _canGoUp;
+  private bool _isBusy;
 
-  public MainViewModel(IArchivePicker picker, IPasswordPrompt passwordPrompt)
+  public MainViewModel(IArchivePicker picker, IPasswordPrompt passwordPrompt, IFolderPicker folderPicker)
   {
     _picker = picker;
     _passwordPrompt = passwordPrompt;
+    _folderPicker = folderPicker;
     _current = _root;
     OpenCommand = new AsyncRelayCommand(OpenAsync);
     NavigateUpCommand = new RelayCommand(NavigateUp, () => CanGoUp, this);
+    ExtractAllCommand = new AsyncRelayCommand(ExtractAllAsync, () => HasArchive && !IsBusy, this);
   }
 
   /// <summary>Заголовок окна: базовый либо «имя_архива — LzmaSharp» при открытом архиве.</summary>
@@ -84,6 +92,13 @@ public sealed class MainViewModel : ObservableObject
     set => Set(ref _canGoUp, value);
   }
 
+  /// <summary>Идёт длительная операция (извлечение) — UI занят.</summary>
+  public bool IsBusy
+  {
+    get => _isBusy;
+    set => Set(ref _isBusy, value);
+  }
+
   /// <summary>Содержимое текущей папки архива.</summary>
   public ObservableCollection<ArchiveItem> Items { get; } = [];
 
@@ -92,6 +107,9 @@ public sealed class MainViewModel : ObservableObject
 
   /// <summary>Команда «Вверх» (на уровень выше по дереву архива).</summary>
   public RelayCommand NavigateUpCommand { get; }
+
+  /// <summary>Команда «Извлечь всё» — распаковать содержимое архива в выбранную папку.</summary>
+  public AsyncRelayCommand ExtractAllCommand { get; }
 
   /// <summary>Войти в элемент: для папки — перейти внутрь; файлы пока игнорируются.</summary>
   public void NavigateInto(ArchiveItem item)
@@ -126,9 +144,16 @@ public sealed class MainViewModel : ObservableObject
     // Первая попытка — без пароля.
     (SevenZipArchiveDecodeResult result, SevenZipDecodedEntry[] entries) = await DecodeAsync(picked.Bytes, password: null);
 
+    if (result == SevenZipArchiveDecodeResult.Ok)
+    {
+      ApplyResult(picked.Name, result, entries);
+      StoreOpenedArchive(picked.Bytes, password: null);
+      return;
+    }
+
     if (result != SevenZipArchiveDecodeResult.NotSupported)
     {
-      // Ok — показываем; InvalidData без пароля — повреждён/не архив (пароль не спрашиваем).
+      // InvalidData без пароля — повреждён/не архив (пароль не спрашиваем).
       ApplyResult(picked.Name, result, entries);
       return;
     }
@@ -151,6 +176,7 @@ public sealed class MainViewModel : ObservableObject
       if (result == SevenZipArchiveDecodeResult.Ok)
       {
         ApplyResult(picked.Name, result, entries);
+        StoreOpenedArchive(picked.Bytes, password);
         return;
       }
 
@@ -164,6 +190,62 @@ public sealed class MainViewModel : ObservableObject
       // NotSupported даже с паролем — неподдерживаемая возможность, повтор не поможет.
       ApplyResult(picked.Name, result, entries);
       return;
+    }
+  }
+
+  private void StoreOpenedArchive(byte[] bytes, string? password)
+  {
+    _archiveBytes = bytes;
+    _archivePassword = password;
+  }
+
+  // Извлечение содержимого открытого архива в выбранную папку.
+  private async Task ExtractAllAsync()
+  {
+    if (_archiveBytes is null)
+      return;
+
+    string? destination = await _folderPicker.PickFolderAsync();
+
+    if (destination is null)
+      return; // выбор папки отменён
+
+    byte[] bytes = _archiveBytes;
+    string? password = _archivePassword;
+
+    IsBusy = true;
+
+    try
+    {
+      SevenZipArchiveDecodeResult result = await Task.Run(() =>
+      {
+        SevenZipPassword? sevenZipPassword = null;
+
+        try
+        {
+          SevenZipDecodeOptions options = password is null
+              ? SevenZipDecodeOptions.Default
+              : SevenZipDecodeOptions.WithPassword(sevenZipPassword = SevenZipPassword.FromString(password));
+
+          return SevenZipArchiveDecoder.ExtractToDirectory(
+              bytes, options, destination, overwrite: false, out _);
+        }
+        finally
+        {
+          sevenZipPassword?.Dispose();
+        }
+      });
+
+      StatusMessage = result switch
+      {
+        SevenZipArchiveDecodeResult.Ok => $"Извлечено в: {destination}",
+        SevenZipArchiveDecodeResult.NotSupported => "Извлечение не поддерживается для этого архива.",
+        _ => "Не удалось извлечь: ошибка данных или файл уже существует.",
+      };
+    }
+    finally
+    {
+      IsBusy = false;
     }
   }
 
@@ -272,6 +354,8 @@ public sealed class MainViewModel : ObservableObject
 
     HasArchive = false;
     Title = DefaultTitle;
+    _archiveBytes = null;
+    _archivePassword = null;
   }
 
   // Пересобирает список текущей папки и навигационное состояние.
