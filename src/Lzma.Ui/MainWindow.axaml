@@ -28,10 +28,12 @@
             </StackPanel>
         </Border>
 
-        <!-- Статусная строка -->
-        <Border DockPanel.Dock="Bottom" Padding="8,6"
+        <!-- Статусная строка (выделяемая — можно скопировать диагностику) -->
+        <Border DockPanel.Dock="Bottom" Padding="8,6" MaxHeight="120"
                 IsVisible="{Binding StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-            <TextBlock Text="{Binding StatusMessage}" TextWrapping="Wrap" Foreground="Gray" />
+            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <SelectableTextBlock Text="{Binding StatusMessage}" TextWrapping="Wrap" Foreground="Gray" />
+            </ScrollViewer>
         </Border>
 
         <!-- Содержимое -->
