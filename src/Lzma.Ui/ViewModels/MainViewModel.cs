@@ -155,6 +155,7 @@ public sealed class MainViewModel : ObservableObject
     {
       // InvalidData без пароля — повреждён/не архив (пароль не спрашиваем).
       ApplyResult(picked.Name, result, entries);
+      await AppendDiagnosticsAsync(picked.Bytes, password: null);
       return;
     }
 
@@ -189,8 +190,22 @@ public sealed class MainViewModel : ObservableObject
 
       // NotSupported даже с паролем — неподдерживаемая возможность, повтор не поможет.
       ApplyResult(picked.Name, result, entries);
+      await AppendDiagnosticsAsync(picked.Bytes, password);
       return;
     }
+  }
+
+  // Дополняет сообщение об ошибке списком методов архива (что именно не поддержано).
+  private async Task AppendDiagnosticsAsync(byte[] bytes, string? password)
+  {
+    string description = await Task.Run(() =>
+    {
+      SevenZipArchiveInspector.TryDescribeMethods(bytes, password, out string d);
+      return d;
+    });
+
+    if (!string.IsNullOrEmpty(description))
+      StatusMessage += $"  Методы в архиве: {description}.";
   }
 
   private void StoreOpenedArchive(byte[] bytes, string? password)
