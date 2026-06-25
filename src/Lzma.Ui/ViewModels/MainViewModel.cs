@@ -19,6 +19,7 @@ public sealed class MainViewModel : ObservableObject
   public const string DefaultTitle = "LzmaSharp — архиватор";
 
   private readonly IArchivePicker _picker;
+  private readonly IPasswordPrompt _passwordPrompt;
 
   // Узел виртуального дерева содержимого архива.
   private sealed class Node(string name, bool isDirectory, Node? parent)
@@ -39,9 +40,10 @@ public sealed class MainViewModel : ObservableObject
   private string _currentPath = string.Empty;
   private bool _canGoUp;
 
-  public MainViewModel(IArchivePicker picker)
+  public MainViewModel(IArchivePicker picker, IPasswordPrompt passwordPrompt)
   {
     _picker = picker;
+    _passwordPrompt = passwordPrompt;
     _current = _root;
     OpenCommand = new AsyncRelayCommand(OpenAsync);
     NavigateUpCommand = new RelayCommand(NavigateUp, () => CanGoUp, this);
@@ -121,14 +123,80 @@ public sealed class MainViewModel : ObservableObject
     if (picked is null)
       return; // выбор отменён — состояние не трогаем
 
-    // Декодирование — CPU-работа, уводим с UI-потока, чтобы окно не подвисало.
-    (SevenZipArchiveDecodeResult result, SevenZipDecodedEntry[] entries) = await Task.Run(() =>
-    {
-      SevenZipArchiveDecodeResult r = SevenZipArchiveDecoder.DecodeToEntries(picked.Bytes, out SevenZipDecodedEntry[] e);
-      return (r, e);
-    });
+    // Первая попытка — без пароля.
+    (SevenZipArchiveDecodeResult result, SevenZipDecodedEntry[] entries) = await DecodeAsync(picked.Bytes, password: null);
 
-    ApplyResult(picked.Name, result, entries);
+    if (result != SevenZipArchiveDecodeResult.NotSupported)
+    {
+      // Ok — показываем; InvalidData без пароля — повреждён/не архив (пароль не спрашиваем).
+      ApplyResult(picked.Name, result, entries);
+      return;
+    }
+
+    // NotSupported без пароля — возможно, архив зашифрован. Спрашиваем пароль (с повтором).
+    bool previousAttemptFailed = false;
+
+    while (true)
+    {
+      string? password = await _passwordPrompt.RequestAsync(picked.Name, previousAttemptFailed);
+
+      if (password is null)
+      {
+        ShowPasswordCancelled();
+        return; // пользователь отменил ввод пароля
+      }
+
+      (result, entries) = await DecodeAsync(picked.Bytes, password);
+
+      if (result == SevenZipArchiveDecodeResult.Ok)
+      {
+        ApplyResult(picked.Name, result, entries);
+        return;
+      }
+
+      if (result == SevenZipArchiveDecodeResult.InvalidData)
+      {
+        // Неверный пароль (несовпадение CRC) — предлагаем ввести заново.
+        previousAttemptFailed = true;
+        continue;
+      }
+
+      // NotSupported даже с паролем — неподдерживаемая возможность, повтор не поможет.
+      ApplyResult(picked.Name, result, entries);
+      return;
+    }
+  }
+
+  // Декодирование с опциональным паролем — CPU-работа, уводим с UI-потока.
+  private static Task<(SevenZipArchiveDecodeResult Result, SevenZipDecodedEntry[] Entries)> DecodeAsync(
+      byte[] bytes,
+      string? password)
+  {
+    return Task.Run(() =>
+    {
+      SevenZipPassword? sevenZipPassword = null;
+
+      try
+      {
+        SevenZipDecodeOptions options = password is null
+            ? SevenZipDecodeOptions.Default
+            : SevenZipDecodeOptions.WithPassword(sevenZipPassword = SevenZipPassword.FromString(password));
+
+        SevenZipArchiveDecodeResult r = SevenZipArchiveDecoder.DecodeToEntries(bytes, options, out SevenZipDecodedEntry[] e);
+        return (r, e);
+      }
+      finally
+      {
+        sevenZipPassword?.Dispose();
+      }
+    });
+  }
+
+  // Открытие зашифрованного архива отменено пользователем.
+  internal void ShowPasswordCancelled()
+  {
+    ResetTree();
+    StatusMessage = "Открытие отменено: для зашифрованного архива требуется пароль.";
   }
 
   // Чистая логика применения результата — без UI/IO, удобно тестировать.
@@ -149,8 +217,8 @@ public sealed class MainViewModel : ObservableObject
     ResetTree();
 
     StatusMessage = result == SevenZipArchiveDecodeResult.NotSupported
-        ? "Не удалось открыть: возможно, архив зашифрован (ввод пароля будет добавлен) "
-          + "или используется неподдерживаемая возможность."
+        ? "Не удалось открыть: возможно, неверный пароль либо используется "
+          + "неподдерживаемая возможность формата."
         : "Не удалось открыть: файл повреждён или не является поддерживаемым 7z-архивом.";
   }
 

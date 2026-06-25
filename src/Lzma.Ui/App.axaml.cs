@@ -20,7 +20,8 @@ public partial class App : Application
         {
             var window = new MainWindow();
             var picker = new AvaloniaArchivePicker(window);
-            window.DataContext = new MainViewModel(picker);
+            var passwordPrompt = new AvaloniaPasswordPrompt(window);
+            window.DataContext = new MainViewModel(picker, passwordPrompt);
             desktop.MainWindow = window;
         }
 

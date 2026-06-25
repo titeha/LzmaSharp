@@ -14,9 +14,15 @@ public sealed class MainViewModelNavigationTests
     public Task<PickedArchive?> PickAsync() => Task.FromResult<PickedArchive?>(null);
   }
 
+  private sealed class NullPasswordPrompt : IPasswordPrompt
+  {
+    public Task<string?> RequestAsync(string archiveName, bool previousAttemptFailed)
+        => Task.FromResult<string?>(null);
+  }
+
   private static MainViewModel CreateOpened(params SevenZipDecodedEntry[] entries)
   {
-    var vm = new MainViewModel(new NullPicker());
+    var vm = new MainViewModel(new NullPicker(), new NullPasswordPrompt());
     vm.ApplyResult("test.7z", SevenZipArchiveDecodeResult.Ok, entries);
     return vm;
   }

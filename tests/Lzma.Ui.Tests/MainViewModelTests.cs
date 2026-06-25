@@ -16,8 +16,15 @@ public sealed class MainViewModelTests
     public Task<PickedArchive?> PickAsync() => Task.FromResult(_result);
   }
 
+  // Стаб запроса пароля по умолчанию: всегда отмена (для неэшифрованных сценариев — не вызывается).
+  private sealed class CancellingPasswordPrompt : IPasswordPrompt
+  {
+    public Task<string?> RequestAsync(string archiveName, bool previousAttemptFailed)
+        => Task.FromResult<string?>(null);
+  }
+
   private static MainViewModel CreateViewModel(PickedArchive? picked = null)
-      => new(new StubArchivePicker(picked));
+      => new(new StubArchivePicker(picked), new CancellingPasswordPrompt());
 
   // ---- ApplyResult: чистая логика отображения результата ----
 
