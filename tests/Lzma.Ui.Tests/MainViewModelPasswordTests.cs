@@ -1,5 +1,7 @@
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Text;
 
 using Lzma.Core.SevenZip;
@@ -102,6 +104,30 @@ public sealed class MainViewModelPasswordTests
     Assert.Equal(1, prompt.CallCount);
     Assert.NotNull(vm.StatusMessage);
     Assert.Contains("парол", vm.StatusMessage);
+  }
+
+  [Fact]
+  public async Task РеальныйAesАрхив7Zip_ВерныйПароль_Открывает()
+  {
+    // Диагностика: повторяем UI-поток на НАСТОЯЩЕМ AES-архиве из 7-Zip.
+    // Если открылся — ядро/VM в порядке, и баг «неверный пароль» живёт в диалоге UI.
+    byte[] archive = ReadAesTestArchive();
+    var prompt = new QueuedPasswordPrompt("LzmaSharp-AES-Stage15");
+    var vm = new MainViewModel(new StubPicker(new PickedArchive("aes.7z", archive)), prompt);
+
+    await vm.OpenCommand.ExecuteAsync();
+
+    Assert.True(vm.HasArchive);
+    Assert.Equal(1, prompt.CallCount);
+    Assert.NotEmpty(vm.Items);
+  }
+
+  private static byte[] ReadAesTestArchive([CallerFilePath] string caller = "")
+  {
+    string dir = Path.GetDirectoryName(caller)!;
+    string path = Path.GetFullPath(Path.Combine(
+        dir, "../Lzma.Core.Tests/SevenZip/TestData/Real/aes_lzma2_singlefile_pwd_mhe_off.7z"));
+    return File.ReadAllBytes(path);
   }
 
   [Fact]
