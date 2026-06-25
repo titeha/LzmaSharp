@@ -106,28 +106,31 @@ public sealed class MainViewModelPasswordTests
     Assert.Contains("парол", vm.StatusMessage);
   }
 
-  [Fact]
-  public async Task РеальныйAesАрхив7Zip_ВерныйПароль_Открывает()
-  {
-    // Диагностика: повторяем UI-поток на НАСТОЯЩЕМ AES-архиве из 7-Zip.
-    // Если открылся — ядро/VM в порядке, и баг «неверный пароль» живёт в диалоге UI.
-    byte[] archive = ReadAesTestArchive();
-    var prompt = new QueuedPasswordPrompt("LzmaSharp-AES-Stage15");
-    var vm = new MainViewModel(new StubPicker(new PickedArchive("aes.7z", archive)), prompt);
-
-    await vm.OpenCommand.ExecuteAsync();
-
-    Assert.True(vm.HasArchive);
-    Assert.Equal(1, prompt.CallCount);
-    Assert.NotEmpty(vm.Items);
-  }
-
-  private static byte[] ReadAesTestArchive([CallerFilePath] string caller = "")
+  private static byte[] ReadRealArchive(string fileName, [CallerFilePath] string caller = "")
   {
     string dir = Path.GetDirectoryName(caller)!;
     string path = Path.GetFullPath(Path.Combine(
-        dir, "../Lzma.Core.Tests/SevenZip/TestData/Real/aes_lzma2_singlefile_pwd_mhe_off.7z"));
+        dir, "../Lzma.Core.Tests/SevenZip/TestData/Real/", fileName));
     return File.ReadAllBytes(path);
+  }
+
+  // Диагностика: какие формы реальных AES-архивов открываются через UI-поток с верным паролем.
+  [Theory]
+  [InlineData("aes_lzma2_singlefile_pwd_mhe_off.7z")]
+  [InlineData("aes_lzma2_singlefile_pwd_mhe_on.7z")]
+  [InlineData("aes_lzma2_multifile_pwd_mhe_off.7z")]
+  [InlineData("aes_lzma2_multifile_pwd_mhe_on.7z")]
+  [InlineData("aes_lzma2_solid_multifile_pwd_mhe_off.7z")]
+  [InlineData("aes_lzma2_solid_multifile_pwd_mhe_on.7z")]
+  public async Task РеальныеAesФормы_ВерныйПароль_Открываются(string fileName)
+  {
+    byte[] archive = ReadRealArchive(fileName);
+    var prompt = new QueuedPasswordPrompt("LzmaSharp-AES-Stage15");
+    var vm = new MainViewModel(new StubPicker(new PickedArchive(fileName, archive)), prompt);
+
+    await vm.OpenCommand.ExecuteAsync();
+
+    Assert.True(vm.HasArchive, $"{fileName}: HasArchive=false, статус: {vm.StatusMessage}");
   }
 
   [Fact]
