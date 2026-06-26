@@ -21,6 +21,9 @@ public sealed class MainViewModel : ObservableObject
   private readonly IArchivePicker _picker;
   private readonly IPasswordPrompt _passwordPrompt;
   private readonly IFolderPicker _folderPicker;
+  private readonly IArchiveService _archiveService;
+  private readonly ISourceFilesPicker? _sourceFilesPicker;
+  private readonly ISaveFilePicker? _saveFilePicker;
 
   // Байты и пароль успешно открытого архива — нужны для извлечения без повторного открытия.
   private byte[]? _archiveBytes;
@@ -47,14 +50,38 @@ public sealed class MainViewModel : ObservableObject
   private bool _isBusy;
 
   public MainViewModel(IArchivePicker picker, IPasswordPrompt passwordPrompt, IFolderPicker folderPicker)
+      : this(picker, passwordPrompt, folderPicker, new LzmaArchiveService(), sourceFilesPicker: null, saveFilePicker: null)
+  {
+  }
+
+  public MainViewModel(
+      IArchivePicker picker,
+      IPasswordPrompt passwordPrompt,
+      IFolderPicker folderPicker,
+      IArchiveService archiveService)
+      : this(picker, passwordPrompt, folderPicker, archiveService, sourceFilesPicker: null, saveFilePicker: null)
+  {
+  }
+
+  public MainViewModel(
+      IArchivePicker picker,
+      IPasswordPrompt passwordPrompt,
+      IFolderPicker folderPicker,
+      IArchiveService archiveService,
+      ISourceFilesPicker? sourceFilesPicker,
+      ISaveFilePicker? saveFilePicker)
   {
     _picker = picker;
     _passwordPrompt = passwordPrompt;
     _folderPicker = folderPicker;
+    _archiveService = archiveService;
+    _sourceFilesPicker = sourceFilesPicker;
+    _saveFilePicker = saveFilePicker;
     _current = _root;
     OpenCommand = new AsyncRelayCommand(OpenAsync);
     NavigateUpCommand = new RelayCommand(NavigateUp, () => CanGoUp, this);
     ExtractAllCommand = new AsyncRelayCommand(ExtractAllAsync, () => HasArchive && !IsBusy, this);
+    CreateCommand = new AsyncRelayCommand(CreateAsync, () => CanCreate && !IsBusy, this);
   }
 
   /// <summary>Заголовок окна: базовый либо «имя_архива — LzmaSharp» при открытом архиве.</summary>
@@ -111,6 +138,30 @@ public sealed class MainViewModel : ObservableObject
   /// <summary>Команда «Извлечь всё» — распаковать содержимое архива в выбранную папку.</summary>
   public AsyncRelayCommand ExtractAllCommand { get; }
 
+  /// <summary>Команда «Создать архив…» — упаковать выбранные файлы в новый 7z-архив.</summary>
+  public AsyncRelayCommand CreateCommand { get; }
+
+  /// <summary>Доступные методы сжатия для создания архива (для выбора в UI).</summary>
+  public IReadOnlyList<SevenZipWriterCompressionMethod> CompressionMethods { get; } =
+  [
+      SevenZipWriterCompressionMethod.Lzma2,
+      SevenZipWriterCompressionMethod.Ppmd,
+      SevenZipWriterCompressionMethod.Auto,
+      SevenZipWriterCompressionMethod.Copy,
+  ];
+
+  private SevenZipWriterCompressionMethod _selectedCompressionMethod = SevenZipWriterCompressionMethod.Lzma2;
+
+  /// <summary>Выбранный метод сжатия для создаваемого архива.</summary>
+  public SevenZipWriterCompressionMethod SelectedCompressionMethod
+  {
+    get => _selectedCompressionMethod;
+    set => Set(ref _selectedCompressionMethod, value);
+  }
+
+  /// <summary>Доступна ли функция создания архива (внедрены ли соответствующие пикеры).</summary>
+  public bool CanCreate => _sourceFilesPicker is not null && _saveFilePicker is not null;
+
   /// <summary>Войти в элемент: для папки — перейти внутрь; файлы пока игнорируются.</summary>
   public void NavigateInto(ArchiveItem item)
   {
@@ -142,7 +193,7 @@ public sealed class MainViewModel : ObservableObject
       return; // выбор отменён — состояние не трогаем
 
     // Первая попытка — без пароля.
-    (SevenZipArchiveDecodeResult result, SevenZipDecodedEntry[] entries) = await DecodeAsync(picked.Bytes, password: null);
+    (SevenZipArchiveDecodeResult result, SevenZipDecodedEntry[] entries) = await _archiveService.OpenAsync(picked.Bytes, password: null);
 
     if (result == SevenZipArchiveDecodeResult.Ok)
     {
@@ -172,7 +223,7 @@ public sealed class MainViewModel : ObservableObject
         return; // пользователь отменил ввод пароля
       }
 
-      (result, entries) = await DecodeAsync(picked.Bytes, password);
+      (result, entries) = await _archiveService.OpenAsync(picked.Bytes, password);
 
       if (result == SevenZipArchiveDecodeResult.Ok)
       {
@@ -198,11 +249,7 @@ public sealed class MainViewModel : ObservableObject
   // Дополняет сообщение об ошибке списком методов архива (что именно не поддержано).
   private async Task AppendDiagnosticsAsync(byte[] bytes, string? password)
   {
-    string description = await Task.Run(() =>
-    {
-      SevenZipArchiveInspector.TryDescribeMethods(bytes, password, out string d);
-      return d;
-    });
+    string description = await _archiveService.DescribeMethodsAsync(bytes, password);
 
     if (!string.IsNullOrEmpty(description))
       StatusMessage += $"  Методы в архиве: {description}.";
@@ -232,24 +279,7 @@ public sealed class MainViewModel : ObservableObject
 
     try
     {
-      SevenZipArchiveDecodeResult result = await Task.Run(() =>
-      {
-        SevenZipPassword? sevenZipPassword = null;
-
-        try
-        {
-          SevenZipDecodeOptions options = password is null
-              ? SevenZipDecodeOptions.Default
-              : SevenZipDecodeOptions.WithPassword(sevenZipPassword = SevenZipPassword.FromString(password));
-
-          return SevenZipArchiveDecoder.ExtractToDirectory(
-              bytes, options, destination, overwrite: false, out _);
-        }
-        finally
-        {
-          sevenZipPassword?.Dispose();
-        }
-      });
+      SevenZipArchiveDecodeResult result = await _archiveService.ExtractAllAsync(bytes, password, destination);
 
       StatusMessage = result switch
       {
@@ -264,29 +294,51 @@ public sealed class MainViewModel : ObservableObject
     }
   }
 
-  // Декодирование с опциональным паролем — CPU-работа, уводим с UI-потока.
-  private static Task<(SevenZipArchiveDecodeResult Result, SevenZipDecodedEntry[] Entries)> DecodeAsync(
-      byte[] bytes,
-      string? password)
+  // Создание архива: выбор файлов → выбор пути → сборка ядром → запись на диск.
+  private async Task CreateAsync()
   {
-    return Task.Run(() =>
+    if (_sourceFilesPicker is null || _saveFilePicker is null)
+      return;
+
+    IReadOnlyList<PickedFile>? files = await _sourceFilesPicker.PickFilesAsync();
+
+    if (files is null || files.Count == 0)
+      return; // выбор отменён или ничего не выбрано
+
+    string? path = await _saveFilePicker.PickSavePathAsync("archive.7z");
+
+    if (path is null)
+      return; // выбор пути отменён
+
+    IsBusy = true;
+
+    try
     {
-      SevenZipPassword? sevenZipPassword = null;
+      var entries = new List<SevenZipArchiveWriterEntry>(files.Count);
 
-      try
-      {
-        SevenZipDecodeOptions options = password is null
-            ? SevenZipDecodeOptions.Default
-            : SevenZipDecodeOptions.WithPassword(sevenZipPassword = SevenZipPassword.FromString(password));
+      foreach (PickedFile file in files)
+        entries.Add(new SevenZipArchiveWriterEntry(file.Name, file.Bytes));
 
-        SevenZipArchiveDecodeResult r = SevenZipArchiveDecoder.DecodeToEntries(bytes, options, out SevenZipDecodedEntry[] e);
-        return (r, e);
-      }
-      finally
+      ArchiveCreateOutcome created = await _archiveService.CreateArchiveAsync(entries, SelectedCompressionMethod);
+
+      if (created.Result != SevenZipArchiveWriteResult.Ok)
       {
-        sevenZipPassword?.Dispose();
+        StatusMessage = created.Result == SevenZipArchiveWriteResult.NotSupported
+            ? "Создание архива с такими параметрами не поддерживается."
+            : "Не удалось создать архив: некорректный набор файлов (например, повторяющиеся имена).";
+        return;
       }
-    });
+
+      bool wrote = await _archiveService.WriteArchiveAsync(created.Archive, path);
+
+      StatusMessage = wrote
+          ? $"Создан архив: {path}"
+          : "Архив собран, но записать на диск не удалось (нет доступа или ошибка ввода-вывода).";
+    }
+    finally
+    {
+      IsBusy = false;
+    }
   }
 
   // Открытие зашифрованного архива отменено пользователем.

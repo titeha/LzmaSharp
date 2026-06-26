@@ -22,7 +22,15 @@ public partial class App : Application
             var picker = new AvaloniaArchivePicker(window);
             var passwordPrompt = new AvaloniaPasswordPrompt(window);
             var folderPicker = new AvaloniaFolderPicker(window);
-            window.DataContext = new MainViewModel(picker, passwordPrompt, folderPicker);
+            var sourceFilesPicker = new AvaloniaSourceFilesPicker(window);
+            var saveFilePicker = new AvaloniaSaveFilePicker(window);
+            window.DataContext = new MainViewModel(
+                picker,
+                passwordPrompt,
+                folderPicker,
+                new LzmaArchiveService(),
+                sourceFilesPicker,
+                saveFilePicker);
             desktop.MainWindow = window;
         }
 

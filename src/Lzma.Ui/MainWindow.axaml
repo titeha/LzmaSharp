@@ -18,6 +18,13 @@
                 BorderBrush="{DynamicResource ThemeBorderMidBrush}">
             <StackPanel Orientation="Horizontal" Spacing="8">
                 <Button Content="Открыть…" Command="{Binding OpenCommand}" />
+                <Button Content="Создать…" Command="{Binding CreateCommand}"
+                        IsVisible="{Binding CanCreate}" />
+                <ComboBox ItemsSource="{Binding CompressionMethods}"
+                          SelectedItem="{Binding SelectedCompressionMethod}"
+                          IsVisible="{Binding CanCreate}"
+                          VerticalAlignment="Center" MinWidth="96"
+                          ToolTip.Tip="Метод сжатия для создаваемого архива" />
                 <Button Content="Извлечь всё…" Command="{Binding ExtractAllCommand}" />
                 <Button Content="Вверх" Command="{Binding NavigateUpCommand}" />
                 <ProgressBar IsIndeterminate="True" Width="120" VerticalAlignment="Center"
