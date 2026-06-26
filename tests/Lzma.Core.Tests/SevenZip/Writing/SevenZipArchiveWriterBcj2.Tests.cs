@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.IO;
 using System.Linq;
 
 using Lzma.Core.SevenZip;
@@ -71,6 +73,89 @@ public sealed class SevenZipArchiveWriterBcj2Tests
     Assert.Equal(a, entries.Single(e => e.Name.Replace('\\', '/') == "a.bin").Bytes);
     Assert.Equal(b, entries.Single(e => e.Name.Replace('\\', '/') == "dir/b.bin").Bytes);
     Assert.Equal(c, entries.Single(e => e.Name.Replace('\\', '/') == "c.bin").Bytes);
+  }
+
+  [Fact]
+  public void BuildBcj2_ЖмётПлотнееLzma2_НаПотокеВызовов()
+  {
+    // «Исполняемый» поток: фон нулей + 1000 CALL (E8) к одному абсолютному адресу.
+    // В сыром виде смещения у всех разные (rel = T - ip), плохо сжимаются обычным LZMA2;
+    // после BCJ2-конвертации они становятся одним и тем же абсолютным адресом → почти ноль.
+    const int length = 60000;
+    const uint target = 0x40;
+
+    byte[] content = new byte[length];
+    for (int p = 100; p + 8 < length; p += 50)
+    {
+      content[p] = 0xE8;
+      uint rel = unchecked(target - (uint)p - 5); // abs = rel + p + 5 = target
+      content[p + 1] = (byte)rel;
+      content[p + 2] = (byte)(rel >> 8);
+      content[p + 3] = (byte)(rel >> 16);
+      content[p + 4] = (byte)(rel >> 24);
+    }
+
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, SevenZipArchiveWriter.BuildBcj2Archive(
+        [new SevenZipArchiveWriterEntry("app.exe", content)], out byte[] bcj2Archive));
+
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, SevenZipArchiveWriter.BuildArchive(
+        [new SevenZipArchiveWriterEntry("app.exe", content)], SevenZipWriterCompressionMethod.Lzma2, out byte[] lzma2Archive));
+
+    // BCJ2 заметно компактнее обычного LZMA2 на таком потоке.
+    Assert.True(bcj2Archive.Length < lzma2Archive.Length,
+        $"ожидался выигрыш BCJ2: bcj2={bcj2Archive.Length}, lzma2={lzma2Archive.Length}");
+
+    // И при этом корректно распаковывается.
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok,
+        SevenZipArchiveDecoder.DecodeToEntries(bcj2Archive, out SevenZipDecodedEntry[] entries));
+    Assert.Equal(content, Assert.Single(entries).Bytes);
+  }
+
+  [Fact]
+  public void BuildBcj2_РаспаковываетсяНастоящим7Zip()
+  {
+    const string sevenZip = @"C:\Program Files\7-Zip\7z.exe";
+    if (!File.Exists(sevenZip))
+      return; // Настоящий 7-Zip недоступен в этом окружении.
+
+    byte[] content = MakeX86Like(40000, 0x5A5A5A5A);
+
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, SevenZipArchiveWriter.BuildBcj2Archive(
+        [new SevenZipArchiveWriterEntry("app.exe", content)], out byte[] archive));
+
+    string dir = Path.Combine(Path.GetTempPath(), "bcj2live_" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(dir);
+    try
+    {
+      string archivePath = Path.Combine(dir, "out.7z");
+      File.WriteAllBytes(archivePath, archive);
+
+      Assert.Equal(0, Run(sevenZip, $"t \"{archivePath}\""));
+      Assert.Equal(0, Run(sevenZip, $"e \"{archivePath}\" -o\"{dir}\" -y"));
+
+      byte[] extracted = File.ReadAllBytes(Path.Combine(dir, "app.exe"));
+      Assert.Equal(content, extracted);
+    }
+    finally
+    {
+      Directory.Delete(dir, recursive: true);
+    }
+  }
+
+  private static int Run(string exe, string args)
+  {
+    var psi = new ProcessStartInfo(exe, args)
+    {
+      RedirectStandardOutput = true,
+      RedirectStandardError = true,
+      UseShellExecute = false,
+    };
+
+    using var p = Process.Start(psi)!;
+    p.StandardOutput.ReadToEnd();
+    p.StandardError.ReadToEnd();
+    p.WaitForExit();
+    return p.ExitCode;
   }
 
   [Fact]
