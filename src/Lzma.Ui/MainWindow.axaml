@@ -20,6 +20,8 @@
                 <Button Content="Открыть…" Command="{Binding OpenCommand}" />
                 <Button Content="Создать…" Command="{Binding CreateCommand}"
                         IsVisible="{Binding CanCreate}" />
+                <Button Content="Создать из папки…" Command="{Binding CreateFromFolderCommand}"
+                        IsVisible="{Binding CanCreateFromFolder}" />
                 <ComboBox ItemsSource="{Binding CompressionMethods}"
                           SelectedValue="{Binding SelectedCompressionMethod}"
                           SelectedValueBinding="{Binding Method}"

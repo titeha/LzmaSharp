@@ -23,6 +23,7 @@ public sealed class MainViewModel : ObservableObject
   private readonly IFolderPicker _folderPicker;
   private readonly IArchiveService _archiveService;
   private readonly ISourceFilesPicker? _sourceFilesPicker;
+  private readonly ISourceFolderPicker? _sourceFolderPicker;
   private readonly ISaveFilePicker? _saveFilePicker;
 
   // Байты и пароль успешно открытого архива — нужны для извлечения без повторного открытия.
@@ -71,6 +72,18 @@ public sealed class MainViewModel : ObservableObject
       IArchiveService archiveService,
       ISourceFilesPicker? sourceFilesPicker,
       ISaveFilePicker? saveFilePicker)
+      : this(picker, passwordPrompt, folderPicker, archiveService, sourceFilesPicker, saveFilePicker, sourceFolderPicker: null)
+  {
+  }
+
+  public MainViewModel(
+      IArchivePicker picker,
+      IPasswordPrompt passwordPrompt,
+      IFolderPicker folderPicker,
+      IArchiveService archiveService,
+      ISourceFilesPicker? sourceFilesPicker,
+      ISaveFilePicker? saveFilePicker,
+      ISourceFolderPicker? sourceFolderPicker)
   {
     _picker = picker;
     _passwordPrompt = passwordPrompt;
@@ -78,11 +91,13 @@ public sealed class MainViewModel : ObservableObject
     _archiveService = archiveService;
     _sourceFilesPicker = sourceFilesPicker;
     _saveFilePicker = saveFilePicker;
+    _sourceFolderPicker = sourceFolderPicker;
     _current = _root;
     OpenCommand = new AsyncRelayCommand(OpenAsync);
     NavigateUpCommand = new RelayCommand(NavigateUp, () => CanGoUp, this);
     ExtractAllCommand = new AsyncRelayCommand(ExtractAllAsync, () => HasArchive && !IsOperating, this);
-    CreateCommand = new AsyncRelayCommand(CreateAsync, () => CanCreate && !IsOperating, this);
+    CreateCommand = new AsyncRelayCommand(CreateFromFilesAsync, () => CanCreate && !IsOperating, this);
+    CreateFromFolderCommand = new AsyncRelayCommand(CreateFromFolderAsync, () => CanCreateFromFolder && !IsOperating, this);
   }
 
   /// <summary>Заголовок окна: базовый либо «имя_архива — LzmaSharp» при открытом архиве.</summary>
@@ -161,6 +176,9 @@ public sealed class MainViewModel : ObservableObject
   /// <summary>Команда «Создать архив…» — упаковать выбранные файлы в новый 7z-архив.</summary>
   public AsyncRelayCommand CreateCommand { get; }
 
+  /// <summary>Команда «Создать из папки…» — упаковать содержимое выбранной папки (рекурсивно).</summary>
+  public AsyncRelayCommand CreateFromFolderCommand { get; }
+
   /// <summary>Доступные методы сжатия для создания архива (с дружелюбными именами для UI).</summary>
   public IReadOnlyList<CompressionMethodOption> CompressionMethods { get; } =
   [
@@ -179,8 +197,11 @@ public sealed class MainViewModel : ObservableObject
     set => Set(ref _selectedCompressionMethod, value);
   }
 
-  /// <summary>Доступна ли функция создания архива (внедрены ли соответствующие пикеры).</summary>
+  /// <summary>Доступно ли создание архива из файлов (внедрены ли соответствующие пикеры).</summary>
   public bool CanCreate => _sourceFilesPicker is not null && _saveFilePicker is not null;
+
+  /// <summary>Доступно ли создание архива из папки (внедрены ли соответствующие пикеры).</summary>
+  public bool CanCreateFromFolder => _sourceFolderPicker is not null && _saveFilePicker is not null;
 
   /// <summary>Войти в элемент: для папки — перейти внутрь; файлы пока игнорируются.</summary>
   public void NavigateInto(ArchiveItem item)
@@ -308,13 +329,31 @@ public sealed class MainViewModel : ObservableObject
     });
   }
 
-  // Создание архива: выбор файлов → выбор пути → сборка ядром → запись на диск.
-  private async Task CreateAsync()
+  // Создание из выбранных файлов.
+  private async Task CreateFromFilesAsync()
   {
-    if (_sourceFilesPicker is null || _saveFilePicker is null)
+    if (_sourceFilesPicker is null)
       return;
 
-    IReadOnlyList<PickedFile>? files = await _sourceFilesPicker.PickFilesAsync();
+    await CreateFromSourceAsync(_sourceFilesPicker.PickFilesAsync);
+  }
+
+  // Создание из выбранной папки (рекурсивно, с относительными путями).
+  private async Task CreateFromFolderAsync()
+  {
+    if (_sourceFolderPicker is null)
+      return;
+
+    await CreateFromSourceAsync(_sourceFolderPicker.PickFolderFilesAsync);
+  }
+
+  // Общий путь создания: получить источник → выбрать путь → собрать ядром → записать на диск.
+  private async Task CreateFromSourceAsync(Func<Task<IReadOnlyList<PickedFile>?>> pickSources)
+  {
+    if (_saveFilePicker is null)
+      return;
+
+    IReadOnlyList<PickedFile>? files = await pickSources();
 
     if (files is null || files.Count == 0)
       return; // выбор отменён или ничего не выбрано
