@@ -24,9 +24,10 @@ public static partial class SevenZipArchiveWriter
   // Метод-id LZMA2 в 7z (один байт).
   private const byte Lzma2MethodId = 0x21;
 
-  // Размер словаря LZMA2-writer-а. Совпадает с лимитом чанка (64 КБ): на каждом чанке
-  // словарь сбрасывается, поэтому больший словарь сейчас не нужен.
-  private const int Lzma2DictionarySize = 1 << 16;
+  // Размер словаря LZMA2 по умолчанию для GOST→LZMA2-пути (обычный LZMA2-путь берёт размер
+  // из SevenZipCompressionOptions). Энкодер несёт словарь между чанками, поэтому больший
+  // словарь реально улучшает сжатие; здесь оставлен консервативный дефолт.
+  private const int Lzma2DictionarySize = SevenZipCompressionOptions.DefaultLzma2DictionarySize;
 
   /// <summary>
   /// Строит минимальный пустой 7z-архив без packed stream-ов и без файлов.
@@ -53,16 +54,26 @@ public static partial class SevenZipArchiveWriter
       => BuildArchive(entries, SevenZipWriterCompressionMethod.Copy, out archive);
 
   /// <summary>
-  /// Строит 7z-архив для поддерживаемого набора элементов с выбранным методом сжатия.
+  /// Строит 7z-архив для поддерживаемого набора элементов с выбранным методом сжатия
+  /// (с настройками по умолчанию).
   /// </summary>
   public static SevenZipArchiveWriteResult BuildArchive(
       IReadOnlyList<SevenZipArchiveWriterEntry> entries,
       SevenZipWriterCompressionMethod compression,
       out byte[] archive)
+      => BuildArchive(entries, SevenZipCompressionOptions.ForMethod(compression), out archive);
+
+  /// <summary>
+  /// Строит 7z-архив для поддерживаемого набора элементов с заданными параметрами сжатия.
+  /// </summary>
+  public static SevenZipArchiveWriteResult BuildArchive(
+      IReadOnlyList<SevenZipArchiveWriterEntry> entries,
+      SevenZipCompressionOptions options,
+      out byte[] archive)
   {
     archive = [];
 
-    if (entries is null)
+    if (entries is null || options is null)
       return SevenZipArchiveWriteResult.InvalidData;
 
     if (entries.Count == 0)
@@ -75,11 +86,11 @@ public static partial class SevenZipArchiveWriter
     if (AllEntriesHaveNoContent(entries))
       return BuildEmptyEntriesArchive(entries, out archive);
 
-    return compression switch
+    return options.Method switch
     {
-      SevenZipWriterCompressionMethod.Lzma2 => BuildLzma2EntriesArchive(entries, out archive),
+      SevenZipWriterCompressionMethod.Lzma2 => BuildLzma2EntriesArchive(entries, options.Lzma2DictionarySize, out archive),
       SevenZipWriterCompressionMethod.Ppmd => BuildPpmdEntriesArchive(entries, out archive),
-      SevenZipWriterCompressionMethod.Auto => BuildAutoEntriesArchive(entries, out archive),
+      SevenZipWriterCompressionMethod.Auto => BuildAutoEntriesArchive(entries, options.Lzma2DictionarySize, out archive),
       SevenZipWriterCompressionMethod.Copy => BuildCopyEntriesArchive(entries, out archive),
       _ => SevenZipArchiveWriteResult.NotSupported,
     };
