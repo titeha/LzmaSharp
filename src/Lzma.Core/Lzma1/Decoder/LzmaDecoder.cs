@@ -304,7 +304,11 @@ public sealed class LzmaDecoder
         _distanceDecoder.Reset();
         _literal.Reset();
         _state.Reset();
-        _previousByte = 0;
+        // Контекст первого литерала после reset-state берётся из последнего байта словаря
+        // (как в эталонном 7-Zip: dic[dicPos-1]). При пустом словаре (первый чанк или после
+        // reset-dictionary) это 0. Для reset-state-чанков с непустым словарём (copy-первые
+        // архивы, control 0xA0/0xC0) важно НЕ обнулять контекст.
+        _previousByte = _dictionary.TryGetByteBack(1, out byte lastDictionaryByte) ? lastDictionaryByte : (byte)0;
         _rep0 = _rep1 = _rep2 = _rep3 = 1;
 
         _step = Step.IsMatch;

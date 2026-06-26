@@ -17,7 +17,8 @@ public sealed class Lzma2IncrementalDecoderLzmaChunkNoPropsTests
     byte[] plain2 = Encoding.ASCII.GetBytes("Second chunk (no props).");
 
     byte[] payload1 = LzmaTestLiteralOnlyEncoder.Encode(props, plain1);
-    byte[] payload2 = LzmaTestLiteralOnlyEncoder.Encode(props, plain2);
+    // Второй чанк — reset-state с непустым словарём: контекст первого литерала = последний байт первого чанка.
+    byte[] payload2 = LzmaTestLiteralOnlyEncoder.Encode(props, plain2, initialPreviousByte: plain1[^1]);
 
     byte[] lzma2Stream = Lzma2TestStreamBuilder.TwoLzmaChunks_SecondNoPropsResetStateThenEnd(
       props,
@@ -51,7 +52,8 @@ public sealed class Lzma2IncrementalDecoderLzmaChunkNoPropsTests
     byte[] plain2 = Encoding.ASCII.GetBytes("Part 2 (no props).");
 
     byte[] payload1 = LzmaTestLiteralOnlyEncoder.Encode(props, plain1);
-    byte[] payload2 = LzmaTestLiteralOnlyEncoder.Encode(props, plain2);
+    // Второй чанк — reset-state с непустым словарём: контекст первого литерала = последний байт первого чанка.
+    byte[] payload2 = LzmaTestLiteralOnlyEncoder.Encode(props, plain2, initialPreviousByte: plain1[^1]);
 
     byte[] lzma2Stream = Lzma2TestStreamBuilder.TwoLzmaChunks_SecondNoPropsResetStateThenEnd(
       props,

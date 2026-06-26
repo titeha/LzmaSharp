@@ -99,22 +99,29 @@ public sealed class LzmaEncoder
   /// <summary>
   /// Кодирует вход как поток ТОЛЬКО из литералов.
   /// </summary>
-  public byte[] EncodeLiteralOnly(ReadOnlySpan<byte> input)
+  /// <param name="input">Данные чанка.</param>
+  /// <param name="initialPreviousByte">
+  /// Контекст первого литерала (последний байт уже записанных данных). Для LZMA2-чанков с
+  /// reset-state и непустым словарём это последний байт словаря (как в эталонном 7-Zip);
+  /// для первого чанка/пустого словаря — 0.
+  /// </param>
+  public byte[] EncodeLiteralOnly(ReadOnlySpan<byte> input, byte initialPreviousByte = 0)
   {
     var ops = new LzmaEncodeOp[input.Length];
     for (int i = 0; i < input.Length; i++)
       ops[i] = LzmaEncodeOp.Lit(input[i]);
 
-    return EncodeScript(ops);
+    return EncodeScript(ops, initialPreviousByte);
   }
 
   /// <summary>
   /// Скриптовое кодирование: последовательность операций literal/match.
   /// Используется тестами.
   /// </summary>
-  internal byte[] EncodeScript(ReadOnlySpan<LzmaEncodeOp> script)
+  internal byte[] EncodeScript(ReadOnlySpan<LzmaEncodeOp> script, byte initialPreviousByte = 0)
   {
     Reset();
+    _prevByte = initialPreviousByte;
 
     for (int i = 0; i < script.Length; i++)
     {

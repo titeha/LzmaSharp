@@ -18,7 +18,7 @@ internal static class LzmaTestLiteralOnlyEncoder
 {
   private const int _literalCoderSize = 0x300;
 
-  public static byte[] Encode(LzmaProperties props, ReadOnlySpan<byte> plain)
+  public static byte[] Encode(LzmaProperties props, ReadOnlySpan<byte> plain, byte initialPreviousByte = 0)
   {
     int numPosStates = 1 << props.Pb;
     int posStateMask = numPosStates - 1;
@@ -35,7 +35,9 @@ internal static class LzmaTestLiteralOnlyEncoder
     var state = new LzmaState();
     state.Reset();
 
-    byte prevByte = 0;
+    // Контекст первого литерала: для reset-state чанка с непустым словарём это последний байт
+    // словаря (как в эталонном 7-Zip и в фикснутом декодере); для первого чанка — 0.
+    byte prevByte = initialPreviousByte;
     var range = new LzmaTestRangeEncoder();
 
     for (int i = 0; i < plain.Length; i++)

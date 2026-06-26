@@ -318,7 +318,10 @@ public static class Lzma2LzmaEncoder
 
       var enc = new LzmaEncoder(lzmaProperties, dictionarySize);
 
-      byte[] payload = enc.EncodeLiteralOnly(slice);
+      // Контекст первого литерала чанка — последний байт уже записанных данных (для reset-state
+      // чанков с непустым словарём; первый чанк начинается с 0). Зеркалит фикс декодера.
+      byte seedPreviousByte = offset == 0 ? (byte)0 : data[offset - 1];
+      byte[] payload = enc.EncodeLiteralOnly(slice, seedPreviousByte);
 
       if (isFirst)
       {
@@ -389,7 +392,10 @@ public static class Lzma2LzmaEncoder
 
       // 1) Считаем, сколько будет весить LZMA (literal-only) для этого куска.
       var enc = new LzmaEncoder(lzmaProperties, dictionarySize);
-      byte[] lzmaPayload = enc.EncodeLiteralOnly(slice);
+      // Контекст первого литерала — последний байт уже записанных данных (для reset-state
+      // чанков с непустым словарём, в т.ч. после COPY-чанка; первый чанк — 0). Зеркалит декодер.
+      byte seedPreviousByte = offset == 0 ? (byte)0 : data[offset - 1];
+      byte[] lzmaPayload = enc.EncodeLiteralOnly(slice, seedPreviousByte);
 
       bool needProps = !wroteAnyLzmaChunk;
 
