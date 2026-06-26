@@ -48,6 +48,7 @@ public sealed class MainViewModel : ObservableObject
   private string _currentPath = string.Empty;
   private bool _canGoUp;
   private bool _isBusy;
+  private bool _isOperating;
 
   public MainViewModel(IArchivePicker picker, IPasswordPrompt passwordPrompt, IFolderPicker folderPicker)
       : this(picker, passwordPrompt, folderPicker, new LzmaArchiveService(), sourceFilesPicker: null, saveFilePicker: null)
@@ -80,8 +81,8 @@ public sealed class MainViewModel : ObservableObject
     _current = _root;
     OpenCommand = new AsyncRelayCommand(OpenAsync);
     NavigateUpCommand = new RelayCommand(NavigateUp, () => CanGoUp, this);
-    ExtractAllCommand = new AsyncRelayCommand(ExtractAllAsync, () => HasArchive && !IsBusy, this);
-    CreateCommand = new AsyncRelayCommand(CreateAsync, () => CanCreate && !IsBusy, this);
+    ExtractAllCommand = new AsyncRelayCommand(ExtractAllAsync, () => HasArchive && !IsOperating, this);
+    CreateCommand = new AsyncRelayCommand(CreateAsync, () => CanCreate && !IsOperating, this);
   }
 
   /// <summary>Заголовок окна: базовый либо «имя_архива — LzmaSharp» при открытом архиве.</summary>
@@ -119,12 +120,31 @@ public sealed class MainViewModel : ObservableObject
     set => Set(ref _canGoUp, value);
   }
 
-  /// <summary>Идёт длительная операция (извлечение) — UI занят.</summary>
+  /// <summary>
+  /// Визуальный индикатор «занято»: включается только если операция длится дольше
+  /// <see cref="BusyIndicatorDelay"/> (быстрые операции индикатор не показывают).
+  /// </summary>
   public bool IsBusy
   {
     get => _isBusy;
     set => Set(ref _isBusy, value);
   }
+
+  /// <summary>
+  /// Идёт ли длительная операция (извлечение/создание). Ставится сразу при старте и
+  /// блокирует повторный запуск команд; в отличие от <see cref="IsBusy"/> не привязан к UI.
+  /// </summary>
+  public bool IsOperating
+  {
+    get => _isOperating;
+    private set => Set(ref _isOperating, value);
+  }
+
+  /// <summary>
+  /// Порог, после которого показывается индикатор занятости. По умолчанию 3 секунды;
+  /// internal — для подмены в тестах.
+  /// </summary>
+  internal TimeSpan BusyIndicatorDelay { get; set; } = TimeSpan.FromSeconds(3);
 
   /// <summary>Содержимое текущей папки архива.</summary>
   public ObservableCollection<ArchiveItem> Items { get; } = [];
@@ -275,9 +295,7 @@ public sealed class MainViewModel : ObservableObject
     byte[] bytes = _archiveBytes;
     string? password = _archivePassword;
 
-    IsBusy = true;
-
-    try
+    await RunOperationAsync(async () =>
     {
       SevenZipArchiveDecodeResult result = await _archiveService.ExtractAllAsync(bytes, password, destination);
 
@@ -287,11 +305,7 @@ public sealed class MainViewModel : ObservableObject
         SevenZipArchiveDecodeResult.NotSupported => "Извлечение не поддерживается для этого архива.",
         _ => "Не удалось извлечь: ошибка данных или файл уже существует.",
       };
-    }
-    finally
-    {
-      IsBusy = false;
-    }
+    });
   }
 
   // Создание архива: выбор файлов → выбор пути → сборка ядром → запись на диск.
@@ -310,9 +324,7 @@ public sealed class MainViewModel : ObservableObject
     if (path is null)
       return; // выбор пути отменён
 
-    IsBusy = true;
-
-    try
+    await RunOperationAsync(async () =>
     {
       var entries = new List<SevenZipArchiveWriterEntry>(files.Count);
 
@@ -334,10 +346,31 @@ public sealed class MainViewModel : ObservableObject
       StatusMessage = wrote
           ? $"Создан архив: {path}"
           : "Архив собран, но записать на диск не удалось (нет доступа или ошибка ввода-вывода).";
+    });
+  }
+
+  // Выполняет длительную операцию с отложенным индикатором: IsOperating ставится сразу
+  // (блокирует повторный запуск), а визуальный IsBusy включается, только если операция
+  // не завершилась за BusyIndicatorDelay. Так быстрые операции не показывают индикатор.
+  private async Task RunOperationAsync(Func<Task> operation)
+  {
+    IsOperating = true;
+
+    Task work = operation();
+
+    try
+    {
+      Task finished = await Task.WhenAny(work, Task.Delay(BusyIndicatorDelay));
+
+      if (!work.IsCompleted && finished != work)
+        IsBusy = true; // превысили порог — показываем индикатор
+
+      await work; // дождаться завершения и проброса исключений
     }
     finally
     {
       IsBusy = false;
+      IsOperating = false;
     }
   }
 
