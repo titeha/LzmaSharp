@@ -51,6 +51,50 @@ public static class SevenZipAesCoder
   }
 
   /// <summary>
+  /// Сериализует свойства 7zAES coder-а — инверсия <see cref="TryParseProperties"/>.
+  /// </summary>
+  public static bool TrySerializeProperties(
+      SevenZipAesProperties properties,
+      out byte[] serialized)
+  {
+    ArgumentNullException.ThrowIfNull(properties);
+
+    serialized = [];
+
+    if (properties.NumCyclesPower > 0x3F)
+      return false;
+
+    int saltSize = properties.Salt.Length;
+    int ivSize = properties.InitializationVector.Length;
+
+    if (saltSize > MaxSaltSize || ivSize > MaxInitializationVectorSize)
+      return false;
+
+    byte b0 = (byte)(properties.NumCyclesPower
+        | (saltSize > 0 ? 0x80 : 0)
+        | (ivSize > 0 ? 0x40 : 0));
+
+    if (saltSize == 0 && ivSize == 0)
+    {
+      serialized = [b0];
+      return true;
+    }
+
+    // saltSize кодируется как старший бит в b0 + (saltSize-1) в старшем ниббле b1; аналогично ivSize.
+    byte b1 = (byte)(((saltSize > 0 ? saltSize - 1 : 0) << 4)
+        | (ivSize > 0 ? ivSize - 1 : 0));
+
+    byte[] result = new byte[2 + saltSize + ivSize];
+    result[0] = b0;
+    result[1] = b1;
+    properties.Salt.CopyTo(result.AsSpan(2, saltSize));
+    properties.InitializationVector.CopyTo(result.AsSpan(2 + saltSize, ivSize));
+
+    serialized = result;
+    return true;
+  }
+
+  /// <summary>
   /// Пытается разобрать свойства 7zAES coder-а.
   /// </summary>
   public static bool TryParseProperties(
