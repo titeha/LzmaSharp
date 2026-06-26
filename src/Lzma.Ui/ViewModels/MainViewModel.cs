@@ -141,13 +141,13 @@ public sealed class MainViewModel : ObservableObject
   /// <summary>Команда «Создать архив…» — упаковать выбранные файлы в новый 7z-архив.</summary>
   public AsyncRelayCommand CreateCommand { get; }
 
-  /// <summary>Доступные методы сжатия для создания архива (для выбора в UI).</summary>
-  public IReadOnlyList<SevenZipWriterCompressionMethod> CompressionMethods { get; } =
+  /// <summary>Доступные методы сжатия для создания архива (с дружелюбными именами для UI).</summary>
+  public IReadOnlyList<CompressionMethodOption> CompressionMethods { get; } =
   [
-      SevenZipWriterCompressionMethod.Lzma2,
-      SevenZipWriterCompressionMethod.Ppmd,
-      SevenZipWriterCompressionMethod.Auto,
-      SevenZipWriterCompressionMethod.Copy,
+      CompressionMethodOption.ForMethod(SevenZipWriterCompressionMethod.Lzma2),
+      CompressionMethodOption.ForMethod(SevenZipWriterCompressionMethod.Ppmd),
+      CompressionMethodOption.ForMethod(SevenZipWriterCompressionMethod.Auto),
+      CompressionMethodOption.ForMethod(SevenZipWriterCompressionMethod.Copy),
   ];
 
   private SevenZipWriterCompressionMethod _selectedCompressionMethod = SevenZipWriterCompressionMethod.Lzma2;
