@@ -163,7 +163,8 @@ public static partial class SevenZipArchiveDecoder
       ReadOnlySpan<byte> archive,
       SevenZipDecodeOptions options,
       out SevenZipDecodedFile[] files,
-      out int bytesConsumed)
+      out int bytesConsumed,
+      IProgress<SevenZipExtractionProgress>? progress = null)
   {
     ArgumentNullException.ThrowIfNull(options);
 
@@ -434,6 +435,23 @@ public static partial class SevenZipArchiveDecoder
 
     int fileIndex = 0;
 
+    // Суммарный размер распаковки (для отчёта прогресса). Считаем заранее по метаданным.
+    long totalUnpackedBytes = 0;
+    if (progress is not null)
+    {
+      for (int f = 0; f < folderCount; f++)
+      {
+        ulong[]? folderSizes = unpackSizesPerFolder[f];
+        if (folderSizes is not null)
+          for (int s = 0; s < folderSizes.Length; s++)
+            totalUnpackedBytes += (long)folderSizes[s];
+      }
+
+      progress.Report(new SevenZipExtractionProgress(0, totalUnpackedBytes));
+    }
+
+    long processedUnpackedBytes = 0;
+
     for (int folderIndex = 0; folderIndex < folderCount; folderIndex++)
     {
       SevenZipFolderDecodeResult folderRes = SevenZipFolderDecoder.DecodeFolderToArray(
@@ -449,6 +467,12 @@ public static partial class SevenZipArchiveDecoder
         return SevenZipArchiveDecodeResult.NotSupported;
       if (folderRes != SevenZipFolderDecodeResult.Ok)
         return SevenZipArchiveDecodeResult.InternalError;
+
+      if (progress is not null)
+      {
+        processedUnpackedBytes += folderUnpacked.Length;
+        progress.Report(new SevenZipExtractionProgress(processedUnpackedBytes, totalUnpackedBytes));
+      }
 
       if (folderCrcDefined?[folderIndex] == true)
       {
@@ -606,7 +630,8 @@ public static partial class SevenZipArchiveDecoder
       ReadOnlySpan<byte> archive,
       SevenZipDecodeOptions options,
       out SevenZipDecodedEntry[] entries,
-      out int bytesConsumed)
+      out int bytesConsumed,
+      IProgress<SevenZipExtractionProgress>? progress = null)
   {
     ArgumentNullException.ThrowIfNull(options);
 
@@ -614,7 +639,7 @@ public static partial class SevenZipArchiveDecoder
     bytesConsumed = 0;
 
     // 1) Сначала делаем обычную распаковку (чтобы не трогать уже стабилизированный код).
-    SevenZipArchiveDecodeResult r = DecodeToArray(archive, options, out SevenZipDecodedFile[] files, out bytesConsumed);
+    SevenZipArchiveDecodeResult r = DecodeToArray(archive, options, out SevenZipDecodedFile[] files, out bytesConsumed, progress);
     if (r != SevenZipArchiveDecodeResult.Ok)
       return r;
 
@@ -706,7 +731,8 @@ public static partial class SevenZipArchiveDecoder
       SevenZipDecodeOptions options,
       string destinationDirectory,
       bool overwrite,
-      out int bytesConsumed)
+      out int bytesConsumed,
+      IProgress<SevenZipExtractionProgress>? progress = null)
   {
     ArgumentNullException.ThrowIfNull(options);
     bytesConsumed = 0;
@@ -714,7 +740,7 @@ public static partial class SevenZipArchiveDecoder
     if (destinationDirectory is null)
       return SevenZipArchiveDecodeResult.InvalidData;
 
-    SevenZipArchiveDecodeResult r = DecodeToEntries(archive, options, out SevenZipDecodedEntry[] entries, out bytesConsumed);
+    SevenZipArchiveDecodeResult r = DecodeToEntries(archive, options, out SevenZipDecodedEntry[] entries, out bytesConsumed, progress);
     if (r != SevenZipArchiveDecodeResult.Ok)
       return r;
 
