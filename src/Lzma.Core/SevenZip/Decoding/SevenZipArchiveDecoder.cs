@@ -164,7 +164,7 @@ public static partial class SevenZipArchiveDecoder
       SevenZipDecodeOptions options,
       out SevenZipDecodedFile[] files,
       out int bytesConsumed,
-      IProgress<SevenZipExtractionProgress>? progress = null)
+      IProgress<SevenZipProgress>? progress = null)
   {
     ArgumentNullException.ThrowIfNull(options);
 
@@ -447,7 +447,7 @@ public static partial class SevenZipArchiveDecoder
             totalUnpackedBytes += (long)folderSizes[s];
       }
 
-      progress.Report(new SevenZipExtractionProgress(0, totalUnpackedBytes));
+      progress.Report(new SevenZipProgress(0, totalUnpackedBytes));
     }
 
     long processedUnpackedBytes = 0;
@@ -471,7 +471,7 @@ public static partial class SevenZipArchiveDecoder
       if (progress is not null)
       {
         processedUnpackedBytes += folderUnpacked.Length;
-        progress.Report(new SevenZipExtractionProgress(processedUnpackedBytes, totalUnpackedBytes));
+        progress.Report(new SevenZipProgress(processedUnpackedBytes, totalUnpackedBytes));
       }
 
       if (folderCrcDefined?[folderIndex] == true)
@@ -631,7 +631,7 @@ public static partial class SevenZipArchiveDecoder
       SevenZipDecodeOptions options,
       out SevenZipDecodedEntry[] entries,
       out int bytesConsumed,
-      IProgress<SevenZipExtractionProgress>? progress = null)
+      IProgress<SevenZipProgress>? progress = null)
   {
     ArgumentNullException.ThrowIfNull(options);
 
@@ -732,7 +732,7 @@ public static partial class SevenZipArchiveDecoder
       string destinationDirectory,
       bool overwrite,
       out int bytesConsumed,
-      IProgress<SevenZipExtractionProgress>? progress = null)
+      IProgress<SevenZipProgress>? progress = null)
   {
     ArgumentNullException.ThrowIfNull(options);
     bytesConsumed = 0;

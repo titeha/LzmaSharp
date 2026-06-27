@@ -16,13 +16,14 @@ public static partial class SevenZipArchiveWriter
   private static SevenZipArchiveWriteResult BuildAutoEntriesArchive(
       IReadOnlyList<SevenZipArchiveWriterEntry> entries,
       int lzma2DictionarySize,
-      out byte[] archive)
+      out byte[] archive,
+      IProgress<SevenZipProgress>? progress = null)
   {
     SevenZipWriterCompressionMethod method = ChooseAutoMethod(entries);
 
     return method == SevenZipWriterCompressionMethod.Ppmd
-        ? BuildPpmdEntriesArchive(entries, out archive)
-        : BuildLzma2EntriesArchive(entries, lzma2DictionarySize, out archive);
+        ? BuildPpmdEntriesArchive(entries, out archive, progress)
+        : BuildLzma2EntriesArchive(entries, lzma2DictionarySize, out archive, progress);
   }
 
   /// <summary>

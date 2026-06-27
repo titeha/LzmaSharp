@@ -16,7 +16,8 @@ public static partial class SevenZipArchiveWriter
       IReadOnlyList<SevenZipArchiveWriterEntry> entries,
       Func<byte[], byte[]> encode,
       byte[] coderBytes,
-      out byte[] archive)
+      out byte[] archive,
+      IProgress<SevenZipProgress>? progress = null)
   {
     archive = [];
 
@@ -25,6 +26,10 @@ public static partial class SevenZipArchiveWriter
     var unpackSizes = new int[count];
     var unpackCrcs = new uint[count];
     var compressedStreams = new List<byte[]>(count);
+
+    long totalContent = progress is null ? 0 : TotalNonEmptyContentLength(entries);
+    long processedContent = 0;
+    progress?.Report(new SevenZipProgress(0, totalContent));
 
     long totalLength = 0;
     int streamIndex = 0;
@@ -46,6 +51,12 @@ public static partial class SevenZipArchiveWriter
       totalLength += compressed.Length;
       if (totalLength > int.MaxValue)
         return SevenZipArchiveWriteResult.InternalError;
+
+      if (progress is not null)
+      {
+        processedContent += entry.Content.Length;
+        progress.Report(new SevenZipProgress(processedContent, totalContent));
+      }
 
       streamIndex++;
     }

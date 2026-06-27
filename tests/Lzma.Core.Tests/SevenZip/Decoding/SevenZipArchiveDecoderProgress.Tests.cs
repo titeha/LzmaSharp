@@ -8,10 +8,10 @@ namespace Lzma.Core.Tests.SevenZip;
 
 public sealed class SevenZipArchiveDecoderProgressTests
 {
-  private sealed class RecordingProgress : IProgress<SevenZipExtractionProgress>
+  private sealed class RecordingProgress : IProgress<SevenZipProgress>
   {
-    public List<SevenZipExtractionProgress> Reports { get; } = [];
-    public void Report(SevenZipExtractionProgress value) => Reports.Add(value);
+    public List<SevenZipProgress> Reports { get; } = [];
+    public void Report(SevenZipProgress value) => Reports.Add(value);
   }
 
   [Fact]

@@ -18,7 +18,8 @@ public static partial class SevenZipArchiveWriter
   private static SevenZipArchiveWriteResult BuildLzma2EntriesArchive(
       IReadOnlyList<SevenZipArchiveWriterEntry> entries,
       int dictionarySize,
-      out byte[] archive)
+      out byte[] archive,
+      IProgress<SevenZipProgress>? progress = null)
   {
     archive = [];
 
@@ -42,6 +43,7 @@ public static partial class SevenZipArchiveWriter
         entries,
         content => Lzma2LzmaEncoder.Encode(content, lzmaProperties, effectiveDictionarySize),
         coderBytes,
-        out archive);
+        out archive,
+        progress);
   }
 }
