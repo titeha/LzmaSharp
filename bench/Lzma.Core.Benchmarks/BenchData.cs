@@ -50,6 +50,31 @@ internal static class BenchData
   }
 
   /// <summary>
+  /// Детерминированные «x86-подобные» данные: случайный фон + регулярные ветвления
+  /// E8/E9 (CALL/JMP) с короткими смещениями. Для бенчмарка BCJ2 (детект ветвлений,
+  /// конвертация адресов, range-кодер).
+  /// </summary>
+  public static byte[] MakeX86Like(int size)
+  {
+    var output = new byte[size];
+    var random = new Random(20260627);
+    random.NextBytes(output);
+
+    // Каждые ~24 байта вставляем настоящее ветвление с коротким смещением (конвертируемое).
+    for (int i = 16; i + 8 < size; i += 24)
+    {
+      output[i] = (i % 2 == 0) ? (byte)0xE8 : (byte)0xE9;
+      int rel = (i * 7) % 4096;
+      output[i + 1] = (byte)rel;
+      output[i + 2] = (byte)(rel >> 8);
+      output[i + 3] = 0;
+      output[i + 4] = 0;
+    }
+
+    return output;
+  }
+
+  /// <summary>
   /// Детерминированные структурированные данные с повторяющимися фрагментами на
   /// регулярных дистанциях (как логи/таблицы/код). Здесь rep-матчи реально помогают.
   /// </summary>
