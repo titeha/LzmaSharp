@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 
@@ -35,16 +36,25 @@ public interface IArchiveService
   /// <summary>Открывает (декодирует) архив в память с опциональным паролем.</summary>
   Task<ArchiveOpenOutcome> OpenAsync(byte[] bytes, string? password);
 
-  /// <summary>Извлекает всё содержимое архива в указанную папку.</summary>
-  Task<SevenZipArchiveDecodeResult> ExtractAllAsync(byte[] bytes, string? password, string destination);
+  /// <summary>
+  /// Извлекает всё содержимое архива в указанную папку. Опциональный <paramref name="progress"/>
+  /// получает отчёт о ходе извлечения (по folder-ам/файлам ядра).
+  /// </summary>
+  Task<SevenZipArchiveDecodeResult> ExtractAllAsync(
+      byte[] bytes,
+      string? password,
+      string destination,
+      IProgress<SevenZipProgress>? progress = null);
 
   /// <summary>
   /// Собирает 7z-архив из набора записей выбранным методом сжатия. Возвращает байты архива;
-  /// запись на диск — отдельный шаг (<see cref="WriteArchiveAsync"/>).
+  /// запись на диск — отдельный шаг (<see cref="WriteArchiveAsync"/>). Опциональный
+  /// <paramref name="progress"/> получает отчёт о ходе сжатия (по исходным размерам файлов).
   /// </summary>
   Task<ArchiveCreateOutcome> CreateArchiveAsync(
       IReadOnlyList<SevenZipArchiveWriterEntry> entries,
-      SevenZipWriterCompressionMethod method);
+      SevenZipWriterCompressionMethod method,
+      IProgress<SevenZipProgress>? progress = null);
 
   /// <summary>
   /// Записывает байты архива в файл. Возвращает <see langword="true"/> при успехе,

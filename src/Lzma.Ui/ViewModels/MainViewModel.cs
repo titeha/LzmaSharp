@@ -50,6 +50,7 @@ public sealed class MainViewModel : ObservableObject
   private bool _canGoUp;
   private bool _isBusy;
   private bool _isOperating;
+  private double _progressPercent;
 
   public MainViewModel(IArchivePicker picker, IPasswordPrompt passwordPrompt, IFolderPicker folderPicker)
       : this(picker, passwordPrompt, folderPicker, new LzmaArchiveService(), sourceFilesPicker: null, saveFilePicker: null)
@@ -153,6 +154,16 @@ public sealed class MainViewModel : ObservableObject
   {
     get => _isOperating;
     private set => Set(ref _isOperating, value);
+  }
+
+  /// <summary>
+  /// Процент выполнения текущей длительной операции (0..100). Имеет смысл, пока идёт
+  /// операция; в UI показывается вместе с <see cref="IsBusy"/>.
+  /// </summary>
+  public double ProgressPercent
+  {
+    get => _progressPercent;
+    private set => Set(ref _progressPercent, value);
   }
 
   /// <summary>
@@ -316,9 +327,11 @@ public sealed class MainViewModel : ObservableObject
     byte[] bytes = _archiveBytes;
     string? password = _archivePassword;
 
+    IProgress<SevenZipProgress> progress = CreateProgress();
+
     await RunOperationAsync(async () =>
     {
-      SevenZipArchiveDecodeResult result = await _archiveService.ExtractAllAsync(bytes, password, destination);
+      SevenZipArchiveDecodeResult result = await _archiveService.ExtractAllAsync(bytes, password, destination, progress);
 
       StatusMessage = result switch
       {
@@ -363,6 +376,8 @@ public sealed class MainViewModel : ObservableObject
     if (path is null)
       return; // выбор пути отменён
 
+    IProgress<SevenZipProgress> progress = CreateProgress();
+
     await RunOperationAsync(async () =>
     {
       var entries = new List<SevenZipArchiveWriterEntry>(files.Count);
@@ -370,7 +385,7 @@ public sealed class MainViewModel : ObservableObject
       foreach (PickedFile file in files)
         entries.Add(new SevenZipArchiveWriterEntry(file.Name, file.Bytes));
 
-      ArchiveCreateOutcome created = await _archiveService.CreateArchiveAsync(entries, SelectedCompressionMethod);
+      ArchiveCreateOutcome created = await _archiveService.CreateArchiveAsync(entries, SelectedCompressionMethod, progress);
 
       if (created.Result != SevenZipArchiveWriteResult.Ok)
       {
@@ -388,12 +403,31 @@ public sealed class MainViewModel : ObservableObject
     });
   }
 
+  // Преобразует отчёт ядра в процент (0..100) и обновляет ProgressPercent. internal — для тестов.
+  internal void ReportProgress(SevenZipProgress progress) => ProgressPercent = ToPercent(progress);
+
+  // Чистое преобразование: доля обработанных байт → проценты, ограничено [0..100].
+  // Неизвестный объём (TotalBytes <= 0) трактуем как 0 % (индикатор остаётся «неопределённым»).
+  internal static double ToPercent(SevenZipProgress progress)
+  {
+    if (progress.TotalBytes <= 0)
+      return 0;
+
+    double percent = 100.0 * progress.BytesProcessed / progress.TotalBytes;
+    return percent < 0 ? 0 : percent > 100 ? 100 : percent;
+  }
+
+  // Создаёт мост прогресса: Progress<T> захватывает текущий SynchronizationContext (UI-поток
+  // в реальном приложении), поэтому обновления свойства приходят на UI-поток.
+  private IProgress<SevenZipProgress> CreateProgress() => new Progress<SevenZipProgress>(ReportProgress);
+
   // Выполняет длительную операцию с отложенным индикатором: IsOperating ставится сразу
   // (блокирует повторный запуск), а визуальный IsBusy включается, только если операция
   // не завершилась за BusyIndicatorDelay. Так быстрые операции не показывают индикатор.
   private async Task RunOperationAsync(Func<Task> operation)
   {
     IsOperating = true;
+    ProgressPercent = 0;
 
     Task work = operation();
 
@@ -410,6 +444,7 @@ public sealed class MainViewModel : ObservableObject
     {
       IsBusy = false;
       IsOperating = false;
+      ProgressPercent = 0;
     }
   }
 

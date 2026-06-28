@@ -22,7 +22,8 @@ public sealed class MainViewModelBusyTests
     public Task<ArchiveOpenOutcome> OpenAsync(byte[] bytes, string? password)
         => Task.FromResult(new ArchiveOpenOutcome(SevenZipArchiveDecodeResult.Ok, []));
 
-    public async Task<SevenZipArchiveDecodeResult> ExtractAllAsync(byte[] bytes, string? password, string destination)
+    public async Task<SevenZipArchiveDecodeResult> ExtractAllAsync(
+        byte[] bytes, string? password, string destination, System.IProgress<SevenZipProgress>? progress = null)
     {
       if (ExtractGate is not null)
         await ExtractGate.Task;
@@ -32,7 +33,8 @@ public sealed class MainViewModelBusyTests
 
     public Task<ArchiveCreateOutcome> CreateArchiveAsync(
         IReadOnlyList<SevenZipArchiveWriterEntry> entries,
-        SevenZipWriterCompressionMethod method)
+        SevenZipWriterCompressionMethod method,
+        System.IProgress<SevenZipProgress>? progress = null)
         => Task.FromResult(new ArchiveCreateOutcome(SevenZipArchiveWriteResult.Ok, []));
 
     public Task<bool> WriteArchiveAsync(byte[] archive, string path) => Task.FromResult(true);
