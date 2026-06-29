@@ -159,6 +159,14 @@ public static partial class SevenZipArchiveDecoder
         files: out files,
         bytesConsumed: out bytesConsumed);
 
+  // Лёгкий синхронный адаптер IProgress из делегата. В отличие от System.Progress<T>
+  // (постит отчёты асинхронно через SynchronizationContext) — вызывает делегат на месте,
+  // что нужно для перевода folder-local отчётов в глобальные внутри цикла декодирования.
+  private sealed class DelegateProgress<T>(Action<T> report) : IProgress<T>
+  {
+    public void Report(T value) => report(value);
+  }
+
   public static SevenZipArchiveDecodeResult DecodeToArray(
       ReadOnlySpan<byte> archive,
       SevenZipDecodeOptions options,
@@ -454,12 +462,21 @@ public static partial class SevenZipArchiveDecoder
 
     for (int folderIndex = 0; folderIndex < folderCount; folderIndex++)
     {
+      // Within-folder прогресс: транслируем folder-local BytesWritten (накопленный выход
+      // текущего folder) в глобальный отчёт = (обработано в предыдущих folder-ах + local).
+      // Clamp на total — защита от возможного перелёта (напр. промежуточные размеры в цепочке).
+      long processedBefore = processedUnpackedBytes;
+      IProgress<LzmaProgress>? folderProgress = progress is null ? null
+          : new DelegateProgress<LzmaProgress>(lp => progress.Report(new SevenZipProgress(
+              Math.Min(processedBefore + lp.BytesWritten, totalUnpackedBytes), totalUnpackedBytes)));
+
       SevenZipFolderDecodeResult folderRes = SevenZipFolderDecoder.DecodeFolderToArray(
         streamsInfo: streamsInfo,
         packedStreams: packed,
         folderIndex: folderIndex,
         options: options,
-        output: out byte[] folderUnpacked);
+        output: out byte[] folderUnpacked,
+        progress: folderProgress);
 
       if (folderRes == SevenZipFolderDecodeResult.InvalidData)
         return SevenZipArchiveDecodeResult.InvalidData;

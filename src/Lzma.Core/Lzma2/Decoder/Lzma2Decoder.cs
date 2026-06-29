@@ -25,9 +25,10 @@ public static class Lzma2Decoder
       ReadOnlySpan<byte> input,
       int dictionarySize,
       out byte[] output,
-      out int bytesConsumed)
+      out int bytesConsumed,
+      IProgress<LzmaProgress>? progress = null)
   {
-    var decoder = new Lzma2IncrementalDecoder(dictionarySize: dictionarySize);
+    var decoder = new Lzma2IncrementalDecoder(progress: progress, dictionarySize: dictionarySize);
     return DecodeToArray(decoder, input, out output, out bytesConsumed);
   }
 
@@ -38,7 +39,8 @@ public static class Lzma2Decoder
       ReadOnlySpan<byte> input,
       Lzma2Properties properties,
       out byte[] output,
-      out int bytesConsumed)
+      out int bytesConsumed,
+      IProgress<LzmaProgress>? progress = null)
   {
     if (!properties.TryGetDictionarySizeInt32(out int dictionarySize))
     {
@@ -47,7 +49,7 @@ public static class Lzma2Decoder
       return Lzma2DecodeResult.NotSupported;
     }
 
-    var decoder = new Lzma2IncrementalDecoder(dictionarySize: dictionarySize);
+    var decoder = new Lzma2IncrementalDecoder(progress: progress, dictionarySize: dictionarySize);
     return DecodeToArray(decoder, input, out output, out bytesConsumed);
   }
 
@@ -58,7 +60,8 @@ public static class Lzma2Decoder
       ReadOnlySpan<byte> input,
       byte dictionaryProp,
       out byte[] output,
-      out int bytesConsumed)
+      out int bytesConsumed,
+      IProgress<LzmaProgress>? progress = null)
   {
     if (!Lzma2Properties.TryParse(dictionaryProp, out var properties))
     {
@@ -67,7 +70,7 @@ public static class Lzma2Decoder
       return Lzma2DecodeResult.NotSupported;
     }
 
-    return DecodeToArray(input, properties, out output, out bytesConsumed);
+    return DecodeToArray(input, properties, out output, out bytesConsumed, progress);
   }
 
   private static Lzma2DecodeResult DecodeToArray(

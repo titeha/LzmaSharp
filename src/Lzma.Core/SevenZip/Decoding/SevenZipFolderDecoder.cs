@@ -67,7 +67,8 @@ public static class SevenZipFolderDecoder
       ReadOnlySpan<byte> packedStreams,
       int folderIndex,
       SevenZipDecodeOptions options,
-      out byte[] output)
+      out byte[] output,
+      IProgress<LzmaProgress>? progress = null)
   {
     output = [];
 
@@ -216,6 +217,7 @@ public static class SevenZipFolderDecoder
     ReadOnlySpan<byte> input,
     int expectedUnpackSize,
     SevenZipDecodeOptions options,
+    IProgress<LzmaProgress>? progress,
     out byte[] decoded)
     {
       decoded = [];
@@ -260,7 +262,7 @@ public static class SevenZipFolderDecoder
         return TryDecodeBcjCoder(coder, input, expectedUnpackSize, SevenZipBcjFilters.Arm64DecodeInPlace, out decoded);
 
       if (IsSingleByteMethodId(coder.MethodId, _methodIdLzma2))
-        return TryDecodeLzma2Coder(coder, input, expectedUnpackSize, out decoded);
+        return TryDecodeLzma2Coder(coder, input, expectedUnpackSize, out decoded, progress);
 
       // LZMA (7z) method id = { 03 01 01 }.
       if (coder.MethodId.Length == 3 &&
@@ -363,6 +365,7 @@ public static class SevenZipFolderDecoder
         input: currentInput,
         expectedUnpackSize: expectedSize,
         options: options,
+        progress: coderCount == 1 ? progress : null,
         decoded: out byte[] decoded);
 
       if (r != SevenZipFolderDecodeResult.Ok)
@@ -636,7 +639,8 @@ public static class SevenZipFolderDecoder
       SevenZipCoderInfo coder,
       ReadOnlySpan<byte> input,
       int expectedUnpackSize,
-      out byte[] decoded)
+      out byte[] decoded,
+      IProgress<LzmaProgress>? progress = null)
   {
     decoded = [];
 
@@ -656,7 +660,8 @@ public static class SevenZipFolderDecoder
       input: input,
       dictionaryProp: lzma2PropertiesByte,
       output: out decoded,
-      bytesConsumed: out int lzma2BytesConsumed);
+      bytesConsumed: out int lzma2BytesConsumed,
+      progress: progress);
 
     if (lzma2Result == Lzma2DecodeResult.NotSupported)
     {

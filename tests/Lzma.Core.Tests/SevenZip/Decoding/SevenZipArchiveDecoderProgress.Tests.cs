@@ -54,6 +54,41 @@ public sealed class SevenZipArchiveDecoderProgressTests
   }
 
   [Fact]
+  public void DecodeToEntries_ОдинБольшойФайл_ЕстьПромежуточныйОтчётВнутриFolder()
+  {
+    // Один файл ~1 МБ в одном folder. Раньше прогресс репортился только на границе folder
+    // (0 и total). Within-folder гранулярность даёт промежуточные отчёты по ходу декода LZMA2.
+    var sb = new StringBuilder();
+    for (int i = 0; sb.Length < 1_000_000; i++)
+      sb.Append($"строка номер {i} с текстом для сжатия LZMA2; ");
+    byte[] content = Encoding.UTF8.GetBytes(sb.ToString());
+
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, SevenZipArchiveWriter.BuildArchive(
+        [new SevenZipArchiveWriterEntry("big.txt", content)],
+        SevenZipWriterCompressionMethod.Lzma2,
+        out byte[] archive));
+
+    var progress = new RecordingProgress();
+
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, SevenZipArchiveDecoder.DecodeToEntries(
+        archive, SevenZipDecodeOptions.Default, out SevenZipDecodedEntry[] entries, out _, progress));
+
+    byte[] decoded = Assert.Single(entries).Bytes;
+    Assert.Equal(content, decoded);
+
+    long total = content.Length;
+    Assert.All(progress.Reports, p => Assert.Equal(total, p.TotalBytes));
+    Assert.Equal(0, progress.Reports[0].BytesProcessed);
+    Assert.Equal(total, progress.Reports[^1].BytesProcessed);
+
+    for (int i = 1; i < progress.Reports.Count; i++)
+      Assert.True(progress.Reports[i].BytesProcessed >= progress.Reports[i - 1].BytesProcessed);
+
+    // Главное доказательство within-folder: есть отчёт СТРОГО между 0 и total.
+    Assert.Contains(progress.Reports, p => p.BytesProcessed > 0 && p.BytesProcessed < total);
+  }
+
+  [Fact]
   public void DecodeToEntries_БезПрогресса_РаботаетКакПрежде()
   {
     byte[] content = Encoding.UTF8.GetBytes("без прогресса");
