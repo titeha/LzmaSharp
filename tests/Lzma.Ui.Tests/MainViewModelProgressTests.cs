@@ -75,4 +75,23 @@ public sealed class MainViewModelProgressTests
     Assert.Equal(25.0, vm.ProgressPercent);
     Assert.True(notified);
   }
+
+  [Fact]
+  public void ReportProgress_ОбновляетТекстОбъёма()
+  {
+    MainViewModel vm = BuildViewModel();
+
+    vm.ReportProgress(new SevenZipProgress(3 * 1024 * 1024, 10 * 1024 * 1024));
+
+    Assert.Equal("3 МБ / 10 МБ", vm.ProgressText);
+  }
+
+  [Theory]
+  [InlineData(0, 0, "")]                       // неизвестный объём → пусто
+  [InlineData(10, 0, "")]                      // total <= 0 → пусто
+  [InlineData(512, 1024, "512 Б / 1 КБ")]      // байты/КБ
+  public void FormatProgressText_ФорматируетОбъём(long processed, long total, string expected)
+  {
+    Assert.Equal(expected, MainViewModel.FormatProgressText(new SevenZipProgress(processed, total)));
+  }
 }

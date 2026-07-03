@@ -52,6 +52,7 @@ public sealed class MainViewModel : ObservableObject
   private bool _isBusy;
   private bool _isOperating;
   private double _progressPercent;
+  private string? _progressText;
   private bool _isScanning;
   private string? _scanStatus;
 
@@ -171,6 +172,16 @@ public sealed class MainViewModel : ObservableObject
   {
     get => _progressPercent;
     private set => Set(ref _progressPercent, value);
+  }
+
+  /// <summary>
+  /// Живой текст объёма текущей операции («3.2 МБ / 10 МБ»); пусто при неизвестном общем
+  /// размере. Показывается рядом с процентом, пока идёт операция (<see cref="IsBusy"/>).
+  /// </summary>
+  public string? ProgressText
+  {
+    get => _progressText;
+    private set => Set(ref _progressText, value);
   }
 
   /// <summary>
@@ -486,8 +497,18 @@ public sealed class MainViewModel : ObservableObject
     };
   }
 
-  // Преобразует отчёт ядра в процент (0..100) и обновляет ProgressPercent. internal — для тестов.
-  internal void ReportProgress(SevenZipProgress progress) => ProgressPercent = ToPercent(progress);
+  // Преобразует отчёт ядра в процент и текст объёма и обновляет свойства. internal — для тестов.
+  internal void ReportProgress(SevenZipProgress progress)
+  {
+    ProgressPercent = ToPercent(progress);
+    ProgressText = FormatProgressText(progress);
+  }
+
+  // Живой текст объёма «обработано / всего»; пусто при неизвестном общем размере. internal — для тестов.
+  internal static string FormatProgressText(SevenZipProgress progress)
+      => progress.TotalBytes <= 0
+          ? string.Empty
+          : $"{ByteSizeFormat.Format(progress.BytesProcessed)} / {ByteSizeFormat.Format(progress.TotalBytes)}";
 
   // Чистое преобразование: доля обработанных байт → проценты, ограничено [0..100].
   // Неизвестный объём (TotalBytes <= 0) трактуем как 0 % (индикатор остаётся «неопределённым»).
@@ -515,6 +536,7 @@ public sealed class MainViewModel : ObservableObject
   {
     IsOperating = true;
     ProgressPercent = 0;
+    ProgressText = null;
 
     using var cts = new CancellationTokenSource();
     _operationCts = cts;
@@ -540,6 +562,7 @@ public sealed class MainViewModel : ObservableObject
       IsBusy = false;
       IsOperating = false;
       ProgressPercent = 0;
+      ProgressText = null;
     }
   }
 
