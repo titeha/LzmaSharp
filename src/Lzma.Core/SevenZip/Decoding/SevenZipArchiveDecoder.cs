@@ -172,7 +172,8 @@ public static partial class SevenZipArchiveDecoder
       SevenZipDecodeOptions options,
       out SevenZipDecodedFile[] files,
       out int bytesConsumed,
-      IProgress<SevenZipProgress>? progress = null)
+      IProgress<SevenZipProgress>? progress = null,
+      System.Threading.CancellationToken token = default)
   {
     ArgumentNullException.ThrowIfNull(options);
 
@@ -462,6 +463,8 @@ public static partial class SevenZipArchiveDecoder
 
     for (int folderIndex = 0; folderIndex < folderCount; folderIndex++)
     {
+      token.ThrowIfCancellationRequested(); // кооперативная отмена между folder-ами
+
       // Within-folder прогресс: транслируем folder-local BytesWritten (накопленный выход
       // текущего folder) в глобальный отчёт = (обработано в предыдущих folder-ах + local).
       // Clamp на total — защита от возможного перелёта (напр. промежуточные размеры в цепочке).
@@ -648,7 +651,8 @@ public static partial class SevenZipArchiveDecoder
       SevenZipDecodeOptions options,
       out SevenZipDecodedEntry[] entries,
       out int bytesConsumed,
-      IProgress<SevenZipProgress>? progress = null)
+      IProgress<SevenZipProgress>? progress = null,
+      System.Threading.CancellationToken token = default)
   {
     ArgumentNullException.ThrowIfNull(options);
 
@@ -656,7 +660,7 @@ public static partial class SevenZipArchiveDecoder
     bytesConsumed = 0;
 
     // 1) Сначала делаем обычную распаковку (чтобы не трогать уже стабилизированный код).
-    SevenZipArchiveDecodeResult r = DecodeToArray(archive, options, out SevenZipDecodedFile[] files, out bytesConsumed, progress);
+    SevenZipArchiveDecodeResult r = DecodeToArray(archive, options, out SevenZipDecodedFile[] files, out bytesConsumed, progress, token);
     if (r != SevenZipArchiveDecodeResult.Ok)
       return r;
 
@@ -749,7 +753,8 @@ public static partial class SevenZipArchiveDecoder
       string destinationDirectory,
       bool overwrite,
       out int bytesConsumed,
-      IProgress<SevenZipProgress>? progress = null)
+      IProgress<SevenZipProgress>? progress = null,
+      System.Threading.CancellationToken token = default)
   {
     ArgumentNullException.ThrowIfNull(options);
     bytesConsumed = 0;
@@ -757,7 +762,7 @@ public static partial class SevenZipArchiveDecoder
     if (destinationDirectory is null)
       return SevenZipArchiveDecodeResult.InvalidData;
 
-    SevenZipArchiveDecodeResult r = DecodeToEntries(archive, options, out SevenZipDecodedEntry[] entries, out bytesConsumed, progress);
+    SevenZipArchiveDecodeResult r = DecodeToEntries(archive, options, out SevenZipDecodedEntry[] entries, out bytesConsumed, progress, token);
     if (r != SevenZipArchiveDecodeResult.Ok)
       return r;
 

@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
+using System.Threading;
 
 using Lzma.Core.SevenZip;
 using Lzma.Ui.Models;
@@ -54,6 +55,9 @@ public sealed class MainViewModel : ObservableObject
   private bool _isScanning;
   private string? _scanStatus;
 
+  // Источник токена отмены текущей длительной операции; null — операция не идёт.
+  private CancellationTokenSource? _operationCts;
+
   public MainViewModel(IArchivePicker picker, IPasswordPrompt passwordPrompt, IFolderPicker folderPicker)
       : this(picker, passwordPrompt, folderPicker, new LzmaArchiveService(), sourceFilesPicker: null, saveFilePicker: null)
   {
@@ -101,6 +105,7 @@ public sealed class MainViewModel : ObservableObject
     ExtractAllCommand = new AsyncRelayCommand(ExtractAllAsync, () => HasArchive && !IsOperating, this);
     CreateCommand = new AsyncRelayCommand(CreateFromFilesAsync, () => CanCreate && !IsOperating, this);
     CreateFromFolderCommand = new AsyncRelayCommand(CreateFromFolderAsync, () => CanCreateFromFolder && !IsOperating, this);
+    CancelCommand = new RelayCommand(Cancel, () => IsOperating, this);
   }
 
   /// <summary>Заголовок окна: базовый либо «имя_архива — LzmaSharp» при открытом архиве.</summary>
@@ -211,6 +216,9 @@ public sealed class MainViewModel : ObservableObject
 
   /// <summary>Команда «Создать из папки…» — упаковать содержимое выбранной папки (рекурсивно).</summary>
   public AsyncRelayCommand CreateFromFolderCommand { get; }
+
+  /// <summary>Команда «Отмена» — прерывает текущую длительную операцию (сжатие/извлечение).</summary>
+  public RelayCommand CancelCommand { get; }
 
   /// <summary>Доступные методы сжатия для создания архива (с дружелюбными именами для UI).</summary>
   public IReadOnlyList<CompressionMethodOption> CompressionMethods { get; } =
@@ -351,9 +359,9 @@ public sealed class MainViewModel : ObservableObject
 
     IProgress<SevenZipProgress> progress = CreateProgress();
 
-    await RunOperationAsync(async () =>
+    await RunOperationAsync(async token =>
     {
-      SevenZipArchiveDecodeResult result = await _archiveService.ExtractAllAsync(bytes, password, destination, progress);
+      SevenZipArchiveDecodeResult result = await _archiveService.ExtractAllAsync(bytes, password, destination, progress, token);
 
       StatusMessage = result switch
       {
@@ -418,14 +426,14 @@ public sealed class MainViewModel : ObservableObject
 
     IProgress<SevenZipProgress> progress = CreateProgress();
 
-    await RunOperationAsync(async () =>
+    await RunOperationAsync(async token =>
     {
       var entries = new List<SevenZipArchiveWriterEntry>(files.Count);
 
       foreach (PickedFile file in files)
         entries.Add(new SevenZipArchiveWriterEntry(file.Name, file.Bytes));
 
-      ArchiveCreateOutcome created = await _archiveService.CreateArchiveAsync(entries, SelectedCompressionMethod, progress);
+      ArchiveCreateOutcome created = await _archiveService.CreateArchiveAsync(entries, SelectedCompressionMethod, progress, token);
 
       if (created.Result != SevenZipArchiveWriteResult.Ok)
       {
@@ -480,15 +488,22 @@ public sealed class MainViewModel : ObservableObject
   // в реальном приложении), поэтому обновления свойства приходят на UI-поток.
   private IProgress<SevenZipProgress> CreateProgress() => new Progress<SevenZipProgress>(ReportProgress);
 
+  // Прерывает текущую длительную операцию (если идёт).
+  private void Cancel() => _operationCts?.Cancel();
+
   // Выполняет длительную операцию с отложенным индикатором: IsOperating ставится сразу
   // (блокирует повторный запуск), а визуальный IsBusy включается, только если операция
   // не завершилась за BusyIndicatorDelay. Так быстрые операции не показывают индикатор.
-  private async Task RunOperationAsync(Func<Task> operation)
+  // Операция получает CancellationToken; отмена ловится и показывается в статусе.
+  private async Task RunOperationAsync(Func<CancellationToken, Task> operation)
   {
     IsOperating = true;
     ProgressPercent = 0;
 
-    Task work = operation();
+    using var cts = new CancellationTokenSource();
+    _operationCts = cts;
+
+    Task work = operation(cts.Token);
 
     try
     {
@@ -499,8 +514,13 @@ public sealed class MainViewModel : ObservableObject
 
       await work; // дождаться завершения и проброса исключений
     }
+    catch (OperationCanceledException)
+    {
+      StatusMessage = "Операция отменена.";
+    }
     finally
     {
+      _operationCts = null;
       IsBusy = false;
       IsOperating = false;
       ProgressPercent = 0;

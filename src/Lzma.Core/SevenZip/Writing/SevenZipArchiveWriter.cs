@@ -70,7 +70,8 @@ public static partial class SevenZipArchiveWriter
       IReadOnlyList<SevenZipArchiveWriterEntry> entries,
       SevenZipCompressionOptions options,
       out byte[] archive,
-      IProgress<SevenZipProgress>? progress = null)
+      IProgress<SevenZipProgress>? progress = null,
+      System.Threading.CancellationToken token = default)
   {
     archive = [];
 
@@ -89,10 +90,10 @@ public static partial class SevenZipArchiveWriter
 
     return options.Method switch
     {
-      SevenZipWriterCompressionMethod.Lzma2 => BuildLzma2EntriesArchive(entries, options.Lzma2DictionarySize, out archive, progress),
-      SevenZipWriterCompressionMethod.Ppmd => BuildPpmdEntriesArchive(entries, out archive, progress),
-      SevenZipWriterCompressionMethod.Auto => BuildAutoEntriesArchive(entries, options.Lzma2DictionarySize, out archive, progress),
-      SevenZipWriterCompressionMethod.Copy => BuildCopyEntriesArchive(entries, out archive, progress),
+      SevenZipWriterCompressionMethod.Lzma2 => BuildLzma2EntriesArchive(entries, options.Lzma2DictionarySize, out archive, progress, token),
+      SevenZipWriterCompressionMethod.Ppmd => BuildPpmdEntriesArchive(entries, out archive, progress, token),
+      SevenZipWriterCompressionMethod.Auto => BuildAutoEntriesArchive(entries, options.Lzma2DictionarySize, out archive, progress, token),
+      SevenZipWriterCompressionMethod.Copy => BuildCopyEntriesArchive(entries, out archive, progress, token),
       _ => SevenZipArchiveWriteResult.NotSupported,
     };
   }
@@ -115,9 +116,12 @@ public static partial class SevenZipArchiveWriter
   private static SevenZipArchiveWriteResult BuildCopyEntriesArchive(
       IReadOnlyList<SevenZipArchiveWriterEntry> entries,
       out byte[] archive,
-      IProgress<SevenZipProgress>? progress = null)
+      IProgress<SevenZipProgress>? progress = null,
+      System.Threading.CancellationToken token = default)
   {
     archive = [];
+
+    token.ThrowIfCancellationRequested();
 
     long total = progress is null ? 0 : TotalNonEmptyContentLength(entries);
     progress?.Report(new SevenZipProgress(0, total));

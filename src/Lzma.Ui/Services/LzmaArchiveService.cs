@@ -28,25 +28,27 @@ public sealed class LzmaArchiveService : IArchiveService
       byte[] bytes,
       string? password,
       string destination,
-      System.IProgress<SevenZipProgress>? progress = null)
+      System.IProgress<SevenZipProgress>? progress = null,
+      System.Threading.CancellationToken token = default)
   {
     return Task.Run(() => WithOptions(password, options =>
-        SevenZipArchiveDecoder.ExtractToDirectory(bytes, options, destination, overwrite: false, out _, progress)));
+        SevenZipArchiveDecoder.ExtractToDirectory(bytes, options, destination, overwrite: false, out _, progress, token)), token);
   }
 
   /// <inheritdoc />
   public Task<ArchiveCreateOutcome> CreateArchiveAsync(
       IReadOnlyList<SevenZipArchiveWriterEntry> entries,
       SevenZipWriterCompressionMethod method,
-      System.IProgress<SevenZipProgress>? progress = null)
+      System.IProgress<SevenZipProgress>? progress = null,
+      System.Threading.CancellationToken token = default)
   {
     return Task.Run(() =>
     {
       SevenZipArchiveWriteResult result = SevenZipArchiveWriter.BuildArchive(
-          entries, SevenZipCompressionOptions.ForMethod(method), out byte[] archive, progress);
+          entries, SevenZipCompressionOptions.ForMethod(method), out byte[] archive, progress, token);
 
       return new ArchiveCreateOutcome(result, archive);
-    });
+    }, token);
   }
 
   /// <inheritdoc />

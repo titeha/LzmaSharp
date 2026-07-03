@@ -17,7 +17,8 @@ public static partial class SevenZipArchiveWriter
       Func<byte[], byte[]> encode,
       byte[] coderBytes,
       out byte[] archive,
-      IProgress<SevenZipProgress>? progress = null)
+      IProgress<SevenZipProgress>? progress = null,
+      System.Threading.CancellationToken token = default)
   {
     archive = [];
 
@@ -40,6 +41,8 @@ public static partial class SevenZipArchiveWriter
 
       if (!IsNonEmptyFile(entry))
         continue;
+
+      token.ThrowIfCancellationRequested(); // кооперативная отмена между файлами
 
       byte[] compressed = encode(entry.Content);
 

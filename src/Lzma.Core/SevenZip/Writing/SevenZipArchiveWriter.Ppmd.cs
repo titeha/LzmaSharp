@@ -16,7 +16,8 @@ public static partial class SevenZipArchiveWriter
   private static SevenZipArchiveWriteResult BuildPpmdEntriesArchive(
       IReadOnlyList<SevenZipArchiveWriterEntry> entries,
       out byte[] archive,
-      IProgress<SevenZipProgress>? progress = null)
+      IProgress<SevenZipProgress>? progress = null,
+      System.Threading.CancellationToken token = default)
   {
     // PPMd coder: flags = idSize(3) | attributes(0x20) = 0x23, method id = 03 04 01,
     // размер properties = 5, properties = [order, memSize (UInt32 LE)].
@@ -32,7 +33,7 @@ public static partial class SevenZipArchiveWriter
         (byte)((PpmdMemSize >> 24) & 0xFF),
     ];
 
-    return BuildCompressedEntriesArchive(entries, EncodePpmd, coderBytes, out archive, progress);
+    return BuildCompressedEntriesArchive(entries, EncodePpmd, coderBytes, out archive, progress, token);
   }
 
   private static byte[] EncodePpmd(byte[] content)

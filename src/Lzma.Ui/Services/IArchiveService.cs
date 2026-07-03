@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 
 using Lzma.Core.SevenZip;
@@ -44,7 +45,8 @@ public interface IArchiveService
       byte[] bytes,
       string? password,
       string destination,
-      IProgress<SevenZipProgress>? progress = null);
+      IProgress<SevenZipProgress>? progress = null,
+      CancellationToken token = default);
 
   /// <summary>
   /// Собирает 7z-архив из набора записей выбранным методом сжатия. Возвращает байты архива;
@@ -54,7 +56,8 @@ public interface IArchiveService
   Task<ArchiveCreateOutcome> CreateArchiveAsync(
       IReadOnlyList<SevenZipArchiveWriterEntry> entries,
       SevenZipWriterCompressionMethod method,
-      IProgress<SevenZipProgress>? progress = null);
+      IProgress<SevenZipProgress>? progress = null,
+      CancellationToken token = default);
 
   /// <summary>
   /// Записывает байты архива в файл. Возвращает <see langword="true"/> при успехе,
