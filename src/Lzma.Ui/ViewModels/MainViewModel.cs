@@ -445,8 +445,12 @@ public sealed class MainViewModel : ObservableObject
 
       bool wrote = await _archiveService.WriteArchiveAsync(created.Archive, path);
 
+      long originalBytes = 0;
+      foreach (PickedFile file in files)
+        originalBytes += file.Bytes.LongLength;
+
       StatusMessage = wrote
-          ? $"Создан архив: {path}"
+          ? FormatCreateSummary(path, originalBytes, created.Archive.LongLength)
           : "Архив собран, но записать на диск не удалось (нет доступа или ошибка ввода-вывода).";
     });
   }
@@ -454,6 +458,18 @@ public sealed class MainViewModel : ObservableObject
   // Форматирует живой счётчик сканирования. internal — для тестов.
   internal static string FormatScanStatus(ScanProgress p)
       => $"Сканирование: {p.FilesRead} {PluralizeFiles(p.FilesRead)}, {ByteSizeFormat.Format(p.BytesRead)}";
+
+  // Итог создания архива: путь + размеры и коэффициент сжатия. internal — для тестов.
+  internal static string FormatCreateSummary(string path, long originalBytes, long compressedBytes)
+  {
+    if (originalBytes <= 0 || compressedBytes <= 0)
+      return $"Создан архив: {path} ({ByteSizeFormat.Format(compressedBytes)})";
+
+    double ratio = (double)originalBytes / compressedBytes;
+
+    return $"Создан архив: {path} (было {ByteSizeFormat.Format(originalBytes)} → "
+         + $"стало {ByteSizeFormat.Format(compressedBytes)}, {ratio:0.0}×)";
+  }
 
   // Русское склонение слова «файл» по числу (1 файл, 2 файла, 5 файлов).
   internal static string PluralizeFiles(int count)

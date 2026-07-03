@@ -88,6 +88,7 @@ public sealed class MainViewModelCreateTests
       Assert.False(vm.IsBusy);
       Assert.True(File.Exists(outPath));
       Assert.Contains(outPath, vm.StatusMessage);
+      Assert.Contains("стало", vm.StatusMessage); // итог с размером/коэффициентом
 
       // Архив должен открываться нашим же декодером с тем же содержимым.
       byte[] archiveBytes = File.ReadAllBytes(outPath);
