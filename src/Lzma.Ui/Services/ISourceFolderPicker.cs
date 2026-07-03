@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 
@@ -12,7 +13,8 @@ public interface ISourceFolderPicker
 {
   /// <summary>
   /// Просит выбрать папку и возвращает её файлы как <see cref="PickedFile"/> с относительными
-  /// именами. <see langword="null"/> — выбор отменён или в папке нет файлов.
+  /// именами. <see langword="null"/> — выбор отменён или в папке нет файлов. Опциональный
+  /// <paramref name="progress"/> получает живой счётчик по мере обхода и чтения файлов.
   /// </summary>
-  Task<IReadOnlyList<PickedFile>?> PickFolderFilesAsync();
+  Task<IReadOnlyList<PickedFile>?> PickFolderFilesAsync(IProgress<ScanProgress>? progress = null);
 }

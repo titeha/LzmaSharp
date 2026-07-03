@@ -51,6 +51,8 @@ public sealed class MainViewModel : ObservableObject
   private bool _isBusy;
   private bool _isOperating;
   private double _progressPercent;
+  private bool _isScanning;
+  private string? _scanStatus;
 
   public MainViewModel(IArchivePicker picker, IPasswordPrompt passwordPrompt, IFolderPicker folderPicker)
       : this(picker, passwordPrompt, folderPicker, new LzmaArchiveService(), sourceFilesPicker: null, saveFilePicker: null)
@@ -164,6 +166,26 @@ public sealed class MainViewModel : ObservableObject
   {
     get => _progressPercent;
     private set => Set(ref _progressPercent, value);
+  }
+
+  /// <summary>
+  /// Идёт ли сканирование/чтение исходных файлов в память (фаза до сжатия). Пока true —
+  /// показываем живой счётчик <see cref="ScanStatus"/>.
+  /// </summary>
+  public bool IsScanning
+  {
+    get => _isScanning;
+    private set => Set(ref _isScanning, value);
+  }
+
+  /// <summary>
+  /// Живой текст счётчика сканирования («Сканирование: N файлов, X МБ»);
+  /// <see langword="null"/> — скрыт.
+  /// </summary>
+  public string? ScanStatus
+  {
+    get => _scanStatus;
+    private set => Set(ref _scanStatus, value);
   }
 
   /// <summary>
@@ -361,12 +383,30 @@ public sealed class MainViewModel : ObservableObject
   }
 
   // Общий путь создания: получить источник → выбрать путь → собрать ядром → записать на диск.
-  private async Task CreateFromSourceAsync(Func<Task<IReadOnlyList<PickedFile>?>> pickSources)
+  private async Task CreateFromSourceAsync(
+      Func<IProgress<ScanProgress>?, Task<IReadOnlyList<PickedFile>?>> pickSources)
   {
     if (_saveFilePicker is null)
       return;
 
-    IReadOnlyList<PickedFile>? files = await pickSources();
+    // Живой счётчик на фазе сканирования/чтения файлов в память (до сжатия). Синхронный
+    // адаптер: отчёты приходят на UI-поток по мере чтения, индикатор гаснет в finally.
+    var scanProgress = new DelegateProgress<ScanProgress>(sp =>
+    {
+      IsScanning = true;
+      ScanStatus = FormatScanStatus(sp);
+    });
+
+    IReadOnlyList<PickedFile>? files;
+    try
+    {
+      files = await pickSources(scanProgress);
+    }
+    finally
+    {
+      IsScanning = false;
+      ScanStatus = null;
+    }
 
     if (files is null || files.Count == 0)
       return; // выбор отменён или ничего не выбрано
@@ -401,6 +441,25 @@ public sealed class MainViewModel : ObservableObject
           ? $"Создан архив: {path}"
           : "Архив собран, но записать на диск не удалось (нет доступа или ошибка ввода-вывода).";
     });
+  }
+
+  // Форматирует живой счётчик сканирования. internal — для тестов.
+  internal static string FormatScanStatus(ScanProgress p)
+      => $"Сканирование: {p.FilesRead} {PluralizeFiles(p.FilesRead)}, {ByteSizeFormat.Format(p.BytesRead)}";
+
+  // Русское склонение слова «файл» по числу (1 файл, 2 файла, 5 файлов).
+  internal static string PluralizeFiles(int count)
+  {
+    int mod100 = count % 100;
+    if (mod100 is >= 11 and <= 14)
+      return "файлов";
+
+    return (count % 10) switch
+    {
+      1 => "файл",
+      2 or 3 or 4 => "файла",
+      _ => "файлов",
+    };
   }
 
   // Преобразует отчёт ядра в процент (0..100) и обновляет ProgressPercent. internal — для тестов.

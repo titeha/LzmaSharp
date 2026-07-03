@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
@@ -15,7 +16,7 @@ public sealed class AvaloniaSourceFilesPicker(TopLevel topLevel) : ISourceFilesP
 {
   private readonly TopLevel _topLevel = topLevel;
 
-  public async Task<IReadOnlyList<PickedFile>?> PickFilesAsync()
+  public async Task<IReadOnlyList<PickedFile>?> PickFilesAsync(IProgress<ScanProgress>? progress = null)
   {
     IReadOnlyList<IStorageFile> files = await _topLevel.StorageProvider.OpenFilePickerAsync(
         new FilePickerOpenOptions
@@ -28,6 +29,7 @@ public sealed class AvaloniaSourceFilesPicker(TopLevel topLevel) : ISourceFilesP
       return null;
 
     var result = new List<PickedFile>(files.Count);
+    long bytesRead = 0;
 
     foreach (IStorageFile file in files)
     {
@@ -35,7 +37,11 @@ public sealed class AvaloniaSourceFilesPicker(TopLevel topLevel) : ISourceFilesP
       using var buffer = new MemoryStream();
       await stream.CopyToAsync(buffer);
 
-      result.Add(new PickedFile(file.Name, buffer.ToArray()));
+      byte[] bytes = buffer.ToArray();
+      result.Add(new PickedFile(file.Name, bytes));
+
+      bytesRead += bytes.LongLength;
+      progress?.Report(new ScanProgress(result.Count, bytesRead));
     }
 
     return result;

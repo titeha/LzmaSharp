@@ -28,7 +28,8 @@ public sealed class MainViewModelCreateTests
 
   private sealed class StubSourceFilesPicker(IReadOnlyList<PickedFile>? files) : ISourceFilesPicker
   {
-    public Task<IReadOnlyList<PickedFile>?> PickFilesAsync() => Task.FromResult(files);
+    public Task<IReadOnlyList<PickedFile>?> PickFilesAsync(System.IProgress<ScanProgress>? progress = null)
+        => Task.FromResult(files);
   }
 
   private sealed class StubSaveFilePicker(string? path) : ISaveFilePicker

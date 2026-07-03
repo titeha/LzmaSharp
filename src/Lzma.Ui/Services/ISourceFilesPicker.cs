@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 
@@ -14,7 +15,8 @@ public interface ISourceFilesPicker
 {
   /// <summary>
   /// Просит выбрать один или несколько файлов. Возвращает <see langword="null"/>, если выбор
-  /// отменён (пустой список трактуется так же — добавлять нечего).
+  /// отменён (пустой список трактуется так же — добавлять нечего). Опциональный
+  /// <paramref name="progress"/> получает живой счётчик по мере чтения файлов в память.
   /// </summary>
-  Task<IReadOnlyList<PickedFile>?> PickFilesAsync();
+  Task<IReadOnlyList<PickedFile>?> PickFilesAsync(IProgress<ScanProgress>? progress = null);
 }

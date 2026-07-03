@@ -42,6 +42,11 @@
                 <TextBlock Text="{Binding ProgressPercent, StringFormat='{}{0:0}%'}"
                            VerticalAlignment="Center" Foreground="Gray" Width="38"
                            IsVisible="{Binding IsBusy}" />
+                <!-- Живой счётчик на фазе сканирования/чтения файлов (до сжатия). -->
+                <ProgressBar IsIndeterminate="True" Width="120" VerticalAlignment="Center"
+                             IsVisible="{Binding IsScanning}" />
+                <TextBlock Text="{Binding ScanStatus}" VerticalAlignment="Center"
+                           Foreground="Gray" IsVisible="{Binding IsScanning}" />
                 <TextBlock Text="{Binding CurrentPath}" VerticalAlignment="Center"
                            Foreground="Gray" TextTrimming="CharacterEllipsis"
                            IsVisible="{Binding !IsBusy}" />

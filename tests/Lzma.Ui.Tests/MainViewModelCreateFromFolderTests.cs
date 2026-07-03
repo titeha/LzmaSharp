@@ -29,7 +29,8 @@ public sealed class MainViewModelCreateFromFolderTests
 
   private sealed class StubSourceFolderPicker(IReadOnlyList<PickedFile>? files) : ISourceFolderPicker
   {
-    public Task<IReadOnlyList<PickedFile>?> PickFolderFilesAsync() => Task.FromResult(files);
+    public Task<IReadOnlyList<PickedFile>?> PickFolderFilesAsync(System.IProgress<ScanProgress>? progress = null)
+        => Task.FromResult(files);
   }
 
   private sealed class StubSaveFilePicker(string? path) : ISaveFilePicker

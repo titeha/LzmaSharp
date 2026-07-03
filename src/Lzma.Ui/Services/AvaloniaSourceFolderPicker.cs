@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
@@ -15,7 +16,7 @@ public sealed class AvaloniaSourceFolderPicker(TopLevel topLevel) : ISourceFolde
 {
   private readonly TopLevel _topLevel = topLevel;
 
-  public async Task<IReadOnlyList<PickedFile>?> PickFolderFilesAsync()
+  public async Task<IReadOnlyList<PickedFile>?> PickFolderFilesAsync(IProgress<ScanProgress>? progress = null)
   {
     IReadOnlyList<IStorageFolder> folders = await _topLevel.StorageProvider.OpenFolderPickerAsync(
         new FolderPickerOpenOptions
@@ -33,11 +34,15 @@ public sealed class AvaloniaSourceFolderPicker(TopLevel topLevel) : ISourceFolde
       return null;
 
     var result = new List<PickedFile>();
+    long bytesRead = 0;
 
     foreach (string file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
     {
       byte[] bytes = await File.ReadAllBytesAsync(file);
       result.Add(new PickedFile(ArchiveEntryNaming.ForFileUnderFolder(root, file), bytes));
+
+      bytesRead += bytes.LongLength;
+      progress?.Report(new ScanProgress(result.Count, bytesRead));
     }
 
     return result.Count == 0 ? null : result; // пустая папка — паковать нечего
