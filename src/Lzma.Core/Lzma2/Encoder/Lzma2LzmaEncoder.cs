@@ -13,7 +13,7 @@ namespace Lzma.Core.Lzma2;
 /// - LZMA-часть в этом классе используется в режимах literal-only и script (для тестов).
 /// </para>
 /// </summary>
-public static class Lzma2LzmaEncoder
+public static partial class Lzma2LzmaEncoder
 {
   public static byte[] EncodeLiteralOnly(
     ReadOnlySpan<byte> data,
