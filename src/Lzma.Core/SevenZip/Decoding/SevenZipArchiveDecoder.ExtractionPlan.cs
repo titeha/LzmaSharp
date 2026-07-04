@@ -1,3 +1,5 @@
+using Lzma.Core.Checksums;
+
 namespace Lzma.Core.SevenZip;
 
 // План извлечения: структурная раскладка архива (порядок файлов, вид каждого, для файлов
@@ -87,6 +89,16 @@ public static partial class SevenZipArchiveDecoder
       return SevenZipArchiveDecodeResult.InvalidData;
     if (fileCrc is not null && fileCrc.Length != fileCount)
       return SevenZipArchiveDecodeResult.InvalidData;
+
+    // Файлы без потока (kEmptyStream) с заданным file-CRC должны иметь CRC пустого содержимого
+    // (как проверяет DecodeToArray). Валидируем заранее — до раскладки.
+    if (emptyStreams is not null && fileCrcDefined is not null)
+    {
+      uint emptyStreamCrc = Crc32.Compute([]);
+      for (int i = 0; i < fileCount; i++)
+        if (emptyStreams[i] && fileCrcDefined[i] && fileCrc![i] != emptyStreamCrc)
+          return SevenZipArchiveDecodeResult.InvalidData;
+    }
 
     var result = new ExtractPlanEntry[fileCount];
 

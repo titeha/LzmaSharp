@@ -763,31 +763,38 @@ public static partial class SevenZipArchiveDecoder
     if (destinationDirectory is null)
       return SevenZipArchiveDecodeResult.InvalidData;
 
-    SevenZipArchiveDecodeResult r = DecodeToEntries(archive, options, out SevenZipDecodedEntry[] entries, out bytesConsumed, progress, token);
-    if (r != SevenZipArchiveDecodeResult.Ok)
-      return r;
+    // Читаем header ОДИН раз и строим план извлечения БЕЗ декодирования данных: файлы пишутся
+    // потоково folder-за-folder-ом (ниже), поэтому весь архив/большой файл не держим в памяти.
+    SevenZipArchiveReader reader = new();
+    SevenZipArchiveReadResult read = reader.Read(input: archive, options: options, bytesConsumed: out bytesConsumed);
 
-    // Читаем header ещё раз, чтобы получить метаданные (MTime / WinAttrib).
-    SevenZipFilesInfo filesInfo;
-    {
-      SevenZipArchiveReader reader = new();
-      SevenZipArchiveReadResult read = reader.Read(input: archive, options: options, bytesConsumed: out _);
+    if (read == SevenZipArchiveReadResult.NeedMoreInput)
+      return SevenZipArchiveDecodeResult.NeedMoreData;
+    if (read == SevenZipArchiveReadResult.InvalidData)
+      return SevenZipArchiveDecodeResult.InvalidData;
+    if (read == SevenZipArchiveReadResult.NotSupported)
+      return SevenZipArchiveDecodeResult.NotSupported;
+    if (read != SevenZipArchiveReadResult.Ok)
+      return SevenZipArchiveDecodeResult.InternalError;
 
-      if (read == SevenZipArchiveReadResult.NeedMoreInput)
-        return SevenZipArchiveDecodeResult.NeedMoreData;
-      if (read == SevenZipArchiveReadResult.InvalidData)
-        return SevenZipArchiveDecodeResult.InvalidData;
-      if (read == SevenZipArchiveReadResult.NotSupported)
-        return SevenZipArchiveDecodeResult.NotSupported;
-      if (read != SevenZipArchiveReadResult.Ok)
-        return SevenZipArchiveDecodeResult.InternalError;
+    if (!reader.Header.HasValue)
+      return SevenZipArchiveDecodeResult.InvalidData;
 
-      SevenZipHeader? header = reader.Header;
-      if (!header.HasValue)
-        return SevenZipArchiveDecodeResult.InvalidData;
+    SevenZipHeader header = reader.Header.Value;
+    SevenZipFilesInfo filesInfo = header.FilesInfo;
 
-      filesInfo = header.Value.FilesInfo;
-    }
+    SevenZipArchiveDecodeResult planRes = TryBuildExtractionPlan(header, out ExtractPlanEntry[] plan, out int folderCount);
+    if (planRes != SevenZipArchiveDecodeResult.Ok)
+      return planRes;
+
+    // Синтетические entries (имя + признак каталога, без данных) — чтобы вся нижележащая
+    // валидация путей и применение метаданных остались без изменений.
+    var entries = new SevenZipDecodedEntry[plan.Length];
+    for (int pi = 0; pi < plan.Length; pi++)
+      entries[pi] = new SevenZipDecodedEntry(plan[pi].Name, [], plan[pi].Kind == ExtractEntryKind.Directory);
+
+    SevenZipStreamsInfo? streamsInfo = header.StreamsInfo;
+    ReadOnlySpan<byte> packed = reader.PackedStreams.Span;
 
     int fileCount = entries.Length;
     if (filesInfo.FileCount != (ulong)fileCount)
@@ -866,7 +873,16 @@ public static partial class SevenZipArchiveDecoder
       if (!rootWithSep.EndsWith(Path.DirectorySeparatorChar))
         rootWithSep += Path.DirectorySeparatorChar;
 
-      Directory.CreateDirectory(root);
+      // Отслеживаем всё созданное на диске — для отката при сбое декода (см. try/finally ниже),
+      // чтобы при неудаче на диске «ничего не осталось», включая саму целевую папку.
+      var createdDirs = new List<string>();
+      var createdFiles = new List<string>();
+
+      if (!Directory.Exists(root))
+      {
+        Directory.CreateDirectory(root);
+        createdDirs.Add(root);
+      }
 
       StringComparer pathComparer = OperatingSystem.IsWindows()
         ? StringComparer.OrdinalIgnoreCase
@@ -955,46 +971,161 @@ public static partial class SevenZipArchiveDecoder
           return SevenZipArchiveDecodeResult.InvalidData;
       }
 
-      // Только после этого реально создаём каталоги и пишем файлы.
-      for (int i = 0; i < entries.Length; i++)
+      // Создаём каталоги/пустые файлы и пишем данные потоково с ОТКАТОМ при сбое: если декод
+      // какого-либо folder-а не удался (неверный пароль / неподдерживаемый метод / битый CRC),
+      // удаляем всё созданное — на диске «ничего не остаётся» (как при декоде-в-память до записи).
+      bool committed = false;
+
+      // Создаёт недостающие уровни каталога, запоминая каждый созданный (для отката).
+      void CreateDirsTracked(string directory)
       {
-        string fullPath = fullPaths[i];
-        if (fullPath.Length == 0)
-          return SevenZipArchiveDecodeResult.InvalidData;
+        if (string.IsNullOrEmpty(directory) || Directory.Exists(directory))
+          return;
 
-        if (entries[i].IsDirectory)
+        var missing = new Stack<string>();
+        for (string? cur = directory; cur is not null && !Directory.Exists(cur); cur = Path.GetDirectoryName(cur))
+          missing.Push(cur);
+
+        while (missing.Count > 0)
         {
-          // Нельзя создавать каталог, если он сам или любой его родитель уже существует как файл.
-          if (HasFileOnPath(root, fullPath, includeSelf: true, cmp))
+          string d = missing.Pop();
+          Directory.CreateDirectory(d);
+          createdDirs.Add(d);
+        }
+      }
+
+      try
+      {
+        // Каталоги и пустые файлы; для файлов с данными проверяем конфликты/overwrite здесь,
+        // а сами данные пишем потоково ниже.
+        for (int i = 0; i < entries.Length; i++)
+        {
+          string fullPath = fullPaths[i];
+          if (fullPath.Length == 0)
             return SevenZipArchiveDecodeResult.InvalidData;
 
-          Directory.CreateDirectory(fullPath);
-          continue;
+          if (entries[i].IsDirectory)
+          {
+            if (HasFileOnPath(root, fullPath, includeSelf: true, cmp))
+              return SevenZipArchiveDecodeResult.InvalidData;
+
+            CreateDirsTracked(fullPath);
+            continue;
+          }
+
+          string? dir = Path.GetDirectoryName(fullPath);
+          if (dir is null)
+            return SevenZipArchiveDecodeResult.InvalidData;
+
+          if (HasFileOnPath(root, fullPath, includeSelf: false, cmp))
+            return SevenZipArchiveDecodeResult.InvalidData;
+
+          CreateDirsTracked(dir);
+
+          if (Directory.Exists(fullPath))
+            return SevenZipArchiveDecodeResult.InvalidData;
+
+          if (File.Exists(fullPath))
+          {
+            if (!overwrite)
+              return SevenZipArchiveDecodeResult.InvalidData;
+
+            if (!TryPrepareExistingFileForOverwrite(fullPath))
+              return SevenZipArchiveDecodeResult.InvalidData;
+          }
+
+          // Пустой файл создаём сразу; файл с данными будет записан потоком ниже.
+          if (plan[i].Kind == ExtractEntryKind.EmptyFile)
+          {
+            File.WriteAllBytes(fullPath, []);
+            createdFiles.Add(fullPath);
+          }
         }
 
-        string? dir = Path.GetDirectoryName(fullPath);
-        if (dir is null)
-          return SevenZipArchiveDecodeResult.InvalidData;
+        // Потоковая запись файлов с данными folder-за-folder-ом: выход каждого folder-а
+        // маршрутизируется по его файлам (SubstreamRoutingWriter) с проверкой CRC на лету.
+        long totalUnpackedBytes = 0;
+        for (int i = 0; i < plan.Length; i++)
+          totalUnpackedBytes += plan[i].Size;
 
-        // Нельзя создавать родительские каталоги, если на этом пути уже лежит файл.
-        if (HasFileOnPath(root, fullPath, includeSelf: false, cmp))
-          return SevenZipArchiveDecodeResult.InvalidData;
+        progress?.Report(new SevenZipProgress(0, totalUnpackedBytes));
 
-        Directory.CreateDirectory(dir);
+        long processedUnpackedBytes = 0;
 
-        if (Directory.Exists(fullPath))
-          return SevenZipArchiveDecodeResult.InvalidData;
-
-        if (File.Exists(fullPath))
+        for (int folder = 0; folder < folderCount; folder++)
         {
-          if (!overwrite)
-            return SevenZipArchiveDecodeResult.InvalidData;
+          token.ThrowIfCancellationRequested();
 
-          if (!TryPrepareExistingFileForOverwrite(fullPath))
-            return SevenZipArchiveDecodeResult.InvalidData;
+          var openStreams = new List<FileStream>();
+          var segments = new List<SubstreamRoutingWriter.Segment>();
+
+          try
+          {
+            for (int i = 0; i < plan.Length; i++)
+            {
+              if (plan[i].Kind != ExtractEntryKind.DataFile || plan[i].FolderIndex != folder)
+                continue;
+
+              var fs = new FileStream(fullPaths[i], FileMode.Create, FileAccess.Write);
+              openStreams.Add(fs);
+              createdFiles.Add(fullPaths[i]);
+              segments.Add(new SubstreamRoutingWriter.Segment(fs, plan[i].Size, plan[i].HasCrc, plan[i].ExpectedCrc));
+            }
+
+            var routing = new SubstreamRoutingWriter([.. segments]);
+
+            // within-folder прогресс → глобальный (как в DecodeToArray).
+            long processedBefore = processedUnpackedBytes;
+            IProgress<LzmaProgress>? folderProgress = progress is null ? null
+                : new DelegateProgress<LzmaProgress>(lp => progress.Report(new SevenZipProgress(
+                    Math.Min(processedBefore + lp.BytesWritten, totalUnpackedBytes), totalUnpackedBytes)));
+
+            SevenZipFolderDecodeResult fr = SevenZipFolderDecoder.DecodeFolderToStream(
+                streamsInfo!, packed, folder, options, routing, out long written, folderProgress, token);
+
+            if (fr == SevenZipFolderDecodeResult.InvalidData)
+              return SevenZipArchiveDecodeResult.InvalidData;
+            if (fr == SevenZipFolderDecodeResult.NotSupported)
+              return SevenZipArchiveDecodeResult.NotSupported;
+            if (fr != SevenZipFolderDecodeResult.Ok)
+              return SevenZipArchiveDecodeResult.InternalError;
+
+            // Раскладка должна ровно заполнить все сегменты, CRC — совпасть.
+            if (!routing.IsComplete || routing.SizeOverflow || routing.CrcMismatch)
+              return SevenZipArchiveDecodeResult.InvalidData;
+
+            processedUnpackedBytes += written;
+            progress?.Report(new SevenZipProgress(
+                Math.Min(processedUnpackedBytes, totalUnpackedBytes), totalUnpackedBytes));
+          }
+          finally
+          {
+            foreach (FileStream fs in openStreams)
+              fs.Dispose();
+          }
         }
 
-        File.WriteAllBytes(fullPath, entries[i].Bytes);
+        committed = true;
+      }
+      finally
+      {
+        // При любом сбое до commit — удаляем всё созданное (файлы, затем каталоги в обратном порядке).
+        if (!committed)
+        {
+          for (int i = createdFiles.Count - 1; i >= 0; i--)
+          {
+            try { if (File.Exists(createdFiles[i])) File.Delete(createdFiles[i]); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+          }
+
+          for (int i = createdDirs.Count - 1; i >= 0; i--)
+          {
+            try { if (Directory.Exists(createdDirs[i])) Directory.Delete(createdDirs[i], recursive: false); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+          }
+        }
       }
 
       for (int i = 0; i < fileCount; i++)
