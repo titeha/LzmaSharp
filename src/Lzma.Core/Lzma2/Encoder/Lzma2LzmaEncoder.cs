@@ -218,7 +218,7 @@ public static partial class Lzma2LzmaEncoder
   /// только range coder).
   /// </summary>
   private sealed class ChunkingSink(
-      MemoryStream ms, LzmaEncoder encoder, byte propsByte, int maxUnpackChunkSize,
+      Stream ms, LzmaEncoder encoder, byte propsByte, int maxUnpackChunkSize,
       System.Threading.CancellationToken token)
   {
     // Граница чанка по packed-размеру: с запасом до 64 КБ, т.к. packSize в заголовке 16-битный.

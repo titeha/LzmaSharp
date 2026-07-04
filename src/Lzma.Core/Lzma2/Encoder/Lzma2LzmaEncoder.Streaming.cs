@@ -19,9 +19,9 @@ public static partial class Lzma2LzmaEncoder
   private const int StreamMaxChainLength = 128;
 
   /// <summary>
-  /// Потоковое сжатие: читает <paramref name="input"/> блоками в кольцевой буфер и выдаёт тот же
-  /// LZMA2-поток, что <see cref="Encode(ReadOnlySpan{byte}, LzmaProperties, int, int, System.Threading.CancellationToken)"/>.
-  /// <paramref name="totalLength"/> — заранее известный размер входа (файл на диске).
+  /// Потоковое сжатие в память (для тестов/малых входов): читает <paramref name="input"/> блоками
+  /// в кольцевой буфер и возвращает тот же LZMA2-поток, что
+  /// <see cref="Encode(ReadOnlySpan{byte}, LzmaProperties, int, int, System.Threading.CancellationToken)"/>.
   /// </summary>
   public static byte[] EncodeStreaming(
     Stream input,
@@ -31,7 +31,27 @@ public static partial class Lzma2LzmaEncoder
     int maxUnpackChunkSize = 65536,
     System.Threading.CancellationToken token = default)
   {
+    using var ms = new MemoryStream((int)Math.Min(totalLength / 2 + 64, int.MaxValue));
+    EncodeStreaming(input, totalLength, lzmaProperties, dictionarySize, ms, maxUnpackChunkSize, token);
+    return ms.ToArray();
+  }
+
+  /// <summary>
+  /// Потоковое сжатие в <paramref name="output"/>: пишет LZMA2-поток по мере кодирования, НЕ держа
+  /// весь вход/выход в памяти. Возвращает число записанных байт (long). <paramref name="totalLength"/>
+  /// — заранее известный размер входа (файл на диске). Выход идентичен <see cref="Encode"/>.
+  /// </summary>
+  public static long EncodeStreaming(
+    Stream input,
+    long totalLength,
+    LzmaProperties lzmaProperties,
+    int dictionarySize,
+    Stream output,
+    int maxUnpackChunkSize = 65536,
+    System.Threading.CancellationToken token = default)
+  {
     ArgumentNullException.ThrowIfNull(input);
+    ArgumentNullException.ThrowIfNull(output);
     ArgumentOutOfRangeException.ThrowIfNegative(totalLength);
     ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxUnpackChunkSize);
 
@@ -41,12 +61,12 @@ public static partial class Lzma2LzmaEncoder
 
     byte propsByte = lzmaProperties.ToByteOrThrow();
 
-    using var ms = new MemoryStream((int)Math.Min(totalLength / 2 + 64, int.MaxValue));
+    var ms = new CountingWriteStream(output);
 
     if (totalLength == 0)
     {
       ms.WriteByte(0x00);
-      return ms.ToArray();
+      return ms.BytesWritten;
     }
 
     int maxMatch = LzmaConstants.MatchMaxLen;
@@ -147,7 +167,42 @@ public static partial class Lzma2LzmaEncoder
     sink.Finish();
 
     ms.WriteByte(0x00);
-    return ms.ToArray();
+    return ms.BytesWritten;
+  }
+
+  // Write-only обёртка, считающая записанные байты (для packSize потокового энкодера).
+  private sealed class CountingWriteStream(Stream inner) : Stream
+  {
+    public long BytesWritten { get; private set; }
+
+    public override bool CanWrite => true;
+    public override bool CanRead => false;
+    public override bool CanSeek => false;
+    public override long Length => throw new NotSupportedException();
+    public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+    public override void Write(ReadOnlySpan<byte> buffer)
+    {
+      inner.Write(buffer);
+      BytesWritten += buffer.Length;
+    }
+
+    public override void Write(byte[] buffer, int offset, int count)
+    {
+      inner.Write(buffer, offset, count);
+      BytesWritten += count;
+    }
+
+    public override void WriteByte(byte value)
+    {
+      inner.WriteByte(value);
+      BytesWritten++;
+    }
+
+    public override void Flush() => inner.Flush();
+    public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+    public override void SetLength(long value) => throw new NotSupportedException();
   }
 
   // Ring-aware поиск совпадений: точная копия LzmaMatchFinder.FindMatchesCyclic, но байты читаются
