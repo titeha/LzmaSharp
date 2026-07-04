@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Lzma.Ui.Services;
@@ -14,7 +15,9 @@ public interface ISourceFolderPicker
   /// <summary>
   /// Просит выбрать папку и возвращает её файлы как <see cref="PickedFile"/> с относительными
   /// именами. <see langword="null"/> — выбор отменён или в папке нет файлов. Опциональный
-  /// <paramref name="progress"/> получает живой счётчик по мере обхода и чтения файлов.
+  /// <paramref name="progress"/> получает живой счётчик по мере обхода и чтения файлов;
+  /// <paramref name="token"/> отменяет чтение (бросает <see cref="OperationCanceledException"/>).
   /// </summary>
-  Task<IReadOnlyList<PickedFile>?> PickFolderFilesAsync(IProgress<ScanProgress>? progress = null);
+  Task<IReadOnlyList<PickedFile>?> PickFolderFilesAsync(
+      IProgress<ScanProgress>? progress = null, CancellationToken token = default);
 }

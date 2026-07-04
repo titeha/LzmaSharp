@@ -33,8 +33,27 @@ public sealed class MainViewModelCancelTests
 
   private sealed class StubSourceFilesPicker(IReadOnlyList<PickedFile> files) : ISourceFilesPicker
   {
-    public Task<IReadOnlyList<PickedFile>?> PickFilesAsync(IProgress<ScanProgress>? progress = null)
+    public Task<IReadOnlyList<PickedFile>?> PickFilesAsync(
+        IProgress<ScanProgress>? progress = null, CancellationToken token = default)
         => Task.FromResult<IReadOnlyList<PickedFile>?>(files);
+  }
+
+  // Пикер, имитирующий долгое чтение: репортит скан-прогресс (зажигает индикатор),
+  // затем «висит» до отмены токена и бросает OperationCanceledException.
+  private sealed class ScanBlockingSourceFilesPicker : ISourceFilesPicker
+  {
+    public async Task<IReadOnlyList<PickedFile>?> PickFilesAsync(
+        IProgress<ScanProgress>? progress = null, CancellationToken token = default)
+    {
+      progress?.Report(new ScanProgress(1, 100)); // синхронно → IsScanning=true
+
+      var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+      using (token.Register(() => gate.TrySetResult()))
+        await gate.Task;
+
+      token.ThrowIfCancellationRequested();
+      return null;
+    }
   }
 
   private sealed class StubSaveFilePicker(string? path) : ISaveFilePicker
@@ -105,6 +124,36 @@ public sealed class MainViewModelCancelTests
     var vm = new MainViewModel(new StubArchivePicker(), new NullPasswordPrompt(), new StubFolderPicker());
 
     Assert.False(vm.IsOperating);
+    Assert.False(vm.CancelCommand.CanExecute(null));
+    Assert.False(vm.IsCancelVisible);
+  }
+
+  [Fact]
+  public async Task Cancel_ВоВремяСканирования_ПрерываетИСообщает()
+  {
+    var vm = new MainViewModel(
+        new StubArchivePicker(),
+        new NullPasswordPrompt(),
+        new StubFolderPicker(),
+        new CancellableArchiveService(),
+        new ScanBlockingSourceFilesPicker(),
+        new StubSaveFilePicker("out.7z"));
+
+    // Стартуем создание — «зависнет» на фазе сканирования до отмены токена.
+    Task op = vm.CreateCommand.ExecuteAsync();
+
+    // Идёт сканирование: индикатор зажжён, кнопка отмены доступна и видима.
+    Assert.True(vm.IsScanning);
+    Assert.True(vm.CancelCommand.CanExecute(null));
+    Assert.True(vm.IsCancelVisible);
+
+    // Отменяем сканирование.
+    vm.CancelCommand.Execute(null);
+    await op;
+
+    Assert.Equal("Операция отменена.", vm.StatusMessage);
+    Assert.False(vm.IsScanning);
+    Assert.Null(vm.ScanStatus);
     Assert.False(vm.CancelCommand.CanExecute(null));
   }
 }

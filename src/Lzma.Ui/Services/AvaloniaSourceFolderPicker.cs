@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 
 using Avalonia.Controls;
@@ -16,7 +17,8 @@ public sealed class AvaloniaSourceFolderPicker(TopLevel topLevel) : ISourceFolde
 {
   private readonly TopLevel _topLevel = topLevel;
 
-  public async Task<IReadOnlyList<PickedFile>?> PickFolderFilesAsync(IProgress<ScanProgress>? progress = null)
+  public async Task<IReadOnlyList<PickedFile>?> PickFolderFilesAsync(
+      IProgress<ScanProgress>? progress = null, CancellationToken token = default)
   {
     IReadOnlyList<IStorageFolder> folders = await _topLevel.StorageProvider.OpenFolderPickerAsync(
         new FolderPickerOpenOptions
@@ -38,7 +40,9 @@ public sealed class AvaloniaSourceFolderPicker(TopLevel topLevel) : ISourceFolde
 
     foreach (string file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
     {
-      byte[] bytes = await File.ReadAllBytesAsync(file);
+      token.ThrowIfCancellationRequested();
+
+      byte[] bytes = await File.ReadAllBytesAsync(file, token);
       result.Add(new PickedFile(ArchiveEntryNaming.ForFileUnderFolder(root, file), bytes));
 
       bytesRead += bytes.LongLength;

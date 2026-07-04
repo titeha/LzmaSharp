@@ -47,7 +47,7 @@
                 <TextBlock Text="{Binding ProgressEta}" VerticalAlignment="Center"
                            Foreground="Gray" IsVisible="{Binding IsBusy}" />
                 <Button Content="Отмена" Command="{Binding CancelCommand}"
-                        VerticalAlignment="Center" IsVisible="{Binding IsBusy}" />
+                        VerticalAlignment="Center" IsVisible="{Binding IsCancelVisible}" />
                 <!-- Живой счётчик на фазе сканирования/чтения файлов (до сжатия). -->
                 <ProgressBar IsIndeterminate="True" Width="120" VerticalAlignment="Center"
                              IsVisible="{Binding IsScanning}" />

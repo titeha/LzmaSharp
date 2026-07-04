@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Lzma.Ui.Services;
@@ -16,7 +17,9 @@ public interface ISourceFilesPicker
   /// <summary>
   /// Просит выбрать один или несколько файлов. Возвращает <see langword="null"/>, если выбор
   /// отменён (пустой список трактуется так же — добавлять нечего). Опциональный
-  /// <paramref name="progress"/> получает живой счётчик по мере чтения файлов в память.
+  /// <paramref name="progress"/> получает живой счётчик по мере чтения файлов в память;
+  /// <paramref name="token"/> отменяет чтение (бросает <see cref="OperationCanceledException"/>).
   /// </summary>
-  Task<IReadOnlyList<PickedFile>?> PickFilesAsync(IProgress<ScanProgress>? progress = null);
+  Task<IReadOnlyList<PickedFile>?> PickFilesAsync(
+      IProgress<ScanProgress>? progress = null, CancellationToken token = default);
 }

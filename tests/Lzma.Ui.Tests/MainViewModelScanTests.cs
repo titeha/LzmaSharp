@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using System.Threading;
 
 using Lzma.Core.SevenZip;
 using Lzma.Ui.Services;
@@ -34,11 +35,13 @@ public sealed class MainViewModelScanTests
   // Пикер, который репортит скан-прогресс по мере «чтения» (синхронно, до возврата).
   private sealed class ReportingSourceFilesPicker(IReadOnlyList<PickedFile> files) : ISourceFilesPicker
   {
-    public Task<IReadOnlyList<PickedFile>?> PickFilesAsync(IProgress<ScanProgress>? progress = null)
+    public Task<IReadOnlyList<PickedFile>?> PickFilesAsync(
+        IProgress<ScanProgress>? progress = null, CancellationToken token = default)
     {
       long bytes = 0;
       for (int i = 0; i < files.Count; i++)
       {
+        token.ThrowIfCancellationRequested();
         bytes += files[i].Bytes.LongLength;
         progress?.Report(new ScanProgress(i + 1, bytes));
       }

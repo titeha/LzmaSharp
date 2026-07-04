@@ -111,7 +111,7 @@ public sealed class MainViewModel : ObservableObject
     ExtractAllCommand = new AsyncRelayCommand(ExtractAllAsync, () => HasArchive && !IsOperating, this);
     CreateCommand = new AsyncRelayCommand(CreateFromFilesAsync, () => CanCreate && !IsOperating, this);
     CreateFromFolderCommand = new AsyncRelayCommand(CreateFromFolderAsync, () => CanCreateFromFolder && !IsOperating, this);
-    CancelCommand = new RelayCommand(Cancel, () => IsOperating, this);
+    CancelCommand = new RelayCommand(Cancel, () => IsOperating || IsScanning, this);
   }
 
   /// <summary>Заголовок окна: базовый либо «имя_архива — LzmaSharp» при открытом архиве.</summary>
@@ -156,7 +156,11 @@ public sealed class MainViewModel : ObservableObject
   public bool IsBusy
   {
     get => _isBusy;
-    set => Set(ref _isBusy, value);
+    set
+    {
+      if (Set(ref _isBusy, value))
+        OnPropertyChanged(nameof(IsCancelVisible));
+    }
   }
 
   /// <summary>
@@ -207,8 +211,18 @@ public sealed class MainViewModel : ObservableObject
   public bool IsScanning
   {
     get => _isScanning;
-    private set => Set(ref _isScanning, value);
+    private set
+    {
+      if (Set(ref _isScanning, value))
+        OnPropertyChanged(nameof(IsCancelVisible));
+    }
   }
+
+  /// <summary>
+  /// Видима ли кнопка отмены: показываем и на фазе сжатия/извлечения (<see cref="IsBusy"/>),
+  /// и на фазе сканирования исходных файлов (<see cref="IsScanning"/>).
+  /// </summary>
+  public bool IsCancelVisible => IsBusy || IsScanning;
 
   /// <summary>
   /// Живой текст счётчика сканирования («Сканирование: N файлов, X МБ»);
@@ -419,7 +433,7 @@ public sealed class MainViewModel : ObservableObject
 
   // Общий путь создания: получить источник → выбрать путь → собрать ядром → записать на диск.
   private async Task CreateFromSourceAsync(
-      Func<IProgress<ScanProgress>?, Task<IReadOnlyList<PickedFile>?>> pickSources)
+      Func<IProgress<ScanProgress>?, CancellationToken, Task<IReadOnlyList<PickedFile>?>> pickSources)
   {
     if (_saveFilePicker is null)
       return;
@@ -432,15 +446,27 @@ public sealed class MainViewModel : ObservableObject
       ScanStatus = FormatScanStatus(sp);
     });
 
+    // Сканирование можно прервать кнопкой «Отмена»: свой источник токена на время фазы,
+    // виден команде отмены через _operationCts (кнопка доступна, пока IsScanning).
     IReadOnlyList<PickedFile>? files;
-    try
+    using (var scanCts = new CancellationTokenSource())
     {
-      files = await pickSources(scanProgress);
-    }
-    finally
-    {
-      IsScanning = false;
-      ScanStatus = null;
+      _operationCts = scanCts;
+      try
+      {
+        files = await pickSources(scanProgress, scanCts.Token);
+      }
+      catch (OperationCanceledException)
+      {
+        StatusMessage = "Операция отменена.";
+        return;
+      }
+      finally
+      {
+        _operationCts = null;
+        IsScanning = false;
+        ScanStatus = null;
+      }
     }
 
     if (files is null || files.Count == 0)
