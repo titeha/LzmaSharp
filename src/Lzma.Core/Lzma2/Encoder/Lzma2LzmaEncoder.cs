@@ -89,7 +89,8 @@ public static class Lzma2LzmaEncoder
     ReadOnlySpan<byte> data,
     LzmaProperties lzmaProperties,
     int dictionarySize,
-    int maxUnpackChunkSize = 65536)
+    int maxUnpackChunkSize = 65536,
+    System.Threading.CancellationToken token = default)
   {
     ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxUnpackChunkSize);
 
@@ -125,7 +126,7 @@ public static class Lzma2LzmaEncoder
     int windowMask = windowSize - 1;
 
     var encoder = new LzmaEncoder(lzmaProperties, dictionarySize);
-    var sink = new ChunkingSink(ms, encoder, propsByte, maxUnpackChunkSize);
+    var sink = new ChunkingSink(ms, encoder, propsByte, maxUnpackChunkSize, token);
 
     Span<LzmaMatch> matches = stackalloc LzmaMatch[256];
 
@@ -216,7 +217,9 @@ public static class Lzma2LzmaEncoder
   /// (сброс словаря/состояния/props), последующие — 0x80 (всё сохраняется, переинициализируется
   /// только range coder).
   /// </summary>
-  private sealed class ChunkingSink(MemoryStream ms, LzmaEncoder encoder, byte propsByte, int maxUnpackChunkSize)
+  private sealed class ChunkingSink(
+      MemoryStream ms, LzmaEncoder encoder, byte propsByte, int maxUnpackChunkSize,
+      System.Threading.CancellationToken token)
   {
     // Граница чанка по packed-размеру: с запасом до 64 КБ, т.к. packSize в заголовке 16-битный.
     private const int PackLimit = 60000;
@@ -244,6 +247,10 @@ public static class Lzma2LzmaEncoder
 
     private void FlushChunk()
     {
+      // Кооперативная отмена на границе чанка (~каждые 64 КБ выхода) — так отменяется
+      // и один большой файл посреди сжатия, а не только на границе файлов.
+      token.ThrowIfCancellationRequested();
+
       byte[] payload = encoder.FinishChunk();
 
       WriteLzmaChunk(

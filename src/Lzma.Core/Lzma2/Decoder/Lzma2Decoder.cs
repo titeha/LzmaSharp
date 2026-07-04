@@ -26,10 +26,11 @@ public static class Lzma2Decoder
       int dictionarySize,
       out byte[] output,
       out int bytesConsumed,
-      IProgress<LzmaProgress>? progress = null)
+      IProgress<LzmaProgress>? progress = null,
+      System.Threading.CancellationToken token = default)
   {
     var decoder = new Lzma2IncrementalDecoder(progress: progress, dictionarySize: dictionarySize);
-    return DecodeToArray(decoder, input, out output, out bytesConsumed);
+    return DecodeToArray(decoder, input, out output, out bytesConsumed, token);
   }
 
   /// <summary>
@@ -40,7 +41,8 @@ public static class Lzma2Decoder
       Lzma2Properties properties,
       out byte[] output,
       out int bytesConsumed,
-      IProgress<LzmaProgress>? progress = null)
+      IProgress<LzmaProgress>? progress = null,
+      System.Threading.CancellationToken token = default)
   {
     if (!properties.TryGetDictionarySizeInt32(out int dictionarySize))
     {
@@ -50,7 +52,7 @@ public static class Lzma2Decoder
     }
 
     var decoder = new Lzma2IncrementalDecoder(progress: progress, dictionarySize: dictionarySize);
-    return DecodeToArray(decoder, input, out output, out bytesConsumed);
+    return DecodeToArray(decoder, input, out output, out bytesConsumed, token);
   }
 
   /// <summary>
@@ -61,7 +63,8 @@ public static class Lzma2Decoder
       byte dictionaryProp,
       out byte[] output,
       out int bytesConsumed,
-      IProgress<LzmaProgress>? progress = null)
+      IProgress<LzmaProgress>? progress = null,
+      System.Threading.CancellationToken token = default)
   {
     if (!Lzma2Properties.TryParse(dictionaryProp, out var properties))
     {
@@ -70,20 +73,25 @@ public static class Lzma2Decoder
       return Lzma2DecodeResult.NotSupported;
     }
 
-    return DecodeToArray(input, properties, out output, out bytesConsumed, progress);
+    return DecodeToArray(input, properties, out output, out bytesConsumed, progress, token);
   }
 
   private static Lzma2DecodeResult DecodeToArray(
       Lzma2IncrementalDecoder decoder,
       ReadOnlySpan<byte> input,
       out byte[] output,
-      out int bytesConsumed)
+      out int bytesConsumed,
+      System.Threading.CancellationToken token = default)
   {
     int inputOffset = 0;
     var writer = new ArrayBufferWriter<byte>();
 
     while (true)
     {
+      // Кооперативная отмена на границе выходного чанка (~64 КБ) — так отменяется
+      // и распаковка одного большого файла посреди, а не только между folder-ами.
+      token.ThrowIfCancellationRequested();
+
       Span<byte> outSpan = writer.GetSpan(_defaultOutputChunkSize);
 
       Lzma2DecodeResult result = decoder.Decode(

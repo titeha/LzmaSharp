@@ -42,7 +42,9 @@ public static partial class SevenZipArchiveWriter
 
     return BuildCompressedEntriesArchive(
         entries,
-        content => Lzma2LzmaEncoder.Encode(content, lzmaProperties, effectiveDictionarySize),
+        // Токен захвачен в замыкании — отмена доходит внутрь чанк-цикла энкодера (per-chunk),
+        // а не только между файлами (проверка в BuildCompressedEntriesArchive).
+        content => Lzma2LzmaEncoder.Encode(content, lzmaProperties, effectiveDictionarySize, token: token),
         coderBytes,
         out archive,
         progress,

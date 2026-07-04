@@ -68,7 +68,8 @@ public static class SevenZipFolderDecoder
       int folderIndex,
       SevenZipDecodeOptions options,
       out byte[] output,
-      IProgress<LzmaProgress>? progress = null)
+      IProgress<LzmaProgress>? progress = null,
+      System.Threading.CancellationToken token = default)
   {
     output = [];
 
@@ -218,6 +219,7 @@ public static class SevenZipFolderDecoder
     int expectedUnpackSize,
     SevenZipDecodeOptions options,
     IProgress<LzmaProgress>? progress,
+    System.Threading.CancellationToken token,
     out byte[] decoded)
     {
       decoded = [];
@@ -262,7 +264,7 @@ public static class SevenZipFolderDecoder
         return TryDecodeBcjCoder(coder, input, expectedUnpackSize, SevenZipBcjFilters.Arm64DecodeInPlace, out decoded);
 
       if (IsSingleByteMethodId(coder.MethodId, _methodIdLzma2))
-        return TryDecodeLzma2Coder(coder, input, expectedUnpackSize, out decoded, progress);
+        return TryDecodeLzma2Coder(coder, input, expectedUnpackSize, out decoded, progress, token);
 
       // LZMA (7z) method id = { 03 01 01 }.
       if (coder.MethodId.Length == 3 &&
@@ -366,6 +368,7 @@ public static class SevenZipFolderDecoder
         expectedUnpackSize: expectedSize,
         options: options,
         progress: coderCount == 1 ? progress : null,
+        token: token,
         decoded: out byte[] decoded);
 
       if (r != SevenZipFolderDecodeResult.Ok)
@@ -640,7 +643,8 @@ public static class SevenZipFolderDecoder
       ReadOnlySpan<byte> input,
       int expectedUnpackSize,
       out byte[] decoded,
-      IProgress<LzmaProgress>? progress = null)
+      IProgress<LzmaProgress>? progress = null,
+      System.Threading.CancellationToken token = default)
   {
     decoded = [];
 
@@ -661,7 +665,8 @@ public static class SevenZipFolderDecoder
       dictionaryProp: lzma2PropertiesByte,
       output: out decoded,
       bytesConsumed: out int lzma2BytesConsumed,
-      progress: progress);
+      progress: progress,
+      token: token);
 
     if (lzma2Result == Lzma2DecodeResult.NotSupported)
     {

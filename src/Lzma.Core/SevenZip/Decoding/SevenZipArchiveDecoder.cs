@@ -479,7 +479,8 @@ public static partial class SevenZipArchiveDecoder
         folderIndex: folderIndex,
         options: options,
         output: out byte[] folderUnpacked,
-        progress: folderProgress);
+        progress: folderProgress,
+        token: token);
 
       if (folderRes == SevenZipFolderDecodeResult.InvalidData)
         return SevenZipArchiveDecodeResult.InvalidData;
