@@ -44,6 +44,8 @@
                            IsVisible="{Binding IsBusy}" />
                 <TextBlock Text="{Binding ProgressText}" VerticalAlignment="Center"
                            Foreground="Gray" IsVisible="{Binding IsBusy}" />
+                <TextBlock Text="{Binding ProgressEta}" VerticalAlignment="Center"
+                           Foreground="Gray" IsVisible="{Binding IsBusy}" />
                 <Button Content="Отмена" Command="{Binding CancelCommand}"
                         VerticalAlignment="Center" IsVisible="{Binding IsBusy}" />
                 <!-- Живой счётчик на фазе сканирования/чтения файлов (до сжатия). -->

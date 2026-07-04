@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 
@@ -53,11 +54,15 @@ public sealed class MainViewModel : ObservableObject
   private bool _isOperating;
   private double _progressPercent;
   private string? _progressText;
+  private string? _progressEta;
   private bool _isScanning;
   private string? _scanStatus;
 
   // Источник токена отмены текущей длительной операции; null — операция не идёт.
   private CancellationTokenSource? _operationCts;
+
+  // Часы текущей длительной операции — для оценки оставшегося времени (ETA).
+  private readonly Stopwatch _operationClock = new();
 
   public MainViewModel(IArchivePicker picker, IPasswordPrompt passwordPrompt, IFolderPicker folderPicker)
       : this(picker, passwordPrompt, folderPicker, new LzmaArchiveService(), sourceFilesPicker: null, saveFilePicker: null)
@@ -182,6 +187,17 @@ public sealed class MainViewModel : ObservableObject
   {
     get => _progressText;
     private set => Set(ref _progressText, value);
+  }
+
+  /// <summary>
+  /// Оценка оставшегося времени текущей операции («осталось ~2 мин 5 с»); <see langword="null"/>,
+  /// пока оценить нельзя (в самом начале или при неизвестном объёме). Оценка грубая — средняя
+  /// скорость с начала операции, в первые секунды заметно прыгает. Показывается рядом с процентом.
+  /// </summary>
+  public string? ProgressEta
+  {
+    get => _progressEta;
+    private set => Set(ref _progressEta, value);
   }
 
   /// <summary>
@@ -497,11 +513,18 @@ public sealed class MainViewModel : ObservableObject
     };
   }
 
-  // Преобразует отчёт ядра в процент и текст объёма и обновляет свойства. internal — для тестов.
+  // Преобразует отчёт ядра в процент/текст объёма/ETA и обновляет свойства. ETA считается по
+  // истёкшему времени операции (_operationClock). internal-перегрузка с явным elapsed — для тестов.
   internal void ReportProgress(SevenZipProgress progress)
+      => ReportProgress(progress, _operationClock.Elapsed);
+
+  internal void ReportProgress(SevenZipProgress progress, TimeSpan elapsed)
   {
     ProgressPercent = ToPercent(progress);
     ProgressText = FormatProgressText(progress);
+
+    TimeSpan? remaining = EstimateRemaining(progress, elapsed);
+    ProgressEta = remaining is { } r ? FormatRemaining(r) : null;
   }
 
   // Живой текст объёма «обработано / всего»; пусто при неизвестном общем размере. internal — для тестов.
@@ -521,6 +544,52 @@ public sealed class MainViewModel : ObservableObject
     return percent < 0 ? 0 : percent > 100 ? 100 : percent;
   }
 
+  // Оценка оставшегося времени по средней скорости с начала операции. internal — для тестов.
+  // null — оценить нельзя: ничего не обработано, неизвестен объём или ещё не прошло времени.
+  // Оценка грубая (средняя скорость с начала); в первые секунды заметно прыгает.
+  internal static TimeSpan? EstimateRemaining(SevenZipProgress progress, TimeSpan elapsed)
+  {
+    if (progress.BytesProcessed <= 0 || progress.TotalBytes <= 0 || elapsed <= TimeSpan.Zero)
+      return null;
+
+    long remainingBytes = progress.TotalBytes - progress.BytesProcessed;
+    if (remainingBytes <= 0)
+      return TimeSpan.Zero; // всё обработано (или переотчёт сверх объёма)
+
+    // скорость = обработано / elapsed; осталось (сек) = remainingBytes / скорость.
+    double remainingSeconds = remainingBytes * elapsed.TotalSeconds / progress.BytesProcessed;
+
+    // Защита от переполнения TimeSpan при крошечной обработанной доле.
+    return remainingSeconds > TimeSpan.MaxValue.TotalSeconds
+        ? TimeSpan.MaxValue
+        : TimeSpan.FromSeconds(remainingSeconds);
+  }
+
+  // Человекочитаемая оценка оставшегося времени («осталось ~2 мин 5 с»). internal — для тестов.
+  internal static string FormatRemaining(TimeSpan remaining)
+  {
+    if (remaining < TimeSpan.Zero)
+      remaining = TimeSpan.Zero;
+
+    long totalSeconds = (long)Math.Round(remaining.TotalSeconds);
+
+    if (totalSeconds >= 3600)
+    {
+      long hours = totalSeconds / 3600;
+      long minutes = totalSeconds % 3600 / 60;
+      return $"осталось ~{hours} ч {minutes} мин";
+    }
+
+    if (totalSeconds >= 60)
+    {
+      long minutes = totalSeconds / 60;
+      long seconds = totalSeconds % 60;
+      return $"осталось ~{minutes} мин {seconds} с";
+    }
+
+    return $"осталось ~{totalSeconds} с";
+  }
+
   // Создаёт мост прогресса: Progress<T> захватывает текущий SynchronizationContext (UI-поток
   // в реальном приложении), поэтому обновления свойства приходят на UI-поток.
   private IProgress<SevenZipProgress> CreateProgress() => new Progress<SevenZipProgress>(ReportProgress);
@@ -537,6 +606,8 @@ public sealed class MainViewModel : ObservableObject
     IsOperating = true;
     ProgressPercent = 0;
     ProgressText = null;
+    ProgressEta = null;
+    _operationClock.Restart();
 
     using var cts = new CancellationTokenSource();
     _operationCts = cts;
@@ -558,11 +629,13 @@ public sealed class MainViewModel : ObservableObject
     }
     finally
     {
+      _operationClock.Stop();
       _operationCts = null;
       IsBusy = false;
       IsOperating = false;
       ProgressPercent = 0;
       ProgressText = null;
+      ProgressEta = null;
     }
   }
 
