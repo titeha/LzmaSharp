@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.IO;
 
 namespace Lzma.Core.Lzma2;
 
@@ -74,6 +75,106 @@ public static class Lzma2Decoder
     }
 
     return DecodeToArray(input, properties, out output, out bytesConsumed, progress, token);
+  }
+
+  /// <summary>
+  /// Декодирует поток LZMA2 напрямую в <see cref="Stream"/>, не накапливая весь выход в памяти
+  /// (для больших файлов). <paramref name="bytesWritten"/> — сколько байт записано (long).
+  /// </summary>
+  public static Lzma2DecodeResult DecodeToStream(
+      ReadOnlySpan<byte> input,
+      byte dictionaryProp,
+      Stream output,
+      out long bytesWritten,
+      out int bytesConsumed,
+      IProgress<LzmaProgress>? progress = null,
+      System.Threading.CancellationToken token = default)
+  {
+    if (!Lzma2Properties.TryParse(dictionaryProp, out var properties))
+    {
+      bytesWritten = 0;
+      bytesConsumed = 0;
+      return Lzma2DecodeResult.NotSupported;
+    }
+
+    return DecodeToStream(input, properties, output, out bytesWritten, out bytesConsumed, progress, token);
+  }
+
+  /// <summary>
+  /// Декодирует поток LZMA2 напрямую в <see cref="Stream"/>, не накапливая весь выход в памяти.
+  /// </summary>
+  public static Lzma2DecodeResult DecodeToStream(
+      ReadOnlySpan<byte> input,
+      Lzma2Properties properties,
+      Stream output,
+      out long bytesWritten,
+      out int bytesConsumed,
+      IProgress<LzmaProgress>? progress = null,
+      System.Threading.CancellationToken token = default)
+  {
+    ArgumentNullException.ThrowIfNull(output);
+
+    if (!properties.TryGetDictionarySizeInt32(out int dictionarySize))
+    {
+      bytesWritten = 0;
+      bytesConsumed = 0;
+      return Lzma2DecodeResult.NotSupported;
+    }
+
+    var decoder = new Lzma2IncrementalDecoder(progress: progress, dictionarySize: dictionarySize);
+    return DecodeToStream(decoder, input, output, out bytesWritten, out bytesConsumed, token);
+  }
+
+  private static Lzma2DecodeResult DecodeToStream(
+      Lzma2IncrementalDecoder decoder,
+      ReadOnlySpan<byte> input,
+      Stream output,
+      out long bytesWritten,
+      out int bytesConsumed,
+      System.Threading.CancellationToken token = default)
+  {
+    int inputOffset = 0;
+    long written = 0;
+    byte[] buffer = ArrayPool<byte>.Shared.Rent(_defaultOutputChunkSize);
+
+    try
+    {
+      while (true)
+      {
+        // Кооперативная отмена на границе выходного чанка (~64 КБ), как в DecodeToArray.
+        token.ThrowIfCancellationRequested();
+
+        Lzma2DecodeResult result = decoder.Decode(
+            input.Slice(inputOffset),
+            buffer,
+            out int consumed,
+            out int writtenNow);
+
+        inputOffset += consumed;
+
+        if (writtenNow > 0)
+        {
+          output.Write(buffer, 0, writtenNow);
+          written += writtenNow;
+        }
+
+        if (result == Lzma2DecodeResult.NeedMoreOutput)
+        {
+          if (consumed == 0 && writtenNow == 0)
+            throw new InvalidOperationException("Декодер не продвинулся: не потребил ввод и не записал вывод.");
+
+          continue;
+        }
+
+        bytesConsumed = inputOffset;
+        bytesWritten = written;
+        return result;
+      }
+    }
+    finally
+    {
+      ArrayPool<byte>.Shared.Return(buffer);
+    }
   }
 
   private static Lzma2DecodeResult DecodeToArray(

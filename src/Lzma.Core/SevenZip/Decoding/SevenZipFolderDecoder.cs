@@ -60,6 +60,107 @@ public static class SevenZipFolderDecoder
   }
 
   /// <summary>
+  /// Декодирует Folder напрямую в <see cref="System.IO.Stream"/>, не накапливая весь выход в
+  /// <c>byte[]</c> (для больших файлов). Для простого folder-а из одного LZMA2-coder-а —
+  /// потоковый декод; для остальных форм (цепочки, BCJ2, PPMd, Copy, AES/GOST) — fallback:
+  /// декод в массив + запись в поток. <paramref name="bytesWritten"/> — число записанных байт.
+  /// </summary>
+  public static SevenZipFolderDecodeResult DecodeFolderToStream(
+      SevenZipStreamsInfo streamsInfo,
+      ReadOnlySpan<byte> packedStreams,
+      int folderIndex,
+      SevenZipDecodeOptions options,
+      System.IO.Stream output,
+      out long bytesWritten,
+      IProgress<LzmaProgress>? progress = null,
+      System.Threading.CancellationToken token = default)
+  {
+    bytesWritten = 0;
+
+    ArgumentNullException.ThrowIfNull(options);
+    ArgumentNullException.ThrowIfNull(streamsInfo);
+    ArgumentNullException.ThrowIfNull(output);
+
+    // Быстрый потоковый путь: folder — ровно один LZMA2-coder над одним packed stream.
+    if (TryGetSingleLzma2Coder(streamsInfo, packedStreams, folderIndex,
+            out ReadOnlySpan<byte> packStream, out byte lzma2PropertiesByte))
+    {
+      Lzma2DecodeResult r = Lzma2Decoder.DecodeToStream(
+          packStream, lzma2PropertiesByte, output, out bytesWritten, out _, progress, token);
+
+      return r switch
+      {
+        Lzma2DecodeResult.Finished => SevenZipFolderDecodeResult.Ok,
+        Lzma2DecodeResult.NotSupported => SevenZipFolderDecodeResult.NotSupported,
+        _ => SevenZipFolderDecodeResult.InvalidData,
+      };
+    }
+
+    // Fallback — прочие формы folder-а: декодируем в массив и пишем в поток целиком.
+    SevenZipFolderDecodeResult arrayResult = DecodeFolderToArray(
+        streamsInfo, packedStreams, folderIndex, options, out byte[] decoded, progress, token);
+
+    if (arrayResult == SevenZipFolderDecodeResult.Ok)
+    {
+      output.Write(decoded, 0, decoded.Length);
+      bytesWritten = decoded.LongLength;
+    }
+
+    return arrayResult;
+  }
+
+  // Распознаёт простейший folder: ровно один LZMA2-coder (1 in / 1 out) над одним packed stream.
+  // При успехе отдаёт срез packed-данных и байт свойств LZMA2 (размер словаря).
+  private static bool TryGetSingleLzma2Coder(
+      SevenZipStreamsInfo streamsInfo,
+      ReadOnlySpan<byte> packedStreams,
+      int folderIndex,
+      out ReadOnlySpan<byte> packStream,
+      out byte lzma2PropertiesByte)
+  {
+    packStream = default;
+    lzma2PropertiesByte = 0;
+
+    if (streamsInfo.PackInfo is not { } packInfo)
+      return false;
+    if (streamsInfo.UnpackInfo is not { } unpackInfo)
+      return false;
+    if ((uint)folderIndex >= (uint)unpackInfo.Folders.Length)
+      return false;
+
+    SevenZipFolder folder = unpackInfo.Folders[folderIndex];
+
+    if (folder.Coders.Length != 1 || folder.PackedStreamIndices.Length != 1)
+      return false;
+
+    SevenZipCoderInfo coder = folder.Coders[0];
+
+    if (!IsSingleByteMethodId(coder.MethodId, _methodIdLzma2))
+      return false;
+    if (coder.NumInStreams != 1 || coder.NumOutStreams != 1)
+      return false;
+    if (coder.Properties is null || coder.Properties.Length != 1)
+      return false;
+
+    ulong packStreamIndexU64 = 0;
+    for (int i = 0; i < folderIndex; i++)
+      packStreamIndexU64 += (ulong)unpackInfo.Folders[i].PackedStreamIndices.Length;
+
+    if (packStreamIndexU64 > int.MaxValue)
+      return false;
+
+    uint packStreamIndex = (uint)packStreamIndexU64;
+    if (packStreamIndex >= (uint)packInfo.PackSizes.Length)
+      return false;
+
+    if (!TryGetPackStream(packInfo, packedStreams, packStreamIndex, out packStream))
+      return false;
+
+    lzma2PropertiesByte = coder.Properties[0];
+    return true;
+  }
+
+  /// <summary>
   /// Декодирует Folder в массив байт.
   /// </summary>
   public static SevenZipFolderDecodeResult DecodeFolderToArray(

@@ -1,4 +1,6 @@
 using System.Buffers.Binary;
+using System.IO;
+using System.Linq;
 using System.Text;
 
 using Lzma.Core.Checksums;
@@ -10,6 +12,40 @@ namespace Lzma.Core.Tests.SevenZip;
 
 public class SevenZipFolderDecoderTests
 {
+  [Fact]
+  public void DecodeFolderToStream_СовпадаетС_DecodeFolderToArray_Lzma2()
+  {
+    // Многочанковый (>64 КБ) сжимаемый файл → реальный LZMA2-folder.
+    byte[] plain = Encoding.UTF8.GetBytes(string.Concat(Enumerable.Repeat("Folder в поток 0123456789 ", 6000)));
+
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, SevenZipArchiveWriter.BuildArchive(
+        [new SevenZipArchiveWriterEntry("big.bin", plain)],
+        SevenZipWriterCompressionMethod.Lzma2,
+        out byte[] archive));
+
+    var reader = new SevenZipArchiveReader();
+    Assert.Equal(SevenZipArchiveReadResult.Ok, reader.Read(archive, out _));
+    Assert.True(reader.Header.HasValue);
+
+    SevenZipStreamsInfo streamsInfo = reader.Header.Value.StreamsInfo;
+    ReadOnlySpan<byte> packed = reader.PackedStreams.Span;
+
+    // Эталон — folder в массив.
+    SevenZipFolderDecodeResult arrayResult = SevenZipFolderDecoder.DecodeFolderToArray(
+        streamsInfo, packed, folderIndex: 0, out byte[] fromArray);
+    Assert.Equal(SevenZipFolderDecodeResult.Ok, arrayResult);
+    Assert.Equal(plain, fromArray);
+
+    // Потоковый — folder напрямую в Stream (без накопления всего выхода).
+    using var ms = new MemoryStream();
+    SevenZipFolderDecodeResult streamResult = SevenZipFolderDecoder.DecodeFolderToStream(
+        streamsInfo, packed, folderIndex: 0, SevenZipDecodeOptions.Default, ms, out long written);
+
+    Assert.Equal(SevenZipFolderDecodeResult.Ok, streamResult);
+    Assert.Equal(fromArray.LongLength, written);
+    Assert.Equal(fromArray, ms.ToArray());
+  }
+
   [Fact]
   public void DecodeFolder_SingleFolder_Lzma2Copy_Returns_OriginalBytes()
   {
