@@ -110,11 +110,10 @@ public static partial class SevenZipArchiveWriter
 
       using (Stream source = entry.OpenRead())
       {
-        var crcSource = new CrcReadStream(source);
-        packSize = Lzma2LzmaEncoder.EncodeStreaming(
-            crcSource, entry.Length, lzmaProperties, effectiveDictionarySize, output,
-            token: token, bytesProgress: fileProgress);
-        crc = crcSource.CrcValue;
+        // МНОГОПОТОЧНОЕ блочное сжатие (как 7-Zip mt): кратное ускорение на многоядерных CPU.
+        packSize = Lzma2LzmaEncoder.EncodeParallelToStream(
+            source, entry.Length, lzmaProperties, effectiveDictionarySize, output,
+            out crc, bytesProgress: fileProgress, token: token);
       }
 
       packSizes[streamIndex] = (ulong)packSize;
@@ -264,41 +263,5 @@ public static partial class SevenZipArchiveWriter
   private sealed class LongProgressAdapter(Action<long> report) : IProgress<long>
   {
     public void Report(long value) => report(value);
-  }
-
-  // Обёртка чтения, считающая CRC32 несжатых данных по ходу (для folder-CRC потокового файла).
-  private sealed class CrcReadStream(Stream inner) : Stream
-  {
-    private uint _crc = Crc32.InitialState;
-
-    public uint CrcValue => Crc32.Finalize(_crc);
-
-    public override int Read(byte[] buffer, int offset, int count)
-    {
-      int n = inner.Read(buffer, offset, count);
-      if (n > 0)
-        _crc = Crc32.Update(_crc, buffer.AsSpan(offset, n));
-
-      return n;
-    }
-
-    public override int Read(Span<byte> buffer)
-    {
-      int n = inner.Read(buffer);
-      if (n > 0)
-        _crc = Crc32.Update(_crc, buffer[..n]);
-
-      return n;
-    }
-
-    public override bool CanRead => true;
-    public override bool CanWrite => false;
-    public override bool CanSeek => false;
-    public override long Length => throw new NotSupportedException();
-    public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
-    public override void Flush() { }
-    public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
-    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
-    public override void SetLength(long value) => throw new NotSupportedException();
   }
 }

@@ -1,5 +1,8 @@
+using System.Collections.Generic;
 using System.IO;
+using System.Threading.Tasks;
 
+using Lzma.Core.Checksums;
 using Lzma.Core.Lzma1;
 
 namespace Lzma.Core.Lzma2;
@@ -215,6 +218,101 @@ public static partial class Lzma2LzmaEncoder
     public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
     public override void SetLength(long value) => throw new NotSupportedException();
+  }
+
+  /// <summary>
+  /// МНОГОПОТОЧНОЕ блочное сжатие в <paramref name="output"/>: вход режется на независимые блоки,
+  /// блоки волны сжимаются ПАРАЛЛЕЛЬНО (каждый — самостоятельный LZMA2 со сбросом словаря), затем
+  /// пишутся по порядку. Как в 7-Zip (mt): кратное ускорение ценой небольшого проигрыша сжатия
+  /// (матчи не переходят границу блока). Возвращает packSize; CRC несжатого — через
+  /// <paramref name="contentCrc"/>. Пиковая память ≈ степень_параллелизма × blockSize.
+  /// </summary>
+  public static long EncodeParallelToStream(
+    Stream input,
+    long totalLength,
+    LzmaProperties lzmaProperties,
+    int dictionarySize,
+    Stream output,
+    out uint contentCrc,
+    int blockSize = 0,
+    int maxDegreeOfParallelism = 0,
+    IProgress<long>? bytesProgress = null,
+    System.Threading.CancellationToken token = default)
+  {
+    ArgumentNullException.ThrowIfNull(input);
+    ArgumentNullException.ThrowIfNull(output);
+    ArgumentOutOfRangeException.ThrowIfNegative(totalLength);
+
+    // Блок по умолчанию >= словаря (иначе словарь внутри блока обрезается) и не меньше 1 МиБ.
+    if (blockSize <= 0)
+      blockSize = Math.Max(dictionarySize, 1 << 20);
+
+    if (maxDegreeOfParallelism <= 0)
+      maxDegreeOfParallelism = Environment.ProcessorCount;
+
+    var counting = new CountingWriteStream(output);
+    uint crc = Crc32.InitialState;
+    long produced = 0;
+
+    if (totalLength == 0)
+    {
+      counting.WriteByte(0x00);
+      contentCrc = Crc32.Finalize(crc);
+      return counting.BytesWritten;
+    }
+
+    var options = new ParallelOptions
+    {
+      MaxDegreeOfParallelism = maxDegreeOfParallelism,
+      CancellationToken = token,
+    };
+
+    while (produced < totalLength)
+    {
+      token.ThrowIfCancellationRequested();
+
+      // Читаем волну блоков ПОСЛЕДОВАТЕЛЬНО (+CRC по ходу, в порядке файла).
+      var blocks = new List<byte[]>(maxDegreeOfParallelism);
+      for (int p = 0; p < maxDegreeOfParallelism && produced < totalLength; p++)
+      {
+        int len = (int)Math.Min(blockSize, totalLength - produced);
+        byte[] buffer = new byte[len];
+        ReadFully(input, buffer, len);
+        crc = Crc32.Update(crc, buffer);
+        blocks.Add(buffer);
+        produced += len;
+      }
+
+      // Сжимаем блоки волны ПАРАЛЛЕЛЬНО (каждый независим).
+      var compressed = new byte[blocks.Count][];
+      Parallel.For(0, blocks.Count, options, k =>
+      {
+        byte[] full = Encode(blocks[k], lzmaProperties, dictionarySize, 65536, token);
+        compressed[k] = full[..^1]; // без завершающего end-marker (0x00)
+      });
+
+      // Пишем сжатые блоки СТРОГО по порядку.
+      for (int k = 0; k < compressed.Length; k++)
+        counting.Write(compressed[k], 0, compressed[k].Length);
+
+      bytesProgress?.Report(produced);
+    }
+
+    counting.WriteByte(0x00); // единственный end-marker в конце потока
+    contentCrc = Crc32.Finalize(crc);
+    return counting.BytesWritten;
+  }
+
+  private static void ReadFully(Stream input, byte[] buffer, int count)
+  {
+    int offset = 0;
+    while (offset < count)
+    {
+      int got = input.Read(buffer, offset, count - offset);
+      if (got <= 0)
+        throw new EndOfStreamException("Входной поток короче заявленной длины.");
+      offset += got;
+    }
   }
 
   // Ring-aware поиск совпадений: точная копия LzmaMatchFinder.FindMatchesCyclic, но байты читаются
