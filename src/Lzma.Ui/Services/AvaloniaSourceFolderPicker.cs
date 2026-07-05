@@ -51,4 +51,43 @@ public sealed class AvaloniaSourceFolderPicker(TopLevel topLevel) : ISourceFolde
 
     return result.Count == 0 ? null : result; // пустая папка — паковать нечего
   }
+
+  public bool SupportsRefs => true;
+
+  public async Task<IReadOnlyList<PickedFileRef>?> PickFolderFileRefsAsync(
+      IProgress<ScanProgress>? progress = null, CancellationToken token = default)
+  {
+    IReadOnlyList<IStorageFolder> folders = await _topLevel.StorageProvider.OpenFolderPickerAsync(
+        new FolderPickerOpenOptions
+        {
+          Title = "Выберите папку для архива",
+          AllowMultiple = false,
+        });
+
+    if (folders.Count == 0)
+      return null;
+
+    string? root = folders[0].TryGetLocalPath();
+
+    if (string.IsNullOrEmpty(root))
+      return null;
+
+    var result = new List<PickedFileRef>();
+    long bytesTotal = 0;
+
+    foreach (string file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+    {
+      token.ThrowIfCancellationRequested();
+
+      long length = new FileInfo(file).Length;
+      string capturedPath = file;
+      result.Add(new PickedFileRef(
+          ArchiveEntryNaming.ForFileUnderFolder(root, file), length, () => File.OpenRead(capturedPath)));
+
+      bytesTotal += length;
+      progress?.Report(new ScanProgress(result.Count, bytesTotal));
+    }
+
+    return result.Count == 0 ? null : result;
+  }
 }

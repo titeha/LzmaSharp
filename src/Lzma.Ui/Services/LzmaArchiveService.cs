@@ -73,6 +73,35 @@ public sealed class LzmaArchiveService : IArchiveService
   }
 
   /// <inheritdoc />
+  public Task<SevenZipArchiveWriteResult> CreateArchiveToFileAsync(
+      IReadOnlyList<SevenZipStreamingEntry> entries,
+      string destinationPath,
+      int dictionarySize,
+      System.IProgress<SevenZipProgress>? progress = null,
+      System.Threading.CancellationToken token = default)
+  {
+    return Task.Run(() =>
+    {
+      try
+      {
+        // Пишем прямо в целевой файл потоком — ни файлы, ни архив в памяти не держим.
+        using var output = new System.IO.FileStream(
+            destinationPath, System.IO.FileMode.Create, System.IO.FileAccess.ReadWrite);
+
+        return SevenZipArchiveWriter.BuildLzma2ArchiveToStream(entries, output, dictionarySize, progress, token);
+      }
+      catch (System.IO.IOException)
+      {
+        return SevenZipArchiveWriteResult.InternalError;
+      }
+      catch (System.UnauthorizedAccessException)
+      {
+        return SevenZipArchiveWriteResult.InternalError;
+      }
+    }, token);
+  }
+
+  /// <inheritdoc />
   public Task<string> DescribeMethodsAsync(byte[] bytes, string? password)
   {
     return Task.Run(() =>

@@ -20,4 +20,15 @@ public interface ISourceFolderPicker
   /// </summary>
   Task<IReadOnlyList<PickedFile>?> PickFolderFilesAsync(
       IProgress<ScanProgress>? progress = null, CancellationToken token = default);
+
+  /// <summary>Поддерживает ли пикер потоковый выбор (по ссылкам, без чтения в память).</summary>
+  bool SupportsRefs => false;
+
+  /// <summary>
+  /// Потоковый вариант <see cref="PickFolderFilesAsync"/>: возвращает ссылки на файлы папки
+  /// (относительное имя+размер+фабрика потока), НЕ читая их в память. По умолчанию не поддерживается.
+  /// </summary>
+  Task<IReadOnlyList<PickedFileRef>?> PickFolderFileRefsAsync(
+      IProgress<ScanProgress>? progress = null, CancellationToken token = default)
+      => Task.FromResult<IReadOnlyList<PickedFileRef>?>(null);
 }

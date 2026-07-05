@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Threading;
 
@@ -240,6 +241,12 @@ public sealed class MainViewModel : ObservableObject
   /// </summary>
   internal TimeSpan BusyIndicatorDelay { get; set; } = TimeSpan.FromSeconds(3);
 
+  /// <summary>
+  /// Размер словаря LZMA2 для потокового создания (4 МиБ): баланс степени сжатия и памяти
+  /// (буфер match finder-а масштабируется от размера словаря). internal — для тестов.
+  /// </summary>
+  internal const int StreamingDictionarySize = 1 << 22;
+
   /// <summary>Содержимое текущей папки архива.</summary>
   public ObservableCollection<ArchiveItem> Items { get; } = [];
 
@@ -419,7 +426,10 @@ public sealed class MainViewModel : ObservableObject
     if (_sourceFilesPicker is null)
       return;
 
-    await CreateFromSourceAsync(_sourceFilesPicker.PickFilesAsync);
+    if (UseStreamingCreate(_sourceFilesPicker.SupportsRefs))
+      await CreateStreamingFromSourceAsync(_sourceFilesPicker.PickFileRefsAsync);
+    else
+      await CreateFromSourceAsync(_sourceFilesPicker.PickFilesAsync);
   }
 
   // Создание из выбранной папки (рекурсивно, с относительными путями).
@@ -428,8 +438,16 @@ public sealed class MainViewModel : ObservableObject
     if (_sourceFolderPicker is null)
       return;
 
-    await CreateFromSourceAsync(_sourceFolderPicker.PickFolderFilesAsync);
+    if (UseStreamingCreate(_sourceFolderPicker.SupportsRefs))
+      await CreateStreamingFromSourceAsync(_sourceFolderPicker.PickFolderFileRefsAsync);
+    else
+      await CreateFromSourceAsync(_sourceFolderPicker.PickFolderFilesAsync);
   }
+
+  // Потоковое создание доступно для LZMA2, если пикер умеет отдавать ссылки на файлы (без чтения
+  // в память) — так паковать можно и файлы > 2 ГиБ. Прочие методы идут прежним путём (в память).
+  private bool UseStreamingCreate(bool pickerSupportsRefs)
+      => pickerSupportsRefs && SelectedCompressionMethod == SevenZipWriterCompressionMethod.Lzma2;
 
   // Общий путь создания: получить источник → выбрать путь → собрать ядром → записать на диск.
   private async Task CreateFromSourceAsync(
@@ -505,6 +523,81 @@ public sealed class MainViewModel : ObservableObject
       StatusMessage = wrote
           ? FormatCreateSummary(path, originalBytes, created.Archive.LongLength)
           : "Архив собран, но записать на диск не удалось (нет доступа или ошибка ввода-вывода).";
+    });
+  }
+
+  // Потоковое создание: получить ССЫЛКИ на файлы (без чтения в память) → выбрать путь → собрать
+  // архив ядром прямо в целевой файл потоком. Для файлов > 2 ГиБ (LZMA2).
+  private async Task CreateStreamingFromSourceAsync(
+      Func<IProgress<ScanProgress>?, CancellationToken, Task<IReadOnlyList<PickedFileRef>?>> pickRefs)
+  {
+    if (_saveFilePicker is null)
+      return;
+
+    var scanProgress = new DelegateProgress<ScanProgress>(sp =>
+    {
+      IsScanning = true;
+      ScanStatus = FormatScanStatus(sp);
+    });
+
+    IReadOnlyList<PickedFileRef>? files;
+    using (var scanCts = new CancellationTokenSource())
+    {
+      _operationCts = scanCts;
+      try
+      {
+        files = await pickRefs(scanProgress, scanCts.Token);
+      }
+      catch (OperationCanceledException)
+      {
+        StatusMessage = "Операция отменена.";
+        return;
+      }
+      finally
+      {
+        _operationCts = null;
+        IsScanning = false;
+        ScanStatus = null;
+      }
+    }
+
+    if (files is null || files.Count == 0)
+      return;
+
+    string? path = await _saveFilePicker.PickSavePathAsync("archive.7z");
+
+    if (path is null)
+      return;
+
+    IProgress<SevenZipProgress> progress = CreateProgress();
+
+    await RunOperationAsync(async token =>
+    {
+      var entries = new List<SevenZipStreamingEntry>(files.Count);
+      long originalBytes = 0;
+
+      foreach (PickedFileRef file in files)
+      {
+        entries.Add(new SevenZipStreamingEntry(file.Name, file.Length, file.OpenRead));
+        originalBytes += file.Length;
+      }
+
+      SevenZipArchiveWriteResult result = await _archiveService.CreateArchiveToFileAsync(
+          entries, path, StreamingDictionarySize, progress, token);
+
+      if (result != SevenZipArchiveWriteResult.Ok)
+      {
+        StatusMessage = result == SevenZipArchiveWriteResult.NotSupported
+            ? "Потоковое создание с такими параметрами не поддерживается."
+            : "Не удалось создать архив: ошибка ввода-вывода или некорректный набор файлов.";
+        return;
+      }
+
+      long compressedBytes = 0;
+      try { compressedBytes = new FileInfo(path).Length; }
+      catch (IOException) { }
+
+      StatusMessage = FormatCreateSummary(path, originalBytes, compressedBytes);
     });
   }
 

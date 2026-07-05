@@ -50,4 +50,53 @@ public sealed class AvaloniaSourceFilesPicker(TopLevel topLevel) : ISourceFilesP
 
     return result;
   }
+
+  public bool SupportsRefs => true;
+
+  public async Task<IReadOnlyList<PickedFileRef>?> PickFileRefsAsync(
+      IProgress<ScanProgress>? progress = null, CancellationToken token = default)
+  {
+    IReadOnlyList<IStorageFile> files = await _topLevel.StorageProvider.OpenFilePickerAsync(
+        new FilePickerOpenOptions
+        {
+          Title = "Выберите файлы для архива",
+          AllowMultiple = true,
+        });
+
+    if (files.Count == 0)
+      return null;
+
+    var result = new List<PickedFileRef>(files.Count);
+    long bytesTotal = 0;
+
+    foreach (IStorageFile file in files)
+    {
+      token.ThrowIfCancellationRequested();
+
+      string? path = file.TryGetLocalPath();
+
+      if (!string.IsNullOrEmpty(path) && File.Exists(path))
+      {
+        // Локальный файл — ссылка без чтения в память (поддержка > 2 ГиБ).
+        long length = new FileInfo(path).Length;
+        string capturedPath = path;
+        result.Add(new PickedFileRef(file.Name, length, () => File.OpenRead(capturedPath)));
+        bytesTotal += length;
+      }
+      else
+      {
+        // Нет локального пути (виртуальный/облачный источник) — читаем в память (редкий случай).
+        await using Stream stream = await file.OpenReadAsync();
+        using var buffer = new MemoryStream();
+        await stream.CopyToAsync(buffer, token);
+        byte[] bytes = buffer.ToArray();
+        result.Add(new PickedFileRef(file.Name, bytes.LongLength, () => new MemoryStream(bytes)));
+        bytesTotal += bytes.LongLength;
+      }
+
+      progress?.Report(new ScanProgress(result.Count, bytesTotal));
+    }
+
+    return result;
+  }
 }

@@ -66,6 +66,20 @@ public interface IArchiveService
   Task<bool> WriteArchiveAsync(byte[] archive, string path);
 
   /// <summary>
+  /// ПОТОКОВОЕ создание LZMA2-архива прямо в файл <paramref name="destinationPath"/>: данные каждой
+  /// записи читаются из <see cref="SevenZipStreamingEntry.OpenRead"/> и сжимаются на лету, не
+  /// удерживая файл/архив в памяти (поддержка файлов &gt; 2 ГиБ). Реализация по умолчанию —
+  /// <see cref="SevenZipArchiveWriteResult.NotSupported"/> (шов подключается только в боевой службе).
+  /// </summary>
+  Task<SevenZipArchiveWriteResult> CreateArchiveToFileAsync(
+      IReadOnlyList<SevenZipStreamingEntry> entries,
+      string destinationPath,
+      int dictionarySize,
+      IProgress<SevenZipProgress>? progress = null,
+      CancellationToken token = default)
+      => Task.FromResult(SevenZipArchiveWriteResult.NotSupported);
+
+  /// <summary>
   /// Возвращает человекочитаемое описание методов архива (для диагностики при ошибке
   /// открытия) либо пустую строку, если описать не удалось.
   /// </summary>
