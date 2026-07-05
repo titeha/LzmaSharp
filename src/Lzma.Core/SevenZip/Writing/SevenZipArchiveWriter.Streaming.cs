@@ -102,11 +102,18 @@ public static partial class SevenZipArchiveWriter
       long packSize;
       uint crc;
 
+      // Прогресс ВНУТРИ файла: локально обработанные байты → глобальный отчёт (как within-folder в декоде).
+      long processedBefore = processed;
+      IProgress<long>? fileProgress = progress is null ? null
+          : new LongProgressAdapter(local => progress.Report(
+              new SevenZipProgress(Math.Min(processedBefore + local, totalContent), totalContent)));
+
       using (Stream source = entry.OpenRead())
       {
         var crcSource = new CrcReadStream(source);
         packSize = Lzma2LzmaEncoder.EncodeStreaming(
-            crcSource, entry.Length, lzmaProperties, effectiveDictionarySize, output, token: token);
+            crcSource, entry.Length, lzmaProperties, effectiveDictionarySize, output,
+            token: token, bytesProgress: fileProgress);
         crc = crcSource.CrcValue;
       }
 
@@ -251,6 +258,12 @@ public static partial class SevenZipArchiveWriter
 
     header.Add(SevenZipNid.End);
     return true;
+  }
+
+  // Синхронный IProgress<long> из делегата (отчёты идут на потоке энкодера, не через SynchronizationContext).
+  private sealed class LongProgressAdapter(Action<long> report) : IProgress<long>
+  {
+    public void Report(long value) => report(value);
   }
 
   // Обёртка чтения, считающая CRC32 несжатых данных по ходу (для folder-CRC потокового файла).

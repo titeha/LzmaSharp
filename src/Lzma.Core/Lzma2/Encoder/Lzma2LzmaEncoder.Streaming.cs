@@ -41,6 +41,9 @@ public static partial class Lzma2LzmaEncoder
   /// весь вход/выход в памяти. Возвращает число записанных байт (long). <paramref name="totalLength"/>
   /// — заранее известный размер входа (файл на диске). Выход идентичен <see cref="Encode"/>.
   /// </summary>
+  // Как часто (по числу обработанных байт входа) репортить прогресс внутри файла.
+  private const long StreamProgressIntervalBytes = 1 << 21; // 2 МиБ
+
   public static long EncodeStreaming(
     Stream input,
     long totalLength,
@@ -48,7 +51,8 @@ public static partial class Lzma2LzmaEncoder
     int dictionarySize,
     Stream output,
     int maxUnpackChunkSize = 65536,
-    System.Threading.CancellationToken token = default)
+    System.Threading.CancellationToken token = default,
+    IProgress<long>? bytesProgress = null)
   {
     ArgumentNullException.ThrowIfNull(input);
     ArgumentNullException.ThrowIfNull(output);
@@ -108,6 +112,7 @@ public static partial class Lzma2LzmaEncoder
 
     long i = 0;
     long n = totalLength;
+    long nextReport = StreamProgressIntervalBytes;
 
     while (i < n)
     {
@@ -161,6 +166,13 @@ public static partial class Lzma2LzmaEncoder
         EnsureFilled(i + maxMatch);
         InsertStreaming(ring, ringMask, head, prev, windowMask, i, n);
         i++;
+      }
+
+      // Прогресс внутри файла (по числу обработанных байт входа) — чтобы бар двигался на больших файлах.
+      if (bytesProgress is not null && i >= nextReport)
+      {
+        bytesProgress.Report(i);
+        nextReport = i + StreamProgressIntervalBytes;
       }
     }
 
@@ -254,16 +266,17 @@ public static partial class Lzma2LzmaEncoder
     head[h] = pos;
   }
 
-  // Длина совпадения в кольце (wrap-aware, побайтно — для спайка важна корректность, не скорость).
+  // Длина совпадения в кольце. Быстрый путь: если оба среза не пересекают границу кольца —
+  // векторное CommonPrefixLength (как в Encode); иначе побайтный wrap-aware проход. Результат
+  // идентичен побайтному (те же байты сравниваются).
   private static int MatchLengthStreaming(
       byte[] ring, int ringMask, long source, long current, long totalLength, int maxMatch)
   {
     int limit = (int)Math.Min(maxMatch, totalLength - current);
-    int k = 0;
-    while (k < limit && ring[(source + k) & ringMask] == ring[(current + k) & ringMask])
-      k++;
+    if (limit <= 0)
+      return 0;
 
-    return k;
+    return RingCommonPrefix(ring, ringMask, source, current, limit);
   }
 
   // Длина rep-совпадения: как RepMatchLength, но из кольца.
@@ -274,9 +287,21 @@ public static partial class Lzma2LzmaEncoder
     if (limit <= 0)
       return 0;
 
-    long source = pos - distance;
+    return RingCommonPrefix(ring, ringMask, pos - distance, pos, limit);
+  }
+
+  // Общая длина совпадения байт кольца в позициях source и current на длину до limit.
+  private static int RingCommonPrefix(byte[] ring, int ringMask, long source, long current, int limit)
+  {
+    int sIdx = (int)(source & ringMask);
+    int cIdx = (int)(current & ringMask);
+
+    // Быстрый путь: ни один срез не переходит через конец кольца → векторное сравнение.
+    if (sIdx + limit <= ring.Length && cIdx + limit <= ring.Length)
+      return ring.AsSpan(sIdx, limit).CommonPrefixLength(ring.AsSpan(cIdx, limit));
+
     int k = 0;
-    while (k < limit && ring[(source + k) & ringMask] == ring[(pos + k) & ringMask])
+    while (k < limit && ring[(source + k) & ringMask] == ring[(current + k) & ringMask])
       k++;
 
     return k;
