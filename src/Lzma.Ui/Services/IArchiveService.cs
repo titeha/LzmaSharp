@@ -80,6 +80,18 @@ public interface IArchiveService
       => Task.FromResult(SevenZipArchiveWriteResult.NotSupported);
 
   /// <summary>
+  /// ПОТОКОВОЕ извлечение архива прямо из файла <paramref name="archivePath"/> в
+  /// <paramref name="destination"/>, НЕ загружая архив в память (поддержка архивов &gt; 2 ГиБ).
+  /// Реализация по умолчанию — <see cref="SevenZipArchiveDecodeResult.NotSupported"/>.
+  /// </summary>
+  Task<SevenZipArchiveDecodeResult> ExtractArchiveFileAsync(
+      string archivePath,
+      string destination,
+      IProgress<SevenZipProgress>? progress = null,
+      CancellationToken token = default)
+      => Task.FromResult(SevenZipArchiveDecodeResult.NotSupported);
+
+  /// <summary>
   /// Возвращает человекочитаемое описание методов архива (для диагностики при ошибке
   /// открытия) либо пустую строку, если описать не удалось.
   /// </summary>

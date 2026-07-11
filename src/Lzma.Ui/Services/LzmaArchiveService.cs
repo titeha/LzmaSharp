@@ -102,6 +102,35 @@ public sealed class LzmaArchiveService : IArchiveService
   }
 
   /// <inheritdoc />
+  public Task<SevenZipArchiveDecodeResult> ExtractArchiveFileAsync(
+      string archivePath,
+      string destination,
+      System.IProgress<SevenZipProgress>? progress = null,
+      System.Threading.CancellationToken token = default)
+  {
+    return Task.Run(() =>
+    {
+      try
+      {
+        // Читаем архив прямо из файла потоком — в память его не грузим (поддержка > 2 ГиБ).
+        using var archive = new System.IO.FileStream(
+            archivePath, System.IO.FileMode.Open, System.IO.FileAccess.Read);
+
+        return SevenZipArchiveDecoder.ExtractToDirectoryFromStream(
+            archive, SevenZipDecodeOptions.Default, destination, overwrite: false, progress, token);
+      }
+      catch (System.IO.IOException)
+      {
+        return SevenZipArchiveDecodeResult.InternalError;
+      }
+      catch (System.UnauthorizedAccessException)
+      {
+        return SevenZipArchiveDecodeResult.InternalError;
+      }
+    }, token);
+  }
+
+  /// <inheritdoc />
   public Task<string> DescribeMethodsAsync(byte[] bytes, string? password)
   {
     return Task.Run(() =>

@@ -110,6 +110,7 @@ public sealed class MainViewModel : ObservableObject
     OpenCommand = new AsyncRelayCommand(OpenAsync);
     NavigateUpCommand = new RelayCommand(NavigateUp, () => CanGoUp, this);
     ExtractAllCommand = new AsyncRelayCommand(ExtractAllAsync, () => HasArchive && !IsOperating, this);
+    ExtractArchiveFileCommand = new AsyncRelayCommand(ExtractArchiveFileAsync, () => !IsOperating, this);
     CreateCommand = new AsyncRelayCommand(CreateFromFilesAsync, () => CanCreate && !IsOperating, this);
     CreateFromFolderCommand = new AsyncRelayCommand(CreateFromFolderAsync, () => CanCreateFromFolder && !IsOperating, this);
     CancelCommand = new RelayCommand(Cancel, () => IsOperating || IsScanning, this);
@@ -258,6 +259,12 @@ public sealed class MainViewModel : ObservableObject
 
   /// <summary>Команда «Извлечь всё» — распаковать содержимое архива в выбранную папку.</summary>
   public AsyncRelayCommand ExtractAllCommand { get; }
+
+  /// <summary>
+  /// Команда «Извлечь архив с диска…» — выбрать .7z по пути и извлечь ПОТОКОВО, не загружая архив
+  /// в память (для архивов больше 2 ГиБ). Не требует предварительного открытия/обзора.
+  /// </summary>
+  public AsyncRelayCommand ExtractArchiveFileCommand { get; }
 
   /// <summary>Команда «Создать архив…» — упаковать выбранные файлы в новый 7z-архив.</summary>
   public AsyncRelayCommand CreateCommand { get; }
@@ -415,6 +422,35 @@ public sealed class MainViewModel : ObservableObject
       {
         SevenZipArchiveDecodeResult.Ok => $"Извлечено в: {destination}",
         SevenZipArchiveDecodeResult.NotSupported => "Извлечение не поддерживается для этого архива.",
+        _ => "Не удалось извлечь: ошибка данных или файл уже существует.",
+      };
+    });
+  }
+
+  // Прямое потоковое извлечение архива с диска (без открытия/обзора) — для архивов > 2 ГиБ.
+  private async Task ExtractArchiveFileAsync()
+  {
+    string? archivePath = await _picker.PickArchivePathAsync();
+
+    if (archivePath is null)
+      return; // выбор архива отменён / нет локального пути
+
+    string? destination = await _folderPicker.PickFolderAsync();
+
+    if (destination is null)
+      return; // выбор папки отменён
+
+    IProgress<SevenZipProgress> progress = CreateProgress();
+
+    await RunOperationAsync(async token =>
+    {
+      SevenZipArchiveDecodeResult result = await _archiveService.ExtractArchiveFileAsync(archivePath, destination, progress, token);
+
+      StatusMessage = result switch
+      {
+        SevenZipArchiveDecodeResult.Ok => $"Извлечено в: {destination}",
+        SevenZipArchiveDecodeResult.NotSupported =>
+            "Извлечение этого архива не поддерживается (например, шифрование или сложные фильтры).",
         _ => "Не удалось извлечь: ошибка данных или файл уже существует.",
       };
     });
