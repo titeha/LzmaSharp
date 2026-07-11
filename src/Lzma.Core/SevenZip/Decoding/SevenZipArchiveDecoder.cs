@@ -1264,6 +1264,433 @@ public static partial class SevenZipArchiveDecoder
     }
   }
 
+  /// <summary>
+  /// Извлекает архив из seekable <see cref="Stream"/> (напр. <see cref="FileStream"/>) на диск,
+  /// НЕ загружая архив в память — позволяет распаковывать архивы больше 2 ГиБ. Структура читается
+  /// потоково (<see cref="SevenZipArchiveStreamReader"/>), а данные каждого folder-а декодируются
+  /// напрямую из потока по смещению. Поддерживает архивы из одиночных LZMA2-folder-ов (наш writer
+  /// такие и пишет); прочие формы дают <see cref="SevenZipArchiveDecodeResult.NotSupported"/>.
+  /// Логика проверок путей/метаданных/отката — идентична span-версии.
+  /// </summary>
+  public static SevenZipArchiveDecodeResult ExtractToDirectoryFromStream(
+      Stream archive,
+      SevenZipDecodeOptions options,
+      string destinationDirectory,
+      bool overwrite = false,
+      IProgress<SevenZipProgress>? progress = null,
+      System.Threading.CancellationToken token = default)
+  {
+    ArgumentNullException.ThrowIfNull(archive);
+    ArgumentNullException.ThrowIfNull(options);
+
+    if (destinationDirectory is null)
+      return SevenZipArchiveDecodeResult.InvalidData;
+
+    // Читаем ТОЛЬКО структуру архива из потока (сигнатура + next-header) — без packed-данных.
+    SevenZipArchiveDecodeResult headerRes = SevenZipArchiveStreamReader.ReadHeader(
+        archive, out SevenZipHeader header, out long packedBaseOffset);
+    if (headerRes != SevenZipArchiveDecodeResult.Ok)
+      return headerRes;
+
+    SevenZipFilesInfo filesInfo = header.FilesInfo;
+
+    SevenZipArchiveDecodeResult planRes = TryBuildExtractionPlan(header, out ExtractPlanEntry[] plan, out int folderCount);
+    if (planRes != SevenZipArchiveDecodeResult.Ok)
+      return planRes;
+
+    var entries = new SevenZipDecodedEntry[plan.Length];
+    for (int pi = 0; pi < plan.Length; pi++)
+      entries[pi] = new SevenZipDecodedEntry(plan[pi].Name, [], plan[pi].Kind == ExtractEntryKind.Directory);
+
+    SevenZipStreamsInfo? streamsInfo = header.StreamsInfo;
+
+    int fileCount = entries.Length;
+    if (filesInfo.FileCount != (ulong)fileCount)
+      return SevenZipArchiveDecodeResult.InvalidData;
+
+    bool[]? mTimeDefined = filesInfo.MTimeDefined;
+    ulong[]? mTime = filesInfo.MTime;
+    if (mTimeDefined is null != mTime is null)
+      return SevenZipArchiveDecodeResult.InvalidData;
+    if (mTimeDefined is not null && mTimeDefined.Length != fileCount)
+      return SevenZipArchiveDecodeResult.InvalidData;
+    if (mTime is not null && mTime.Length != fileCount)
+      return SevenZipArchiveDecodeResult.InvalidData;
+
+    bool[]? winAttribDefined = filesInfo.WinAttribDefined;
+    uint[]? winAttrib = filesInfo.WinAttrib;
+    if (winAttribDefined is null != winAttrib is null)
+      return SevenZipArchiveDecodeResult.InvalidData;
+    if (winAttribDefined is not null && winAttribDefined.Length != fileCount)
+      return SevenZipArchiveDecodeResult.InvalidData;
+    if (winAttrib is not null && winAttrib.Length != fileCount)
+      return SevenZipArchiveDecodeResult.InvalidData;
+
+    bool[]? cTimeDefined = filesInfo.CTimeDefined;
+    ulong[]? cTime = filesInfo.CTime;
+    if (cTimeDefined is null != cTime is null)
+      return SevenZipArchiveDecodeResult.InvalidData;
+    if (cTimeDefined is not null && cTimeDefined.Length != fileCount)
+      return SevenZipArchiveDecodeResult.InvalidData;
+    if (cTime is not null && cTime.Length != fileCount)
+      return SevenZipArchiveDecodeResult.InvalidData;
+
+    bool[]? aTimeDefined = filesInfo.ATimeDefined;
+    ulong[]? aTime = filesInfo.ATime;
+    if (aTimeDefined is null != aTime is null)
+      return SevenZipArchiveDecodeResult.InvalidData;
+    if (aTimeDefined is not null && aTimeDefined.Length != fileCount)
+      return SevenZipArchiveDecodeResult.InvalidData;
+    if (aTime is not null && aTime.Length != fileCount)
+      return SevenZipArchiveDecodeResult.InvalidData;
+
+    for (int i = 0; i < fileCount; i++)
+    {
+      if (cTimeDefined?[i] == true && !IsValidFileTime(cTime![i]))
+        return SevenZipArchiveDecodeResult.InvalidData;
+      if (aTimeDefined?[i] == true && !IsValidFileTime(aTime![i]))
+        return SevenZipArchiveDecodeResult.InvalidData;
+      if (mTimeDefined?[i] == true && !IsValidFileTime(mTime![i]))
+        return SevenZipArchiveDecodeResult.InvalidData;
+    }
+
+    try
+    {
+      string root = Path.GetFullPath(destinationDirectory);
+
+      StringComparison cmp = OperatingSystem.IsWindows()
+        ? StringComparison.OrdinalIgnoreCase
+        : StringComparison.Ordinal;
+
+      if (File.Exists(root))
+        return SevenZipArchiveDecodeResult.InvalidData;
+
+      if (HasFileOnDirectoryPath(root, cmp))
+        return SevenZipArchiveDecodeResult.InvalidData;
+
+      string rootWithSep = root;
+      if (!rootWithSep.EndsWith(Path.DirectorySeparatorChar))
+        rootWithSep += Path.DirectorySeparatorChar;
+
+      var createdDirs = new List<string>();
+      var createdFiles = new List<string>();
+
+      if (!Directory.Exists(root))
+      {
+        Directory.CreateDirectory(root);
+        createdDirs.Add(root);
+      }
+
+      StringComparer pathComparer = OperatingSystem.IsWindows()
+        ? StringComparer.OrdinalIgnoreCase
+        : StringComparer.Ordinal;
+
+      string[] fullPaths = new string[fileCount];
+      HashSet<string> seenOutputPaths = new(pathComparer);
+
+      for (int i = 0; i < entries.Length; i++)
+      {
+        if (!TryBuildSafePath(rootWithSep, entries[i].Name, cmp, out string fullPath))
+          return SevenZipArchiveDecodeResult.InvalidData;
+
+        if (!seenOutputPaths.Add(fullPath))
+          return SevenZipArchiveDecodeResult.InvalidData;
+
+        fullPaths[i] = fullPath;
+      }
+
+      HashSet<string> plannedFilePaths = new(pathComparer);
+      for (int i = 0; i < entries.Length; i++)
+        if (!entries[i].IsDirectory)
+          plannedFilePaths.Add(fullPaths[i]);
+
+      for (int i = 0; i < entries.Length; i++)
+      {
+        string? current = Path.GetDirectoryName(fullPaths[i]);
+
+        while (current is not null)
+        {
+          if (string.Equals(current, root, cmp))
+            break;
+
+          if (plannedFilePaths.Contains(current))
+            return SevenZipArchiveDecodeResult.InvalidData;
+
+          string? parent = Path.GetDirectoryName(current);
+          if (parent is null || string.Equals(parent, current, cmp))
+            break;
+
+          current = parent;
+        }
+      }
+
+      for (int i = 0; i < entries.Length; i++)
+      {
+        string fullPath = fullPaths[i];
+        if (fullPath.Length == 0)
+          return SevenZipArchiveDecodeResult.InvalidData;
+
+        if (entries[i].IsDirectory)
+        {
+          if (HasFileOnPath(root, fullPath, includeSelf: true, cmp))
+            return SevenZipArchiveDecodeResult.InvalidData;
+          continue;
+        }
+
+        string? dir = Path.GetDirectoryName(fullPath);
+        if (dir is null)
+          return SevenZipArchiveDecodeResult.InvalidData;
+
+        if (HasFileOnPath(root, fullPath, includeSelf: false, cmp))
+          return SevenZipArchiveDecodeResult.InvalidData;
+
+        if (Directory.Exists(fullPath))
+          return SevenZipArchiveDecodeResult.InvalidData;
+
+        if (File.Exists(fullPath) && !overwrite)
+          return SevenZipArchiveDecodeResult.InvalidData;
+      }
+
+      bool committed = false;
+
+      void CreateDirsTracked(string directory)
+      {
+        if (string.IsNullOrEmpty(directory) || Directory.Exists(directory))
+          return;
+
+        var missing = new Stack<string>();
+        for (string? cur = directory; cur is not null && !Directory.Exists(cur); cur = Path.GetDirectoryName(cur))
+          missing.Push(cur);
+
+        while (missing.Count > 0)
+        {
+          string d = missing.Pop();
+          Directory.CreateDirectory(d);
+          createdDirs.Add(d);
+        }
+      }
+
+      try
+      {
+        for (int i = 0; i < entries.Length; i++)
+        {
+          string fullPath = fullPaths[i];
+          if (fullPath.Length == 0)
+            return SevenZipArchiveDecodeResult.InvalidData;
+
+          if (entries[i].IsDirectory)
+          {
+            if (HasFileOnPath(root, fullPath, includeSelf: true, cmp))
+              return SevenZipArchiveDecodeResult.InvalidData;
+
+            CreateDirsTracked(fullPath);
+            continue;
+          }
+
+          string? dir = Path.GetDirectoryName(fullPath);
+          if (dir is null)
+            return SevenZipArchiveDecodeResult.InvalidData;
+
+          if (HasFileOnPath(root, fullPath, includeSelf: false, cmp))
+            return SevenZipArchiveDecodeResult.InvalidData;
+
+          CreateDirsTracked(dir);
+
+          if (Directory.Exists(fullPath))
+            return SevenZipArchiveDecodeResult.InvalidData;
+
+          if (File.Exists(fullPath))
+          {
+            if (!overwrite)
+              return SevenZipArchiveDecodeResult.InvalidData;
+
+            if (!TryPrepareExistingFileForOverwrite(fullPath))
+              return SevenZipArchiveDecodeResult.InvalidData;
+          }
+
+          if (plan[i].Kind == ExtractEntryKind.EmptyFile)
+          {
+            File.WriteAllBytes(fullPath, []);
+            createdFiles.Add(fullPath);
+          }
+        }
+
+        long totalUnpackedBytes = 0;
+        for (int i = 0; i < plan.Length; i++)
+          totalUnpackedBytes += plan[i].Size;
+
+        progress?.Report(new SevenZipProgress(0, totalUnpackedBytes));
+
+        long processedUnpackedBytes = 0;
+
+        for (int folder = 0; folder < folderCount; folder++)
+        {
+          token.ThrowIfCancellationRequested();
+
+          var openStreams = new List<FileStream>();
+          var segments = new List<SubstreamRoutingWriter.Segment>();
+
+          try
+          {
+            for (int i = 0; i < plan.Length; i++)
+            {
+              if (plan[i].Kind != ExtractEntryKind.DataFile || plan[i].FolderIndex != folder)
+                continue;
+
+              var fs = new FileStream(fullPaths[i], FileMode.Create, FileAccess.Write);
+              openStreams.Add(fs);
+              createdFiles.Add(fullPaths[i]);
+              segments.Add(new SubstreamRoutingWriter.Segment(fs, plan[i].Size, plan[i].HasCrc, plan[i].ExpectedCrc));
+            }
+
+            var routing = new SubstreamRoutingWriter([.. segments]);
+
+            long processedBefore = processedUnpackedBytes;
+            IProgress<LzmaProgress>? folderProgress = progress is null ? null
+                : new DelegateProgress<LzmaProgress>(lp => progress.Report(new SevenZipProgress(
+                    Math.Min(processedBefore + lp.BytesWritten, totalUnpackedBytes), totalUnpackedBytes)));
+
+            // ЕДИНСТВЕННОЕ отличие от span-версии: folder декодируется ПОТОКОВО из архива.
+            SevenZipFolderDecodeResult fr = SevenZipFolderDecoder.DecodeFolderStreamToStream(
+                streamsInfo!, archive, packedBaseOffset, folder, options, routing, out long written, folderProgress, token);
+
+            if (fr == SevenZipFolderDecodeResult.InvalidData)
+              return SevenZipArchiveDecodeResult.InvalidData;
+            if (fr == SevenZipFolderDecodeResult.NotSupported)
+              return SevenZipArchiveDecodeResult.NotSupported;
+            if (fr != SevenZipFolderDecodeResult.Ok)
+              return SevenZipArchiveDecodeResult.InternalError;
+
+            if (!routing.IsComplete || routing.SizeOverflow || routing.CrcMismatch)
+              return SevenZipArchiveDecodeResult.InvalidData;
+
+            processedUnpackedBytes += written;
+            progress?.Report(new SevenZipProgress(
+                Math.Min(processedUnpackedBytes, totalUnpackedBytes), totalUnpackedBytes));
+          }
+          finally
+          {
+            foreach (FileStream fs in openStreams)
+              fs.Dispose();
+          }
+        }
+
+        committed = true;
+      }
+      finally
+      {
+        if (!committed)
+        {
+          for (int i = createdFiles.Count - 1; i >= 0; i--)
+          {
+            try { if (File.Exists(createdFiles[i])) File.Delete(createdFiles[i]); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+          }
+
+          for (int i = createdDirs.Count - 1; i >= 0; i--)
+          {
+            try { if (Directory.Exists(createdDirs[i])) Directory.Delete(createdDirs[i], recursive: false); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+          }
+        }
+      }
+
+      for (int i = 0; i < fileCount; i++)
+      {
+        string fullPath = fullPaths[i];
+        if (fullPath.Length == 0)
+          return SevenZipArchiveDecodeResult.InvalidData;
+
+        if (cTimeDefined?[i] == true)
+        {
+          ulong raw = cTime![i];
+          if (raw > long.MaxValue)
+            return SevenZipArchiveDecodeResult.InvalidData;
+
+          DateTime dt;
+          try { dt = DateTime.FromFileTimeUtc((long)raw); }
+          catch (ArgumentOutOfRangeException) { return SevenZipArchiveDecodeResult.InvalidData; }
+
+          try
+          {
+            if (entries[i].IsDirectory)
+              Directory.SetCreationTimeUtc(fullPath, dt);
+            else
+              File.SetCreationTimeUtc(fullPath, dt);
+          }
+          catch (IOException) { }
+          catch (UnauthorizedAccessException) { }
+          catch (PlatformNotSupportedException) { }
+        }
+
+        if (aTimeDefined?[i] == true)
+        {
+          ulong raw = aTime![i];
+          if (raw > long.MaxValue)
+            return SevenZipArchiveDecodeResult.InvalidData;
+
+          DateTime dt;
+          try { dt = DateTime.FromFileTimeUtc((long)raw); }
+          catch (ArgumentOutOfRangeException) { return SevenZipArchiveDecodeResult.InvalidData; }
+
+          try
+          {
+            if (entries[i].IsDirectory)
+              Directory.SetLastAccessTimeUtc(fullPath, dt);
+            else
+              File.SetLastAccessTimeUtc(fullPath, dt);
+          }
+          catch (IOException) { }
+          catch (UnauthorizedAccessException) { }
+          catch (PlatformNotSupportedException) { }
+        }
+
+        if (mTimeDefined?[i] == true)
+        {
+          ulong raw = mTime![i];
+          if (raw > long.MaxValue)
+            return SevenZipArchiveDecodeResult.InvalidData;
+
+          DateTime dt;
+          try { dt = DateTime.FromFileTimeUtc((long)raw); }
+          catch (ArgumentOutOfRangeException) { return SevenZipArchiveDecodeResult.InvalidData; }
+
+          try
+          {
+            if (entries[i].IsDirectory)
+              Directory.SetLastWriteTimeUtc(fullPath, dt);
+            else
+              File.SetLastWriteTimeUtc(fullPath, dt);
+          }
+          catch (IOException) { }
+          catch (UnauthorizedAccessException) { }
+        }
+
+        if (OperatingSystem.IsWindows() && winAttribDefined?[i] == true)
+        {
+          FileAttributes attrs = (FileAttributes)winAttrib![i];
+
+          if (entries[i].IsDirectory)
+            attrs |= FileAttributes.Directory;
+          else
+            attrs &= ~FileAttributes.Directory;
+
+          try { File.SetAttributes(fullPath, attrs); }
+          catch (IOException) { }
+          catch (UnauthorizedAccessException) { }
+        }
+      }
+
+      return SevenZipArchiveDecodeResult.Ok;
+    }
+    catch (IOException) { return SevenZipArchiveDecodeResult.InternalError; }
+    catch (UnauthorizedAccessException) { return SevenZipArchiveDecodeResult.InternalError; }
+    catch (ArgumentException) { return SevenZipArchiveDecodeResult.InvalidData; }
+    catch (NotSupportedException) { return SevenZipArchiveDecodeResult.InvalidData; }
+  }
+
   private static SevenZipArchiveDecodeResult TryGetFolderFinalOutSize(
     SevenZipFolder folder,
     ulong[] folderUnpackSizes,
