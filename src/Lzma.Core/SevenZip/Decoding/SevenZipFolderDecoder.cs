@@ -161,6 +161,110 @@ public static class SevenZipFolderDecoder
   }
 
   /// <summary>
+  /// Декодирует folder ПОТОКОВО из архива-<see cref="System.IO.Stream"/> (по смещению/размеру из
+  /// метаданных), не загружая packed-данные в память — для извлечения архивов больше 2 ГиБ. Пишет
+  /// выход в <paramref name="output"/>. <paramref name="packedBaseOffset"/> — начало packed-региона
+  /// в файле (обычно 32). Поддерживается ТОЛЬКО простой folder из одного LZMA2-coder-а (наш writer
+  /// такие и пишет); прочие формы — <see cref="SevenZipFolderDecodeResult.NotSupported"/> (их packed
+  /// обычно мал и извлекается span-путём).
+  /// </summary>
+  public static SevenZipFolderDecodeResult DecodeFolderStreamToStream(
+      SevenZipStreamsInfo streamsInfo,
+      System.IO.Stream archive,
+      long packedBaseOffset,
+      int folderIndex,
+      SevenZipDecodeOptions options,
+      System.IO.Stream output,
+      out long bytesWritten,
+      IProgress<LzmaProgress>? progress = null,
+      System.Threading.CancellationToken token = default)
+  {
+    bytesWritten = 0;
+
+    ArgumentNullException.ThrowIfNull(streamsInfo);
+    ArgumentNullException.ThrowIfNull(archive);
+    ArgumentNullException.ThrowIfNull(output);
+    ArgumentNullException.ThrowIfNull(options);
+
+    if (!TryGetSingleLzma2CoderLocation(streamsInfo, folderIndex,
+            out ulong packStart, out ulong packSize, out byte lzma2PropertiesByte))
+      return SevenZipFolderDecodeResult.NotSupported;
+
+    if (packSize > long.MaxValue)
+      return SevenZipFolderDecodeResult.NotSupported;
+
+    long fileOffset = packedBaseOffset + (long)packStart;
+    if (fileOffset < 0 || fileOffset + (long)packSize > archive.Length)
+      return SevenZipFolderDecodeResult.InvalidData;
+
+    if (!Lzma2Properties.TryParse(lzma2PropertiesByte, out Lzma2Properties properties))
+      return SevenZipFolderDecodeResult.InvalidData;
+
+    archive.Position = fileOffset;
+
+    Lzma2DecodeResult r = Lzma2Decoder.DecodeStreamToStream(
+        archive, (long)packSize, properties, output, out bytesWritten, progress, token);
+
+    return r switch
+    {
+      Lzma2DecodeResult.Finished => SevenZipFolderDecodeResult.Ok,
+      Lzma2DecodeResult.NotSupported => SevenZipFolderDecodeResult.NotSupported,
+      _ => SevenZipFolderDecodeResult.InvalidData,
+    };
+  }
+
+  // Как TryGetSingleLzma2Coder, но вместо среза packed-данных отдаёт СМЕЩЕНИЕ и РАЗМЕР pack-стрима
+  // folder-а в packed-регионе (ulong, поддержка > 2 ГиБ) — для потокового декода из архива-Stream.
+  private static bool TryGetSingleLzma2CoderLocation(
+      SevenZipStreamsInfo streamsInfo,
+      int folderIndex,
+      out ulong packStart,
+      out ulong packSize,
+      out byte lzma2PropertiesByte)
+  {
+    packStart = 0;
+    packSize = 0;
+    lzma2PropertiesByte = 0;
+
+    if (streamsInfo.PackInfo is not { } packInfo)
+      return false;
+    if (streamsInfo.UnpackInfo is not { } unpackInfo)
+      return false;
+    if ((uint)folderIndex >= (uint)unpackInfo.Folders.Length)
+      return false;
+
+    SevenZipFolder folder = unpackInfo.Folders[folderIndex];
+
+    if (folder.Coders.Length != 1 || folder.PackedStreamIndices.Length != 1)
+      return false;
+
+    SevenZipCoderInfo coder = folder.Coders[0];
+
+    if (!IsSingleByteMethodId(coder.MethodId, _methodIdLzma2))
+      return false;
+    if (coder.NumInStreams != 1 || coder.NumOutStreams != 1)
+      return false;
+    if (coder.Properties is null || coder.Properties.Length != 1)
+      return false;
+
+    ulong packStreamIndex = 0;
+    for (int i = 0; i < folderIndex; i++)
+      packStreamIndex += (ulong)unpackInfo.Folders[i].PackedStreamIndices.Length;
+
+    if (packStreamIndex >= (ulong)packInfo.PackSizes.Length)
+      return false;
+
+    ulong start = packInfo.PackPos;
+    for (ulong i = 0; i < packStreamIndex; i++)
+      start += packInfo.PackSizes[(int)i];
+
+    packStart = start;
+    packSize = packInfo.PackSizes[(int)packStreamIndex];
+    lzma2PropertiesByte = coder.Properties[0];
+    return true;
+  }
+
+  /// <summary>
   /// Декодирует Folder в массив байт.
   /// </summary>
   public static SevenZipFolderDecodeResult DecodeFolderToArray(
