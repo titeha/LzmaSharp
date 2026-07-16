@@ -61,7 +61,7 @@ public sealed class MainViewModelCompressionSettingsTests
     public Task<SevenZipArchiveWriteResult> CreateArchiveToFileAsync(
         IReadOnlyList<SevenZipStreamingEntry> entries, string destinationPath, SevenZipWriterCompressionMethod method,
         int dictionarySize, int maxDegreeOfParallelism = 0, IProgress<SevenZipProgress>? progress = null,
-        CancellationToken token = default, IProgress<string>? currentFile = null)
+        CancellationToken token = default, IProgress<SevenZipCompressionFileProgress>? currentFile = null)
     {
       CapturedMethod = method;
       CapturedDict = dictionarySize;
@@ -78,6 +78,70 @@ public sealed class MainViewModelCompressionSettingsTests
     Assert.Equal(0, vm.SelectedThreadCount);          // авто
     Assert.NotEmpty(vm.ThreadCountOptions);
     Assert.NotEmpty(vm.DictionarySizeOptions);
+  }
+
+  // Сервис, который во время «создания» репортит кодеки пофайлово через currentFile.
+  private sealed class CodecReportingService(params string[] codecs) : IArchiveService
+  {
+    public Task<ArchiveOpenOutcome> OpenAsync(byte[] b, string? p) => Task.FromResult(new ArchiveOpenOutcome(SevenZipArchiveDecodeResult.Ok, []));
+    public Task<SevenZipArchiveDecodeResult> ExtractAllAsync(byte[] b, string? p, string d, IProgress<SevenZipProgress>? pr = null, CancellationToken t = default, IProgress<string>? cf = null) => Task.FromResult(SevenZipArchiveDecodeResult.Ok);
+    public Task<ArchiveCreateOutcome> CreateArchiveAsync(IReadOnlyList<SevenZipArchiveWriterEntry> e, SevenZipWriterCompressionMethod m, IProgress<SevenZipProgress>? pr = null, CancellationToken t = default) => Task.FromResult(new ArchiveCreateOutcome(SevenZipArchiveWriteResult.Ok, []));
+    public Task<bool> WriteArchiveAsync(byte[] a, string p) => Task.FromResult(true);
+    public Task<string> DescribeMethodsAsync(byte[] b, string? p) => Task.FromResult(string.Empty);
+
+    public Task<SevenZipArchiveWriteResult> CreateArchiveToFileAsync(
+        IReadOnlyList<SevenZipStreamingEntry> entries, string destinationPath, SevenZipWriterCompressionMethod method,
+        int dictionarySize, int maxDegreeOfParallelism = 0, IProgress<SevenZipProgress>? progress = null,
+        CancellationToken token = default, IProgress<SevenZipCompressionFileProgress>? currentFile = null)
+    {
+      // Синхронный репорт кодеков (как в ядре — до возврата), чтобы VM набрал точные счётчики.
+      for (int i = 0; i < codecs.Length; i++)
+        currentFile?.Report(new SevenZipCompressionFileProgress($"f{i}", codecs[i]));
+
+      return Task.FromResult(SevenZipArchiveWriteResult.Ok);
+    }
+  }
+
+  [Fact]
+  public void РазбивкаКодеков_ПорядокИПропускНулей()
+  {
+    var counts = new Dictionary<string, int> { ["Copy"] = 8, ["PPMd"] = 12, ["LZMA2"] = 40 };
+    Assert.Equal("Авто: PPMd — 12, LZMA2 — 40, Copy — 8", MainViewModel.FormatCodecBreakdown(counts));
+
+    Assert.Equal("Авто: PPMd — 3", MainViewModel.FormatCodecBreakdown(new Dictionary<string, int> { ["PPMd"] = 3, ["LZMA2"] = 0 }));
+    Assert.Equal(string.Empty, MainViewModel.FormatCodecBreakdown(new Dictionary<string, int>()));
+  }
+
+  [Fact]
+  public async Task Авто_ИтогСодержитРазбивкуКодеков()
+  {
+    var refs = new List<PickedFileRef> { new("a", 1, () => new MemoryStream([1])) };
+    var vm = new MainViewModel(
+        new StubArchivePicker(), new NullPasswordPrompt(), new StubFolderPicker(),
+        new CodecReportingService("PPMd", "PPMd", "LZMA2", "Copy"), new RefsPicker(refs), new StubSavePicker("out.7z"))
+    {
+      SelectedCompressionMethod = SevenZipWriterCompressionMethod.Auto,
+    };
+
+    await vm.CreateCommand.ExecuteAsync();
+
+    Assert.Contains("Авто: PPMd — 2, LZMA2 — 1, Copy — 1", vm.StatusMessage);
+  }
+
+  [Fact]
+  public async Task НеАвто_РазбивкиКодековНет()
+  {
+    var refs = new List<PickedFileRef> { new("a", 1, () => new MemoryStream([1])) };
+    var vm = new MainViewModel(
+        new StubArchivePicker(), new NullPasswordPrompt(), new StubFolderPicker(),
+        new CodecReportingService("LZMA2", "LZMA2"), new RefsPicker(refs), new StubSavePicker("out.7z"))
+    {
+      SelectedCompressionMethod = SevenZipWriterCompressionMethod.Lzma2,
+    };
+
+    await vm.CreateCommand.ExecuteAsync();
+
+    Assert.DoesNotContain("Авто:", vm.StatusMessage);
   }
 
   [Fact]

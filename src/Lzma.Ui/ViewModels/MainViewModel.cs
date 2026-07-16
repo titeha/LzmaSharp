@@ -744,7 +744,10 @@ public sealed class MainViewModel : ObservableObject
       return;
 
     IProgress<SevenZipProgress> progress = CreateProgress();
-    var currentFile = new Progress<string>(name => CurrentFileStatus = FormatCurrentFileStatus(name));
+    // Метку кодека маршалим в UI (Progress), а счётчики кодеков считаем синхронно — ядро зовёт
+    // Report в своём потоке ДО возврата, поэтому к моменту завершения create счётчики точны.
+    var label = new Progress<string>(text => CurrentFileStatus = text);
+    var currentFile = new CodecTallyProgress(label);
 
     await RunOperationAsync(async token =>
     {
@@ -781,15 +784,55 @@ public sealed class MainViewModel : ObservableObject
       catch (IOException) { }
 
       StatusMessage = FormatCreateSummary(path, originalBytes, compressedBytes);
+
+      // Для «Авто» — разбивка, какими кодеками сжаты файлы (остаётся на экране, в отличие от
+      // бегущей строки). Точна: счётчики набраны синхронно во время create.
+      if (SelectedCompressionMethod == SevenZipWriterCompressionMethod.Auto)
+      {
+        string breakdown = FormatCodecBreakdown(currentFile.Counts);
+        if (breakdown.Length != 0)
+          StatusMessage += "\n" + breakdown;
+      }
     });
+  }
+
+  // Синхронный подсчёт кодеков + маршалинг метки текущего файла в UI. Ядро вызывает Report
+  // последовательно в рабочем потоке (пофайловый цикл), поэтому lock не обязателен, но дёшев и
+  // страхует. Метку отдаём в переданный маршалящий IProgress.
+  private sealed class CodecTallyProgress(IProgress<string> label) : IProgress<SevenZipCompressionFileProgress>
+  {
+    private readonly Dictionary<string, int> _counts = new();
+
+    public IReadOnlyDictionary<string, int> Counts => _counts;
+
+    public void Report(SevenZipCompressionFileProgress value)
+    {
+      lock (_counts)
+        _counts[value.Codec] = (_counts.TryGetValue(value.Codec, out int c) ? c : 0) + 1;
+
+      label.Report(FormatCurrentFileStatus(value.Name, value.Codec));
+    }
   }
 
   // Форматирует живой счётчик сканирования. internal — для тестов.
   internal static string FormatScanStatus(ScanProgress p)
       => $"Сканирование: {p.FilesRead} {PluralizeFiles(p.FilesRead)}, {ByteSizeFormat.Format(p.BytesRead)}";
 
-  // Строка «сжимается прямо сейчас» (как в 7-Zip). internal — для тестов.
-  internal static string FormatCurrentFileStatus(string name) => $"Сжатие: {name}";
+  // Строка «сжимается прямо сейчас» (как в 7-Zip), с меткой кодека. internal — для тестов.
+  internal static string FormatCurrentFileStatus(string name, string codec) => $"Сжатие [{codec}]: {name}";
+
+  // Разбивка по кодекам для «Авто» («Авто: PPMd — 12, LZMA2 — 40, Copy — 8»); нулевые опускаем,
+  // порядок фиксирован. Пусто, если файлов не было. internal — для тестов.
+  internal static string FormatCodecBreakdown(IReadOnlyDictionary<string, int> counts)
+  {
+    string[] order = ["PPMd", "LZMA2", "Copy"];
+    var parts = new List<string>();
+    foreach (string codec in order)
+      if (counts.TryGetValue(codec, out int n) && n > 0)
+        parts.Add($"{codec} — {n}");
+
+    return parts.Count == 0 ? string.Empty : "Авто: " + string.Join(", ", parts);
+  }
 
   // Строка «извлекается прямо сейчас». internal — для тестов.
   internal static string FormatExtractingFileStatus(string name) => $"Извлечение: {name}";

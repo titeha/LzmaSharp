@@ -82,7 +82,7 @@ public sealed class LzmaArchiveService : IArchiveService
       int maxDegreeOfParallelism = 0,
       System.IProgress<SevenZipProgress>? progress = null,
       System.Threading.CancellationToken token = default,
-      System.IProgress<string>? currentFile = null)
+      System.IProgress<SevenZipCompressionFileProgress>? currentFile = null)
   {
     return Task.Run(() =>
     {

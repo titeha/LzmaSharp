@@ -39,7 +39,7 @@ public static partial class SevenZipArchiveWriter
       int maxDegreeOfParallelism = 0,
       IProgress<SevenZipProgress>? progress = null,
       System.Threading.CancellationToken token = default,
-      IProgress<string>? currentFile = null)
+      IProgress<SevenZipCompressionFileProgress>? currentFile = null)
   {
     ArgumentNullException.ThrowIfNull(entries);
     ArgumentNullException.ThrowIfNull(output);
@@ -111,7 +111,7 @@ public static partial class SevenZipArchiveWriter
 
       if (entry.Length > blockSize)
       {
-        currentFile?.Report(entry.Name);
+        currentFile?.Report(new SevenZipCompressionFileProgress(entry.Name, "LZMA2"));
 
         // Большой файл — блочно-параллельно напрямую в output (с прогрессом внутри файла).
         long processedBefore = processed;
@@ -170,7 +170,7 @@ public static partial class SevenZipArchiveWriter
       for (int k = 0; k < n; k++)
       {
         SevenZipStreamingEntry e = entries[dataOrder[waveStart + k]];
-        currentFile?.Report(e.Name);
+        currentFile?.Report(new SevenZipCompressionFileProgress(e.Name, "LZMA2"));
         output.Write(compressed[k], 0, compressed[k].Length);
 
         packSizes[waveStart + k] = (ulong)compressed[k].Length;
@@ -194,10 +194,10 @@ public static partial class SevenZipArchiveWriter
   private static SevenZipArchiveWriteResult BuildPerFileStreamingArchiveToStream(
       IReadOnlyList<SevenZipStreamingEntry> entries,
       Stream output,
-      Func<byte[], (byte[] Packed, byte[] Coder)> encodeFile,
+      Func<byte[], (byte[] Packed, byte[] Coder, string Codec)> encodeFile,
       IProgress<SevenZipProgress>? progress,
       System.Threading.CancellationToken token,
-      IProgress<string>? currentFile = null)
+      IProgress<SevenZipCompressionFileProgress>? currentFile = null)
   {
     ArgumentNullException.ThrowIfNull(entries);
     ArgumentNullException.ThrowIfNull(output);
@@ -242,10 +242,10 @@ public static partial class SevenZipArchiveWriter
       if (entry.Length > int.MaxValue)
         return SevenZipArchiveWriteResult.NotSupported;
 
-      currentFile?.Report(entry.Name);
       byte[] data = ReadExactlyToArray(entry.OpenRead(), (int)entry.Length);
       uint crc = Crc32.Compute(data);
-      (byte[] packed, byte[] coder) = encodeFile(data);
+      (byte[] packed, byte[] coder, string codec) = encodeFile(data);
+      currentFile?.Report(new SevenZipCompressionFileProgress(entry.Name, codec));
 
       output.Write(packed, 0, packed.Length);
       packSizes[streamIndex] = (ulong)packed.Length;
@@ -280,10 +280,10 @@ public static partial class SevenZipArchiveWriter
       Stream output,
       IProgress<SevenZipProgress>? progress = null,
       System.Threading.CancellationToken token = default,
-      IProgress<string>? currentFile = null)
+      IProgress<SevenZipCompressionFileProgress>? currentFile = null)
   {
     byte[] coderBytes = PpmdCoderBytes();
-    return BuildPerFileStreamingArchiveToStream(entries, output, data => (EncodePpmd(data), coderBytes), progress, token, currentFile);
+    return BuildPerFileStreamingArchiveToStream(entries, output, data => (EncodePpmd(data), coderBytes, "PPMd"), progress, token, currentFile);
   }
 
   /// <summary>Потоковое создание Copy-архива (без сжатия; пофайлово, не держим весь набор в памяти).</summary>
@@ -292,11 +292,11 @@ public static partial class SevenZipArchiveWriter
       Stream output,
       IProgress<SevenZipProgress>? progress = null,
       System.Threading.CancellationToken token = default,
-      IProgress<string>? currentFile = null)
+      IProgress<SevenZipCompressionFileProgress>? currentFile = null)
   {
     // Copy coder: flags = idSize(1) | без атрибутов = 0x01, method id = 0x00.
     byte[] coderBytes = [0x01, 0x00];
-    return BuildPerFileStreamingArchiveToStream(entries, output, data => (data, coderBytes), progress, token, currentFile);
+    return BuildPerFileStreamingArchiveToStream(entries, output, data => (data, coderBytes, "Copy"), progress, token, currentFile);
   }
 
   /// <summary>
@@ -310,7 +310,7 @@ public static partial class SevenZipArchiveWriter
       int dictionarySize,
       IProgress<SevenZipProgress>? progress = null,
       System.Threading.CancellationToken token = default,
-      IProgress<string>? currentFile = null)
+      IProgress<SevenZipCompressionFileProgress>? currentFile = null)
   {
     if (dictionarySize <= 0)
       return SevenZipArchiveWriteResult.InvalidData;
@@ -330,9 +330,9 @@ public static partial class SevenZipArchiveWriter
     {
       return ChooseAutoMethodForBytes(data) switch
       {
-        SevenZipWriterCompressionMethod.Ppmd => (EncodePpmd(data), ppmdCoder),
-        SevenZipWriterCompressionMethod.Copy => (data, copyCoder),
-        _ => (Lzma2LzmaEncoder.Encode(data, lzmaProperties, effectiveDictionarySize), lzma2Coder),
+        SevenZipWriterCompressionMethod.Ppmd => (EncodePpmd(data), ppmdCoder, "PPMd"),
+        SevenZipWriterCompressionMethod.Copy => (data, copyCoder, "Copy"),
+        _ => (Lzma2LzmaEncoder.Encode(data, lzmaProperties, effectiveDictionarySize), lzma2Coder, "LZMA2"),
       };
     }, progress, token, currentFile);
   }

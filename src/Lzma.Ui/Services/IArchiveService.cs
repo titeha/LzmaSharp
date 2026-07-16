@@ -87,7 +87,7 @@ public interface IArchiveService
       int maxDegreeOfParallelism = 0,
       IProgress<SevenZipProgress>? progress = null,
       CancellationToken token = default,
-      IProgress<string>? currentFile = null)
+      IProgress<SevenZipCompressionFileProgress>? currentFile = null)
       => Task.FromResult(SevenZipArchiveWriteResult.NotSupported);
 
   /// <summary>

@@ -8,15 +8,16 @@ using Lzma.Core.SevenZip;
 namespace Lzma.Core.Tests.SevenZip;
 
 /// <summary>
-/// Тесты канала «текущий файл» (IProgress&lt;string&gt;) потоковых writer-ов: имена сжимаемых файлов
-/// репортятся по ходу — по одному разу на непустой файл, в порядке архива.
+/// Тесты канала «текущий файл» потоковых writer-ов: имя + КОДЕК каждого непустого файла репортятся
+/// по ходу (по разу на файл, каталоги не репортятся), кодек соответствует методу/выбору «Авто».
 /// </summary>
 public sealed class SevenZipArchiveWriterCurrentFileTests
 {
-  private sealed class CollectingProgress : IProgress<string>
+  private sealed class CollectingProgress : IProgress<SevenZipCompressionFileProgress>
   {
-    public readonly List<string> Names = [];
-    public void Report(string value) => Names.Add(value);
+    public readonly List<SevenZipCompressionFileProgress> Items = [];
+    public void Report(SevenZipCompressionFileProgress value) => Items.Add(value);
+    public List<string> Names => Items.ConvertAll(i => i.Name);
   }
 
   private static List<SevenZipStreamingEntry> ThreeFiles()
@@ -32,7 +33,7 @@ public sealed class SevenZipArchiveWriterCurrentFileTests
   }
 
   [Fact]
-  public void Lzma2_РепортитИменаФайлов()
+  public void Lzma2_РепортитИменаИКодек()
   {
     var progress = new CollectingProgress();
     using var ms = new MemoryStream();
@@ -42,10 +43,11 @@ public sealed class SevenZipArchiveWriterCurrentFileTests
     Assert.Contains("one.txt", progress.Names);
     Assert.Contains("two.txt", progress.Names);
     Assert.DoesNotContain("dir", progress.Names);
+    Assert.All(progress.Items, i => Assert.Equal("LZMA2", i.Codec));
   }
 
   [Fact]
-  public void Ppmd_РепортитИменаФайлов_ВПорядке()
+  public void Ppmd_РепортитИменаВПорядке_КодекPpmd()
   {
     var progress = new CollectingProgress();
     using var ms = new MemoryStream();
@@ -53,6 +55,31 @@ public sealed class SevenZipArchiveWriterCurrentFileTests
         SevenZipArchiveWriter.BuildPpmdArchiveToStream(ThreeFiles(), ms, null, default, progress));
 
     Assert.Equal(new[] { "one.txt", "two.txt" }, progress.Names);
+    Assert.All(progress.Items, i => Assert.Equal("PPMd", i.Codec));
+  }
+
+  [Fact]
+  public void Auto_РепортитКодекПофайлово()
+  {
+    // Текст → PPMd; случайное (высокая энтропия) → Copy.
+    byte[] text = Encoding.UTF8.GetBytes(string.Concat(System.Linq.Enumerable.Repeat("слова и предложения. ", 4000)));
+    var random = new byte[300_000];
+    uint s = 0x13572468;
+    for (int i = 0; i < random.Length; i++) { s = s * 1664525u + 1013904223u; random[i] = (byte)(s >> 24); }
+
+    var entries = new List<SevenZipStreamingEntry>
+    {
+      new("doc.txt", text.LongLength, () => new MemoryStream(text)),
+      new("blob.bin", random.LongLength, () => new MemoryStream(random)),
+    };
+
+    var progress = new CollectingProgress();
+    using var ms = new MemoryStream();
+    Assert.Equal(SevenZipArchiveWriteResult.Ok,
+        SevenZipArchiveWriter.BuildAutoArchiveToStream(entries, ms, 1 << 20, null, default, progress));
+
+    Assert.Equal("PPMd", progress.Items.Find(i => i.Name == "doc.txt").Codec);
+    Assert.Equal("Copy", progress.Items.Find(i => i.Name == "blob.bin").Codec);
   }
 }
 
