@@ -194,7 +194,7 @@ public static partial class SevenZipArchiveWriter
   private static SevenZipArchiveWriteResult BuildPerFileStreamingArchiveToStream(
       IReadOnlyList<SevenZipStreamingEntry> entries,
       Stream output,
-      Func<byte[], (byte[] Packed, byte[] Coder, string Codec)> encodeFile,
+      Func<byte[], StreamingEncodedFile?> encodeFile,
       IProgress<SevenZipProgress>? progress,
       System.Threading.CancellationToken token,
       IProgress<SevenZipCompressionFileProgress>? currentFile = null)
@@ -221,14 +221,15 @@ public static partial class SevenZipArchiveWriter
         totalContent += entries[i].Length;
       }
 
-    var packSizes = new ulong[count];
-    var unpackSizes = new ulong[count];
+    // packSizes — ПЛОСКИЙ список по всем folder-ам (folder может дать несколько packed-стримов: BCJ2 — 4).
+    var flatPackSizes = new List<ulong>(count);
+    var folderBodies = new byte[count][];
+    var coderUnpackSizes = new ulong[count][];
     var crcs = new uint[count];
-    var coderBytesPerFolder = new byte[count][];
 
     progress?.Report(new SevenZipProgress(0, totalContent));
     long processed = 0;
-    int streamIndex = 0;
+    int folder = 0;
 
     for (int i = 0; i < entries.Count; i++)
     {
@@ -244,21 +245,30 @@ public static partial class SevenZipArchiveWriter
 
       byte[] data = ReadExactlyToArray(entry.OpenRead(), (int)entry.Length);
       uint crc = Crc32.Compute(data);
-      (byte[] packed, byte[] coder, string codec) = encodeFile(data);
-      currentFile?.Report(new SevenZipCompressionFileProgress(entry.Name, codec));
 
-      output.Write(packed, 0, packed.Length);
-      packSizes[streamIndex] = (ulong)packed.Length;
-      unpackSizes[streamIndex] = (ulong)entry.Length;
-      crcs[streamIndex] = crc;
-      coderBytesPerFolder[streamIndex] = coder;
-      streamIndex++;
+      if (encodeFile(data) is not { } enc)
+        return SevenZipArchiveWriteResult.InternalError;
+
+      currentFile?.Report(new SevenZipCompressionFileProgress(entry.Name, enc.Codec));
+
+      // Packed-стримы folder-а пишем строго в порядке его packed-индексов.
+      for (int s = 0; s < enc.PackedStreams.Length; s++)
+      {
+        byte[] packed = enc.PackedStreams[s];
+        output.Write(packed, 0, packed.Length);
+        flatPackSizes.Add((ulong)packed.Length);
+      }
+
+      folderBodies[folder] = enc.FolderBody;
+      coderUnpackSizes[folder] = enc.CoderUnpackSizes;
+      crcs[folder] = crc;
+      folder++;
 
       processed += entry.Length;
       progress?.Report(new SevenZipProgress(processed, totalContent));
     }
 
-    return FinalizeStreamingArchive(entries, output, startPos, coderBytesPerFolder, packSizes, unpackSizes, crcs);
+    return FinalizeStreamingArchiveMultiFolder(entries, output, startPos, folderBodies, [.. flatPackSizes], coderUnpackSizes, crcs);
   }
 
   // Байты PPMd-coder-а (7z): flags 0x23 | method id 03 04 01 | props(order, memSize LE).
@@ -283,7 +293,8 @@ public static partial class SevenZipArchiveWriter
       IProgress<SevenZipCompressionFileProgress>? currentFile = null)
   {
     byte[] coderBytes = PpmdCoderBytes();
-    return BuildPerFileStreamingArchiveToStream(entries, output, data => (EncodePpmd(data), coderBytes, "PPMd"), progress, token, currentFile);
+    return BuildPerFileStreamingArchiveToStream(entries, output,
+        data => SingleCoderEncoded(EncodePpmd(data), coderBytes, data.Length, "PPMd"), progress, token, currentFile);
   }
 
   /// <summary>Потоковое создание Copy-архива (без сжатия; пофайлово, не держим весь набор в памяти).</summary>
@@ -296,7 +307,8 @@ public static partial class SevenZipArchiveWriter
   {
     // Copy coder: flags = idSize(1) | без атрибутов = 0x01, method id = 0x00.
     byte[] coderBytes = [0x01, 0x00];
-    return BuildPerFileStreamingArchiveToStream(entries, output, data => (data, coderBytes, "Copy"), progress, token, currentFile);
+    return BuildPerFileStreamingArchiveToStream(entries, output,
+        data => SingleCoderEncoded(data, coderBytes, data.Length, "Copy"), progress, token, currentFile);
   }
 
   /// <summary>
@@ -330,11 +342,34 @@ public static partial class SevenZipArchiveWriter
     {
       return ChooseAutoMethodForBytes(data) switch
       {
-        SevenZipWriterCompressionMethod.Ppmd => (EncodePpmd(data), ppmdCoder, "PPMd"),
-        SevenZipWriterCompressionMethod.Copy => (data, copyCoder, "Copy"),
-        _ => (Lzma2LzmaEncoder.Encode(data, lzmaProperties, effectiveDictionarySize), lzma2Coder, "LZMA2"),
+        SevenZipWriterCompressionMethod.Ppmd => SingleCoderEncoded(EncodePpmd(data), ppmdCoder, data.Length, "PPMd"),
+        SevenZipWriterCompressionMethod.Copy => SingleCoderEncoded(data, copyCoder, data.Length, "Copy"),
+        SevenZipWriterCompressionMethod.Bcj2 => EncodeBcj2Streaming(data),
+        _ => SingleCoderEncoded(Lzma2LzmaEncoder.Encode(data, lzmaProperties, effectiveDictionarySize), lzma2Coder, data.Length, "LZMA2"),
       };
     }, progress, token, currentFile);
+  }
+
+  // Пофайловое BCJ2-кодирование для потокового folder-а: 4 coder-а (3×LZMA2 на Main/Call/Jump +
+  // BCJ2), Control — сырой packed-стрим. Тело folder-а и порядок стримов — как в in-memory BCJ2-пути.
+  private static StreamingEncodedFile? EncodeBcj2Streaming(byte[] data)
+  {
+    SevenZipBcj2Streams s = SevenZipBcj2Encoder.Encode(data);
+
+    if (!TryLzma2Compress(s.Main, out byte[] packedMain, out byte mainProp) ||
+        !TryLzma2Compress(s.Call, out byte[] packedCall, out byte callProp) ||
+        !TryLzma2Compress(s.Jump, out byte[] packedJump, out byte jumpProp))
+      return null;
+
+    byte[] folderBody = BuildBcj2Lzma2FolderBody(mainProp, callProp, jumpProp);
+
+    // Порядок packed-стримов = packed-индексы folder-а [0,1,2,6]: lzma2(main/call/jump) + control сырой.
+    // CodersUnpackSize по coder-ам: LZMA2(main)=Main, LZMA2(call)=Call, LZMA2(jump)=Jump, BCJ2=файл.
+    return new StreamingEncodedFile(
+        [packedMain, packedCall, packedJump, s.Control],
+        folderBody,
+        [(ulong)s.Main.Length, (ulong)s.Call.Length, (ulong)s.Jump.Length, (ulong)data.Length],
+        "BCJ2");
   }
 
   // Пофайловая эвристика автовыбора (по префиксу-сэмплу): практически несжимаемые данные
@@ -344,6 +379,10 @@ public static partial class SevenZipArchiveWriter
   {
     if (data.Length == 0)
       return SevenZipWriterCompressionMethod.Lzma2;
+
+    // x86/x64 PE-исполняемые → BCJ2 (адреса ветвлений становятся абсолютными и лучше сжимаются).
+    if (LooksLikeX86Executable(data))
+      return SevenZipWriterCompressionMethod.Bcj2;
 
     int sample = data.Length <= AutoSampleBytes ? data.Length : AutoSampleBytes;
 
@@ -442,6 +481,16 @@ public static partial class SevenZipArchiveWriter
     body.AddRange(coderBytes);
     return [.. body];
   }
+
+  // Результат пофайлового кодирования для потокового folder-а: packed-стримы (в порядке folder-а),
+  // готовое тело folder-а (numCoders + coder-ы + bind pairs + packed-индексы) и размеры выходов
+  // coder-ов. Одно-coder кодек → 1 packed-стрим; BCJ2 → 4 (main/call/jump/control).
+  private readonly record struct StreamingEncodedFile(
+      byte[][] PackedStreams, byte[] FolderBody, ulong[] CoderUnpackSizes, string Codec);
+
+  // Одно-coder результат: один packed-стрим, тело folder-а numCoders=1, один размер выхода.
+  private static StreamingEncodedFile SingleCoderEncoded(byte[] packed, byte[] coderBytes, long unpackSize, string codec)
+      => new([packed], WrapSingleCoderFolderBody(coderBytes), [(ulong)unpackSize], codec);
 
   // Общая финализация ЛЮБЫХ folder-ов (в т.ч. много-coder/много-стрим, напр. BCJ2): готовые тела
   // folder-ов + ПЛОСКИЙ packSizes (по всем folder-ам) + размеры выходов coder-ов на folder + CRC.
