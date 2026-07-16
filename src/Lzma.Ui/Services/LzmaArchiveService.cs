@@ -93,9 +93,11 @@ public sealed class LzmaArchiveService : IArchiveService
         // Диспетчер по методу: LZMA2/Auto — многопоточно; PPMd/Copy — пофайлово (PPMd последователен).
         return method switch
         {
-          SevenZipWriterCompressionMethod.Lzma2 or SevenZipWriterCompressionMethod.Auto =>
+          SevenZipWriterCompressionMethod.Lzma2 =>
               SevenZipArchiveWriter.BuildLzma2ArchiveToStream(
                   entries, output, dictionarySize, maxDegreeOfParallelism, progress, token),
+          SevenZipWriterCompressionMethod.Auto =>
+              SevenZipArchiveWriter.BuildAutoArchiveToStream(entries, output, dictionarySize, progress, token),
           SevenZipWriterCompressionMethod.Ppmd =>
               SevenZipArchiveWriter.BuildPpmdArchiveToStream(entries, output, progress, token),
           SevenZipWriterCompressionMethod.Copy =>

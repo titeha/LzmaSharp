@@ -190,8 +190,7 @@ public static partial class SevenZipArchiveWriter
   private static SevenZipArchiveWriteResult BuildPerFileStreamingArchiveToStream(
       IReadOnlyList<SevenZipStreamingEntry> entries,
       Stream output,
-      byte[] coderBytes,
-      Func<byte[], byte[]> encodeFile,
+      Func<byte[], (byte[] Packed, byte[] Coder)> encodeFile,
       IProgress<SevenZipProgress>? progress,
       System.Threading.CancellationToken token)
   {
@@ -220,6 +219,7 @@ public static partial class SevenZipArchiveWriter
     var packSizes = new ulong[count];
     var unpackSizes = new ulong[count];
     var crcs = new uint[count];
+    var coderBytesPerFolder = new byte[count][];
 
     progress?.Report(new SevenZipProgress(0, totalContent));
     long processed = 0;
@@ -239,20 +239,34 @@ public static partial class SevenZipArchiveWriter
 
       byte[] data = ReadExactlyToArray(entry.OpenRead(), (int)entry.Length);
       uint crc = Crc32.Compute(data);
-      byte[] packed = encodeFile(data);
+      (byte[] packed, byte[] coder) = encodeFile(data);
 
       output.Write(packed, 0, packed.Length);
       packSizes[streamIndex] = (ulong)packed.Length;
       unpackSizes[streamIndex] = (ulong)entry.Length;
       crcs[streamIndex] = crc;
+      coderBytesPerFolder[streamIndex] = coder;
       streamIndex++;
 
       processed += entry.Length;
       progress?.Report(new SevenZipProgress(processed, totalContent));
     }
 
-    return FinalizeStreamingArchive(entries, output, startPos, coderBytes, packSizes, unpackSizes, crcs);
+    return FinalizeStreamingArchive(entries, output, startPos, coderBytesPerFolder, packSizes, unpackSizes, crcs);
   }
+
+  // Байты PPMd-coder-а (7z): flags 0x23 | method id 03 04 01 | props(order, memSize LE).
+  private static byte[] PpmdCoderBytes() =>
+  [
+      0x23,
+      0x03, 0x04, 0x01,
+      0x05,
+      (byte)PpmdOrder,
+      (byte)(PpmdMemSize & 0xFF),
+      (byte)((PpmdMemSize >> 8) & 0xFF),
+      (byte)((PpmdMemSize >> 16) & 0xFF),
+      (byte)((PpmdMemSize >> 24) & 0xFF),
+  ];
 
   /// <summary>Потоковое создание PPMd-архива (пофайлово, без загрузки всего набора в память).</summary>
   public static SevenZipArchiveWriteResult BuildPpmdArchiveToStream(
@@ -261,19 +275,8 @@ public static partial class SevenZipArchiveWriter
       IProgress<SevenZipProgress>? progress = null,
       System.Threading.CancellationToken token = default)
   {
-    byte[] coderBytes =
-    [
-        0x23,
-        0x03, 0x04, 0x01,
-        0x05,
-        (byte)PpmdOrder,
-        (byte)(PpmdMemSize & 0xFF),
-        (byte)((PpmdMemSize >> 8) & 0xFF),
-        (byte)((PpmdMemSize >> 16) & 0xFF),
-        (byte)((PpmdMemSize >> 24) & 0xFF),
-    ];
-
-    return BuildPerFileStreamingArchiveToStream(entries, output, coderBytes, EncodePpmd, progress, token);
+    byte[] coderBytes = PpmdCoderBytes();
+    return BuildPerFileStreamingArchiveToStream(entries, output, data => (EncodePpmd(data), coderBytes), progress, token);
   }
 
   /// <summary>Потоковое создание Copy-архива (без сжатия; пофайлово, не держим весь набор в памяти).</summary>
@@ -285,7 +288,56 @@ public static partial class SevenZipArchiveWriter
   {
     // Copy coder: flags = idSize(1) | без атрибутов = 0x01, method id = 0x00.
     byte[] coderBytes = [0x01, 0x00];
-    return BuildPerFileStreamingArchiveToStream(entries, output, coderBytes, static data => data, progress, token);
+    return BuildPerFileStreamingArchiveToStream(entries, output, data => (data, coderBytes), progress, token);
+  }
+
+  /// <summary>
+  /// Потоковое создание архива с АВТОВЫБОРОМ кодека ПОФАЙЛОВО: для каждого файла эвристика по доле
+  /// «бинарных» байт выбирает PPMd (текст — плотнее) или LZMA2. Пофайлово, без загрузки набора в
+  /// память (файл &lt;= 2 ГиБ). У каждого folder-а свой coder (PPMd или LZMA2).
+  /// </summary>
+  public static SevenZipArchiveWriteResult BuildAutoArchiveToStream(
+      IReadOnlyList<SevenZipStreamingEntry> entries,
+      Stream output,
+      int dictionarySize,
+      IProgress<SevenZipProgress>? progress = null,
+      System.Threading.CancellationToken token = default)
+  {
+    if (dictionarySize <= 0)
+      return SevenZipArchiveWriteResult.InvalidData;
+
+    if (!Lzma2Properties.TryCreateFromDictionarySize((uint)dictionarySize, out Lzma2Properties properties))
+      return SevenZipArchiveWriteResult.InvalidData;
+
+    if (!properties.TryGetDictionarySizeInt32(out int effectiveDictionarySize))
+      return SevenZipArchiveWriteResult.NotSupported;
+
+    var lzmaProperties = new LzmaProperties(3, 0, 2);
+    byte[] lzma2Coder = [0x21, Lzma2MethodId, 0x01, properties.DictionaryProp];
+    byte[] ppmdCoder = PpmdCoderBytes();
+
+    return BuildPerFileStreamingArchiveToStream(entries, output, data =>
+    {
+      return ChooseAutoMethodForBytes(data) == SevenZipWriterCompressionMethod.Ppmd
+          ? (EncodePpmd(data), ppmdCoder)
+          : (Lzma2LzmaEncoder.Encode(data, lzmaProperties, effectiveDictionarySize), lzma2Coder);
+    }, progress, token);
+  }
+
+  // Пофайловая эвристика автовыбора: текст (мало «бинарных» байт) → PPMd, иначе LZMA2.
+  private static SevenZipWriterCompressionMethod ChooseAutoMethodForBytes(byte[] data)
+  {
+    if (data.Length == 0)
+      return SevenZipWriterCompressionMethod.Lzma2;
+
+    long binary = 0;
+    for (int i = 0; i < data.Length; i++)
+      if (IsBinaryByte(data[i]))
+        binary++;
+
+    return binary < data.Length * AutoBinaryByteThreshold
+        ? SevenZipWriterCompressionMethod.Ppmd
+        : SevenZipWriterCompressionMethod.Lzma2;
   }
 
   // Общая валидация записей потокового создания.
@@ -307,12 +359,29 @@ public static partial class SevenZipArchiveWriter
     return SevenZipArchiveWriteResult.Ok;
   }
 
-  // Общая финализация: синтетические entries для FilesInfo + next-header + патч сигнатуры.
+  // Общая финализация (один coder на все folder-ы): разворачивает coder в per-folder массив.
   private static SevenZipArchiveWriteResult FinalizeStreamingArchive(
       IReadOnlyList<SevenZipStreamingEntry> entries,
       Stream output,
       long startPos,
       byte[] coderBytes,
+      ulong[] packSizes,
+      ulong[] unpackSizes,
+      uint[] crcs)
+  {
+    var perFolder = new byte[packSizes.Length][];
+    for (int i = 0; i < perFolder.Length; i++)
+      perFolder[i] = coderBytes;
+
+    return FinalizeStreamingArchive(entries, output, startPos, perFolder, packSizes, unpackSizes, crcs);
+  }
+
+  // Общая финализация: синтетические entries для FilesInfo + next-header (coder СВОЙ на folder) + патч.
+  private static SevenZipArchiveWriteResult FinalizeStreamingArchive(
+      IReadOnlyList<SevenZipStreamingEntry> entries,
+      Stream output,
+      long startPos,
+      byte[][] coderBytesPerFolder,
       ulong[] packSizes,
       ulong[] unpackSizes,
       uint[] crcs)
@@ -325,7 +394,7 @@ public static partial class SevenZipArchiveWriter
       synthetic[i] = new SevenZipArchiveWriterEntry(e.Name, marker, e.IsDirectory, e.WindowsAttributes, e.LastWriteTimeUtc);
     }
 
-    if (!TryBuildLzma2StreamingNextHeader(synthetic, packSizes, unpackSizes, crcs, coderBytes, out byte[] nextHeaderBytes))
+    if (!TryBuildLzma2StreamingNextHeader(synthetic, packSizes, unpackSizes, crcs, coderBytesPerFolder, out byte[] nextHeaderBytes))
       return SevenZipArchiveWriteResult.InternalError;
 
     long packedEnd = output.Position;
@@ -380,7 +449,7 @@ public static partial class SevenZipArchiveWriter
       ulong[] packSizes,
       ulong[] unpackSizes,
       uint[] unpackCrcs,
-      byte[] coderBytes,
+      byte[][] coderBytesPerFolder,
       out byte[] nextHeaderBytes)
   {
     nextHeaderBytes = [];
@@ -394,7 +463,7 @@ public static partial class SevenZipArchiveWriter
     if (!TryWriteStreamingPackInfo(header, packSizes))
       return false;
 
-    if (!TryWriteStreamingFoldersUnpackInfo(header, unpackSizes, unpackCrcs, coderBytes))
+    if (!TryWriteStreamingFoldersUnpackInfo(header, unpackSizes, unpackCrcs, coderBytesPerFolder))
       return false;
 
     header.Add(SevenZipNid.End);
@@ -434,10 +503,14 @@ public static partial class SevenZipArchiveWriter
     return true;
   }
 
-  // UnpackInfo (по одному coder-folder на файл) с ulong-размерами.
+  // UnpackInfo (по одному coder-folder на файл) с ulong-размерами; coder СВОЙ на каждый folder
+  // (для Auto разные файлы могут получить LZMA2 или PPMd).
   private static bool TryWriteStreamingFoldersUnpackInfo(
-      List<byte> header, ulong[] unpackSizes, uint[] unpackCrcs, byte[] coderBytes)
+      List<byte> header, ulong[] unpackSizes, uint[] unpackCrcs, byte[][] coderBytesPerFolder)
   {
+    if (coderBytesPerFolder.Length != unpackSizes.Length)
+      return false;
+
     header.Add(SevenZipNid.UnpackInfo);
     header.Add(SevenZipNid.Folder);
 
@@ -451,7 +524,7 @@ public static partial class SevenZipArchiveWriter
       if (!TryWriteUInt64(header, 1)) // один coder на folder
         return false;
 
-      header.AddRange(coderBytes);
+      header.AddRange(coderBytesPerFolder[i]);
     }
 
     header.Add(SevenZipNid.CodersUnpackSize);
