@@ -30,9 +30,12 @@ public static partial class SevenZipArchiveWriter
   {
     SevenZipWriterCompressionMethod method = ChooseAutoMethod(entries);
 
-    return method == SevenZipWriterCompressionMethod.Ppmd
-        ? BuildPpmdEntriesArchive(entries, out archive, progress, token)
-        : BuildLzma2EntriesArchive(entries, lzma2DictionarySize, out archive, progress, token);
+    return method switch
+    {
+      SevenZipWriterCompressionMethod.Ppmd => BuildPpmdEntriesArchive(entries, out archive, progress, token),
+      SevenZipWriterCompressionMethod.Bcj2 => BuildBcj2EntriesArchive(entries, out archive),
+      _ => BuildLzma2EntriesArchive(entries, lzma2DictionarySize, out archive, progress, token),
+    };
   }
 
   /// <summary>
@@ -41,6 +44,25 @@ public static partial class SevenZipArchiveWriter
   private static SevenZipWriterCompressionMethod ChooseAutoMethod(
       IReadOnlyList<SevenZipArchiveWriterEntry> entries)
   {
+    // Если ВСЕ непустые файлы — x86-исполняемые (PE), выгоден BCJ2 (адреса ветвлений → абсолютные).
+    // Консервативно: при любом не-исполняемом файле откатываемся к текстовой эвристике (BCJ2 здесь —
+    // на весь архив, поэтому применяем только когда это чистый набор исполняемых). Пофайловый выбор
+    // BCJ2 в смешанном наборе — задача потокового пути (шаг 2).
+    bool anyNonEmpty = false;
+    bool allExecutable = true;
+    for (int i = 0; i < entries.Count && allExecutable; i++)
+    {
+      if (!IsNonEmptyFile(entries[i]))
+        continue;
+
+      anyNonEmpty = true;
+      if (!LooksLikeX86Executable(entries[i].Content))
+        allExecutable = false;
+    }
+
+    if (anyNonEmpty && allExecutable)
+      return SevenZipWriterCompressionMethod.Bcj2;
+
     long total = 0;
     long binary = 0;
 
@@ -65,6 +87,31 @@ public static partial class SevenZipArchiveWriter
     return binary < total * AutoBinaryByteThreshold
         ? SevenZipWriterCompressionMethod.Ppmd
         : SevenZipWriterCompressionMethod.Lzma2;
+  }
+
+  /// <summary>
+  /// Похоже ли содержимое на x86/x64 PE-исполняемый файл (`.exe`/`.dll`): сигнатура <c>MZ</c>,
+  /// корректный указатель на <c>PE\0\0</c> и machine = i386 (0x014C) или amd64 (0x8664). Для таких
+  /// файлов выгоден фильтр BCJ2 (как в 7-Zip). ELF/Mach-O пока не детектируем.
+  /// </summary>
+  private static bool LooksLikeX86Executable(byte[] content)
+  {
+    if (content.Length < 0x40)
+      return false;
+
+    if (content[0] != (byte)'M' || content[1] != (byte)'Z')
+      return false;
+
+    long peOffset = content[0x3C] | ((long)content[0x3D] << 8) | ((long)content[0x3E] << 16) | ((long)content[0x3F] << 24);
+    if (peOffset < 0 || peOffset + 6 > content.Length)
+      return false;
+
+    int p = (int)peOffset;
+    if (content[p] != (byte)'P' || content[p + 1] != (byte)'E' || content[p + 2] != 0 || content[p + 3] != 0)
+      return false;
+
+    ushort machine = (ushort)(content[p + 4] | (content[p + 5] << 8));
+    return machine == 0x014C || machine == 0x8664;
   }
 
   /// <summary>

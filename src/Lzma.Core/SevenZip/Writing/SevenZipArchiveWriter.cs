@@ -93,6 +93,7 @@ public static partial class SevenZipArchiveWriter
       SevenZipWriterCompressionMethod.Lzma2 => BuildLzma2EntriesArchive(entries, options.Lzma2DictionarySize, out archive, progress, token),
       SevenZipWriterCompressionMethod.Ppmd => BuildPpmdEntriesArchive(entries, out archive, progress, token),
       SevenZipWriterCompressionMethod.Auto => BuildAutoEntriesArchive(entries, options.Lzma2DictionarySize, out archive, progress, token),
+      SevenZipWriterCompressionMethod.Bcj2 => BuildBcj2EntriesArchive(entries, out archive),
       SevenZipWriterCompressionMethod.Copy => BuildCopyEntriesArchive(entries, out archive, progress, token),
       _ => SevenZipArchiveWriteResult.NotSupported,
     };
