@@ -38,7 +38,8 @@ public static partial class SevenZipArchiveWriter
       int dictionarySize,
       int maxDegreeOfParallelism = 0,
       IProgress<SevenZipProgress>? progress = null,
-      System.Threading.CancellationToken token = default)
+      System.Threading.CancellationToken token = default,
+      IProgress<string>? currentFile = null)
   {
     ArgumentNullException.ThrowIfNull(entries);
     ArgumentNullException.ThrowIfNull(output);
@@ -110,6 +111,8 @@ public static partial class SevenZipArchiveWriter
 
       if (entry.Length > blockSize)
       {
+        currentFile?.Report(entry.Name);
+
         // Большой файл — блочно-параллельно напрямую в output (с прогрессом внутри файла).
         long processedBefore = processed;
         IProgress<long>? fileProgress = progress is null ? null
@@ -167,6 +170,7 @@ public static partial class SevenZipArchiveWriter
       for (int k = 0; k < n; k++)
       {
         SevenZipStreamingEntry e = entries[dataOrder[waveStart + k]];
+        currentFile?.Report(e.Name);
         output.Write(compressed[k], 0, compressed[k].Length);
 
         packSizes[waveStart + k] = (ulong)compressed[k].Length;
@@ -192,7 +196,8 @@ public static partial class SevenZipArchiveWriter
       Stream output,
       Func<byte[], (byte[] Packed, byte[] Coder)> encodeFile,
       IProgress<SevenZipProgress>? progress,
-      System.Threading.CancellationToken token)
+      System.Threading.CancellationToken token,
+      IProgress<string>? currentFile = null)
   {
     ArgumentNullException.ThrowIfNull(entries);
     ArgumentNullException.ThrowIfNull(output);
@@ -237,6 +242,7 @@ public static partial class SevenZipArchiveWriter
       if (entry.Length > int.MaxValue)
         return SevenZipArchiveWriteResult.NotSupported;
 
+      currentFile?.Report(entry.Name);
       byte[] data = ReadExactlyToArray(entry.OpenRead(), (int)entry.Length);
       uint crc = Crc32.Compute(data);
       (byte[] packed, byte[] coder) = encodeFile(data);
@@ -273,10 +279,11 @@ public static partial class SevenZipArchiveWriter
       IReadOnlyList<SevenZipStreamingEntry> entries,
       Stream output,
       IProgress<SevenZipProgress>? progress = null,
-      System.Threading.CancellationToken token = default)
+      System.Threading.CancellationToken token = default,
+      IProgress<string>? currentFile = null)
   {
     byte[] coderBytes = PpmdCoderBytes();
-    return BuildPerFileStreamingArchiveToStream(entries, output, data => (EncodePpmd(data), coderBytes), progress, token);
+    return BuildPerFileStreamingArchiveToStream(entries, output, data => (EncodePpmd(data), coderBytes), progress, token, currentFile);
   }
 
   /// <summary>Потоковое создание Copy-архива (без сжатия; пофайлово, не держим весь набор в памяти).</summary>
@@ -284,11 +291,12 @@ public static partial class SevenZipArchiveWriter
       IReadOnlyList<SevenZipStreamingEntry> entries,
       Stream output,
       IProgress<SevenZipProgress>? progress = null,
-      System.Threading.CancellationToken token = default)
+      System.Threading.CancellationToken token = default,
+      IProgress<string>? currentFile = null)
   {
     // Copy coder: flags = idSize(1) | без атрибутов = 0x01, method id = 0x00.
     byte[] coderBytes = [0x01, 0x00];
-    return BuildPerFileStreamingArchiveToStream(entries, output, data => (data, coderBytes), progress, token);
+    return BuildPerFileStreamingArchiveToStream(entries, output, data => (data, coderBytes), progress, token, currentFile);
   }
 
   /// <summary>
@@ -301,7 +309,8 @@ public static partial class SevenZipArchiveWriter
       Stream output,
       int dictionarySize,
       IProgress<SevenZipProgress>? progress = null,
-      System.Threading.CancellationToken token = default)
+      System.Threading.CancellationToken token = default,
+      IProgress<string>? currentFile = null)
   {
     if (dictionarySize <= 0)
       return SevenZipArchiveWriteResult.InvalidData;
@@ -321,7 +330,7 @@ public static partial class SevenZipArchiveWriter
       return ChooseAutoMethodForBytes(data) == SevenZipWriterCompressionMethod.Ppmd
           ? (EncodePpmd(data), ppmdCoder)
           : (Lzma2LzmaEncoder.Encode(data, lzmaProperties, effectiveDictionarySize), lzma2Coder);
-    }, progress, token);
+    }, progress, token, currentFile);
   }
 
   // Пофайловая эвристика автовыбора: текст (мало «бинарных» байт) → PPMd, иначе LZMA2.

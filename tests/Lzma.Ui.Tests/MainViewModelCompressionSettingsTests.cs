@@ -60,7 +60,8 @@ public sealed class MainViewModelCompressionSettingsTests
 
     public Task<SevenZipArchiveWriteResult> CreateArchiveToFileAsync(
         IReadOnlyList<SevenZipStreamingEntry> entries, string destinationPath, SevenZipWriterCompressionMethod method,
-        int dictionarySize, int maxDegreeOfParallelism = 0, IProgress<SevenZipProgress>? progress = null, CancellationToken token = default)
+        int dictionarySize, int maxDegreeOfParallelism = 0, IProgress<SevenZipProgress>? progress = null,
+        CancellationToken token = default, IProgress<string>? currentFile = null)
     {
       CapturedMethod = method;
       CapturedDict = dictionarySize;

@@ -74,6 +74,10 @@
                            Foreground="Gray" IsVisible="{Binding IsBusy}" />
                 <TextBlock Text="{Binding ProgressEta}" VerticalAlignment="Center"
                            Foreground="Gray" IsVisible="{Binding IsBusy}" />
+                <!-- Имя файла, сжимаемого прямо сейчас (как в 7-Zip). -->
+                <TextBlock Text="{Binding CurrentFileStatus}" VerticalAlignment="Center"
+                           Foreground="Gray" TextTrimming="CharacterEllipsis" MaxWidth="260"
+                           IsVisible="{Binding CurrentFileStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                 <Button Content="Отмена" Command="{Binding CancelCommand}"
                         VerticalAlignment="Center" IsVisible="{Binding IsCancelVisible}" />
                 <!-- Живой счётчик на фазе сканирования/чтения файлов (до сжатия). -->

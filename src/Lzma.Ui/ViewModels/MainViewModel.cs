@@ -62,6 +62,7 @@ public sealed class MainViewModel : ObservableObject
   private string? _progressEta;
   private bool _isScanning;
   private string? _scanStatus;
+  private string? _currentFileStatus;
 
   // Источник токена отмены текущей длительной операции; null — операция не идёт.
   private CancellationTokenSource? _operationCts;
@@ -239,6 +240,16 @@ public sealed class MainViewModel : ObservableObject
   {
     get => _scanStatus;
     private set => Set(ref _scanStatus, value);
+  }
+
+  /// <summary>
+  /// Имя файла, сжимаемого прямо сейчас (как в 7-Zip), во время создания архива;
+  /// <see langword="null"/> — скрыт (операция не идёт).
+  /// </summary>
+  public string? CurrentFileStatus
+  {
+    get => _currentFileStatus;
+    private set => Set(ref _currentFileStatus, value);
   }
 
   /// <summary>
@@ -703,6 +714,7 @@ public sealed class MainViewModel : ObservableObject
       return;
 
     IProgress<SevenZipProgress> progress = CreateProgress();
+    var currentFile = new Progress<string>(name => CurrentFileStatus = FormatCurrentFileStatus(name));
 
     await RunOperationAsync(async token =>
     {
@@ -715,8 +727,16 @@ public sealed class MainViewModel : ObservableObject
         originalBytes += file.Length;
       }
 
-      SevenZipArchiveWriteResult result = await _archiveService.CreateArchiveToFileAsync(
-          entries, path, SelectedCompressionMethod, SelectedDictionarySize, SelectedThreadCount, progress, token);
+      SevenZipArchiveWriteResult result;
+      try
+      {
+        result = await _archiveService.CreateArchiveToFileAsync(
+            entries, path, SelectedCompressionMethod, SelectedDictionarySize, SelectedThreadCount, progress, token, currentFile);
+      }
+      finally
+      {
+        CurrentFileStatus = null;
+      }
 
       if (result != SevenZipArchiveWriteResult.Ok)
       {
@@ -737,6 +757,9 @@ public sealed class MainViewModel : ObservableObject
   // Форматирует живой счётчик сканирования. internal — для тестов.
   internal static string FormatScanStatus(ScanProgress p)
       => $"Сканирование: {p.FilesRead} {PluralizeFiles(p.FilesRead)}, {ByteSizeFormat.Format(p.BytesRead)}";
+
+  // Строка «сжимается прямо сейчас» (как в 7-Zip). internal — для тестов.
+  internal static string FormatCurrentFileStatus(string name) => $"Сжатие: {name}";
 
   // Итог создания архива: путь + размеры и коэффициент сжатия. internal — для тестов.
   internal static string FormatCreateSummary(string path, long originalBytes, long compressedBytes)

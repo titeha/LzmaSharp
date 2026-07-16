@@ -80,7 +80,8 @@ public sealed class LzmaArchiveService : IArchiveService
       int dictionarySize,
       int maxDegreeOfParallelism = 0,
       System.IProgress<SevenZipProgress>? progress = null,
-      System.Threading.CancellationToken token = default)
+      System.Threading.CancellationToken token = default,
+      System.IProgress<string>? currentFile = null)
   {
     return Task.Run(() =>
     {
@@ -95,13 +96,13 @@ public sealed class LzmaArchiveService : IArchiveService
         {
           SevenZipWriterCompressionMethod.Lzma2 =>
               SevenZipArchiveWriter.BuildLzma2ArchiveToStream(
-                  entries, output, dictionarySize, maxDegreeOfParallelism, progress, token),
+                  entries, output, dictionarySize, maxDegreeOfParallelism, progress, token, currentFile),
           SevenZipWriterCompressionMethod.Auto =>
-              SevenZipArchiveWriter.BuildAutoArchiveToStream(entries, output, dictionarySize, progress, token),
+              SevenZipArchiveWriter.BuildAutoArchiveToStream(entries, output, dictionarySize, progress, token, currentFile),
           SevenZipWriterCompressionMethod.Ppmd =>
-              SevenZipArchiveWriter.BuildPpmdArchiveToStream(entries, output, progress, token),
+              SevenZipArchiveWriter.BuildPpmdArchiveToStream(entries, output, progress, token, currentFile),
           SevenZipWriterCompressionMethod.Copy =>
-              SevenZipArchiveWriter.BuildCopyArchiveToStream(entries, output, progress, token),
+              SevenZipArchiveWriter.BuildCopyArchiveToStream(entries, output, progress, token, currentFile),
           _ => SevenZipArchiveWriteResult.NotSupported,
         };
       }
