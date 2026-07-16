@@ -324,27 +324,54 @@ public static partial class SevenZipArchiveWriter
     var lzmaProperties = new LzmaProperties(3, 0, 2);
     byte[] lzma2Coder = [0x21, Lzma2MethodId, 0x01, properties.DictionaryProp];
     byte[] ppmdCoder = PpmdCoderBytes();
+    byte[] copyCoder = [0x01, 0x00];
 
     return BuildPerFileStreamingArchiveToStream(entries, output, data =>
     {
-      return ChooseAutoMethodForBytes(data) == SevenZipWriterCompressionMethod.Ppmd
-          ? (EncodePpmd(data), ppmdCoder)
-          : (Lzma2LzmaEncoder.Encode(data, lzmaProperties, effectiveDictionarySize), lzma2Coder);
+      return ChooseAutoMethodForBytes(data) switch
+      {
+        SevenZipWriterCompressionMethod.Ppmd => (EncodePpmd(data), ppmdCoder),
+        SevenZipWriterCompressionMethod.Copy => (data, copyCoder),
+        _ => (Lzma2LzmaEncoder.Encode(data, lzmaProperties, effectiveDictionarySize), lzma2Coder),
+      };
     }, progress, token, currentFile);
   }
 
-  // Пофайловая эвристика автовыбора: текст (мало «бинарных» байт) → PPMd, иначе LZMA2.
-  private static SevenZipWriterCompressionMethod ChooseAutoMethodForBytes(byte[] data)
+  // Пофайловая эвристика автовыбора (по префиксу-сэмплу): практически несжимаемые данные
+  // (высокая энтропия — уже сжато/медиа/шифр/случайные) → Copy (хранить); преимущественно
+  // текстовые (мало «бинарных» байт) → PPMd; остальное → LZMA2.
+  internal static SevenZipWriterCompressionMethod ChooseAutoMethodForBytes(byte[] data)
   {
     if (data.Length == 0)
       return SevenZipWriterCompressionMethod.Lzma2;
 
-    long binary = 0;
-    for (int i = 0; i < data.Length; i++)
-      if (IsBinaryByte(data[i]))
-        binary++;
+    int sample = data.Length <= AutoSampleBytes ? data.Length : AutoSampleBytes;
 
-    return binary < data.Length * AutoBinaryByteThreshold
+    Span<int> histogram = stackalloc int[256];
+    long binary = 0;
+    for (int i = 0; i < sample; i++)
+    {
+      byte b = data[i];
+      histogram[b]++;
+      if (IsBinaryByte(b))
+        binary++;
+    }
+
+    // Энтропия Шеннона по сэмплу (бит/байт): 0..8.
+    double entropy = 0.0;
+    for (int s = 0; s < 256; s++)
+    {
+      int c = histogram[s];
+      if (c == 0)
+        continue;
+      double p = (double)c / sample;
+      entropy -= p * Math.Log2(p);
+    }
+
+    if (entropy >= AutoIncompressibleEntropyBitsPerByte)
+      return SevenZipWriterCompressionMethod.Copy;
+
+    return binary < sample * AutoBinaryByteThreshold
         ? SevenZipWriterCompressionMethod.Ppmd
         : SevenZipWriterCompressionMethod.Lzma2;
   }
