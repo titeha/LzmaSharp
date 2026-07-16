@@ -133,8 +133,8 @@ public sealed class LzmaArchiveService : IArchiveService
       try
       {
         // Читаем архив прямо из файла потоком — в память его не грузим (поддержка > 2 ГиБ).
-        using var archive = new System.IO.FileStream(
-            archivePath, System.IO.FileMode.Open, System.IO.FileAccess.Read);
+        // Если путь — первый том (.001), склеиваем тома на лету через VolumeSpanningReadStream.
+        using System.IO.Stream archive = OpenArchiveReadStream(archivePath);
 
         return SevenZipArchiveDecoder.ExtractToDirectoryFromStream(
             archive, SevenZipDecodeOptions.Default, destination, overwrite: false, progress, token, currentFile);
@@ -157,8 +157,7 @@ public sealed class LzmaArchiveService : IArchiveService
     {
       try
       {
-        using var archive = new System.IO.FileStream(
-            archivePath, System.IO.FileMode.Open, System.IO.FileAccess.Read);
+        using System.IO.Stream archive = OpenArchiveReadStream(archivePath);
 
         SevenZipArchiveDecodeResult result =
             SevenZipArchiveDecoder.ListEntriesFromStream(archive, out SevenZipListedEntry[] entries);
@@ -184,6 +183,16 @@ public sealed class LzmaArchiveService : IArchiveService
       SevenZipArchiveInspector.TryDescribeMethods(bytes, password, out string description);
       return description ?? string.Empty;
     });
+  }
+
+  // Открывает архив на чтение: если путь — первый том (.001 рядом), склеивает тома
+  // через VolumeSpanningReadStream; иначе — обычный файловый поток.
+  private static System.IO.Stream OpenArchiveReadStream(string archivePath)
+  {
+    if (VolumeSpanningReadStream.TryGetVolumeBasePath(archivePath, out string basePath))
+      return new VolumeSpanningReadStream(basePath);
+
+    return new System.IO.FileStream(archivePath, System.IO.FileMode.Open, System.IO.FileAccess.Read);
   }
 
   // Готовит SevenZipDecodeOptions (с паролем или без) и гарантированно освобождает пароль.
