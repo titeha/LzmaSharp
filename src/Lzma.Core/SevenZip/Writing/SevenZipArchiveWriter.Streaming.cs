@@ -312,6 +312,19 @@ public static partial class SevenZipArchiveWriter
   }
 
   /// <summary>
+  /// Потоковое создание BCJ2-архива: КАЖДЫЙ непустой файл проходит фильтр BCJ2 (x86) + LZMA2.
+  /// Выгодно для исполняемых (.exe/.dll); к прочим применяется без вреда (обратимо), но обычно без
+  /// выигрыша. Для смешанных наборов уместнее «Авто» (BCJ2 только для x86, остальное — PPMd/LZMA2).
+  /// </summary>
+  public static SevenZipArchiveWriteResult BuildBcj2ArchiveToStream(
+      IReadOnlyList<SevenZipStreamingEntry> entries,
+      Stream output,
+      IProgress<SevenZipProgress>? progress = null,
+      System.Threading.CancellationToken token = default,
+      IProgress<SevenZipCompressionFileProgress>? currentFile = null)
+      => BuildPerFileStreamingArchiveToStream(entries, output, EncodeBcj2Streaming, progress, token, currentFile);
+
+  /// <summary>
   /// Потоковое создание архива с АВТОВЫБОРОМ кодека ПОФАЙЛОВО: для каждого файла эвристика по доле
   /// «бинарных» байт выбирает PPMd (текст — плотнее) или LZMA2. Пофайлово, без загрузки набора в
   /// память (файл &lt;= 2 ГиБ). У каждого folder-а свой coder (PPMd или LZMA2).

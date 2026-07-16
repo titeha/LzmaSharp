@@ -93,6 +93,28 @@ public sealed class SevenZipArchiveWriterBcj2StreamingTests
   }
 
   [Fact]
+  public void ПотоковыйBcj2Метод_НесколькоФайлов_RoundTrip()
+  {
+    // Явный метод BCJ2: применяется к КАЖДОМУ непустому файлу (в т.ч. не исполняемому — без вреда).
+    byte[] pe = MakePeExecutable(15000, 0x40);
+    byte[] plain = Encoding.UTF8.GetBytes("не исполняемый — но BCJ2 обратим и здесь");
+    var entries = new List<SevenZipStreamingEntry>
+    {
+      new("app.exe", pe.LongLength, () => new MemoryStream(pe)),
+      new("notes.txt", plain.LongLength, () => new MemoryStream(plain)),
+    };
+
+    using var ms = new MemoryStream();
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, SevenZipArchiveWriter.BuildBcj2ArchiveToStream(entries, ms));
+
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok,
+        SevenZipArchiveDecoder.DecodeToEntries(ms.ToArray(), out SevenZipDecodedEntry[] decoded));
+    Assert.Equal(2, decoded.Length);
+    Assert.Equal(pe, decoded[0].Bytes);
+    Assert.Equal(plain, decoded[1].Bytes);
+  }
+
+  [Fact]
   public void ПотоковыйAuto_Bcj2_Читается7Zip()
   {
     const string sevenZip = @"C:\Program Files\7-Zip\7z.exe";

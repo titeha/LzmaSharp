@@ -313,6 +313,7 @@ public sealed class MainViewModel : ObservableObject
       CompressionMethodOption.ForMethod(SevenZipWriterCompressionMethod.Lzma2),
       CompressionMethodOption.ForMethod(SevenZipWriterCompressionMethod.Ppmd),
       CompressionMethodOption.ForMethod(SevenZipWriterCompressionMethod.Auto),
+      CompressionMethodOption.ForMethod(SevenZipWriterCompressionMethod.Bcj2),
       CompressionMethodOption.ForMethod(SevenZipWriterCompressionMethod.Copy),
   ];
 

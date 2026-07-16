@@ -113,6 +113,57 @@ public sealed class MainViewModelStreamingCreateTests
   }
 
   [Fact]
+  public void СписокМетодов_СодержитBcj2()
+  {
+    var vm = new MainViewModel(new StubArchivePicker(), new NullPasswordPrompt(), new StubFolderPicker());
+    Assert.Contains(vm.CompressionMethods, m => m.Method == SevenZipWriterCompressionMethod.Bcj2);
+  }
+
+  [Fact]
+  public async Task ПотоковоеСоздание_Bcj2_ПишетНаДискИРаспаковывается()
+  {
+    // Синтетический x86 PE: MZ → PE\0\0 (i386) + call-heavy тело.
+    var pe = new byte[20000];
+    pe[0] = (byte)'M'; pe[1] = (byte)'Z';
+    pe[0x3C] = 0x80;
+    pe[0x80] = (byte)'P'; pe[0x81] = (byte)'E'; pe[0x84] = 0x4C; pe[0x85] = 0x01;
+    for (int p = 0x100; p + 8 < pe.Length; p += 50)
+    {
+      pe[p] = 0xE8;
+      uint rel = unchecked(0x40u - (uint)p - 5);
+      pe[p + 1] = (byte)rel; pe[p + 2] = (byte)(rel >> 8); pe[p + 3] = (byte)(rel >> 16); pe[p + 4] = (byte)(rel >> 24);
+    }
+
+    string dir = Path.Combine(Path.GetTempPath(), "LzmaUiBcj2Create", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(dir);
+    string outPath = Path.Combine(dir, "out.7z");
+
+    try
+    {
+      var refs = new List<PickedFileRef> { new("app.exe", pe.LongLength, () => new MemoryStream(pe)) };
+
+      var vm = new MainViewModel(
+          new StubArchivePicker(), new NullPasswordPrompt(), new StubFolderPicker(),
+          new LzmaArchiveService(), new RefsSourceFilesPicker(refs), new StubSaveFilePicker(outPath))
+      {
+        SelectedCompressionMethod = SevenZipWriterCompressionMethod.Bcj2,
+      };
+
+      await vm.CreateCommand.ExecuteAsync();
+
+      Assert.True(File.Exists(outPath));
+      byte[] archive = File.ReadAllBytes(outPath);
+      Assert.Equal(SevenZipArchiveDecodeResult.Ok,
+          SevenZipArchiveDecoder.DecodeToEntries(archive, out SevenZipDecodedEntry[] entries));
+      Assert.Equal(pe, Assert.Single(entries).Bytes);
+    }
+    finally
+    {
+      try { Directory.Delete(dir, recursive: true); } catch { }
+    }
+  }
+
+  [Fact]
   public async Task Copy_ТожеИдётПотоковымПутём_БезЧтенияВПамять()
   {
     // Теперь ПОТОКОВЫЙ путь используется для ВСЕХ методов (не только LZMA2): для Copy тоже берётся
