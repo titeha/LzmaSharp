@@ -551,12 +551,19 @@ public sealed class MainViewModel : ObservableObject
     // Открыт как «большой» (потоковый) архив — извлекаем прямо из файла, не грузя в память.
     if (_archivePath is { } archivePath)
     {
+      (bool proceed, string? streamPassword, bool encrypted) = await ResolveStreamingExtractPasswordAsync(archivePath);
+      if (!proceed)
+      {
+        StatusMessage = "Извлечение отменено: для зашифрованного архива нужен пароль.";
+        return;
+      }
+
       await RunOperationAsync(async token =>
       {
         try
         {
-          SevenZipArchiveDecodeResult result = await _archiveService.ExtractArchiveFileAsync(archivePath, destination, progress, token, currentFile);
-          StatusMessage = ExtractStatus(result, destination);
+          SevenZipArchiveDecodeResult result = await _archiveService.ExtractArchiveFileAsync(archivePath, destination, progress, token, currentFile, streamPassword);
+          StatusMessage = StreamingExtractStatus(result, destination, encrypted);
         }
         finally { CurrentFileStatus = null; }
       });
@@ -584,6 +591,31 @@ public sealed class MainViewModel : ObservableObject
     _ => "Не удалось извлечь: ошибка данных или файл уже существует.",
   };
 
+  // Итог потокового извлечения по пути с учётом шифрования: при неудаче зашифрованного архива
+  // подсказываем про пароль.
+  private static string StreamingExtractStatus(SevenZipArchiveDecodeResult result, string destination, bool encrypted)
+  {
+    if (result == SevenZipArchiveDecodeResult.Ok)
+      return $"Извлечено в: {destination}";
+
+    if (encrypted)
+      return "Не удалось извлечь: неверный пароль или повреждённый архив.";
+
+    return ExtractStatus(result, destination);
+  }
+
+  // Для потокового извлечения по пути: определяет шифрование и (если зашифрован) спрашивает пароль
+  // ДО операции. Возвращает: продолжать ли, введённый пароль, признак шифрования.
+  private async Task<(bool Proceed, string? Password, bool Encrypted)> ResolveStreamingExtractPasswordAsync(string archivePath)
+  {
+    bool encrypted = await _archiveService.IsArchiveEncryptedAsync(archivePath);
+    if (!encrypted)
+      return (true, null, false);
+
+    string? password = await _passwordPrompt.RequestAsync(Path.GetFileName(archivePath), previousAttemptFailed: false);
+    return password is null ? (false, null, true) : (true, password, true);
+  }
+
   // Прямое потоковое извлечение архива с диска (без открытия/обзора) — для архивов > 2 ГиБ.
   private async Task ExtractArchiveFileAsync()
   {
@@ -597,6 +629,13 @@ public sealed class MainViewModel : ObservableObject
     if (destination is null)
       return; // выбор папки отменён
 
+    (bool proceed, string? password, bool encrypted) = await ResolveStreamingExtractPasswordAsync(archivePath);
+    if (!proceed)
+    {
+      StatusMessage = "Извлечение отменено: для зашифрованного архива нужен пароль.";
+      return;
+    }
+
     IProgress<SevenZipProgress> progress = CreateProgress();
     var currentFile = new Progress<string>(name => CurrentFileStatus = FormatExtractingFileStatus(name));
 
@@ -604,15 +643,8 @@ public sealed class MainViewModel : ObservableObject
     {
       try
       {
-        SevenZipArchiveDecodeResult result = await _archiveService.ExtractArchiveFileAsync(archivePath, destination, progress, token, currentFile);
-
-        StatusMessage = result switch
-        {
-          SevenZipArchiveDecodeResult.Ok => $"Извлечено в: {destination}",
-          SevenZipArchiveDecodeResult.NotSupported =>
-              "Извлечение этого архива не поддерживается (например, шифрование или сложные фильтры).",
-          _ => "Не удалось извлечь: ошибка данных или файл уже существует.",
-        };
+        SevenZipArchiveDecodeResult result = await _archiveService.ExtractArchiveFileAsync(archivePath, destination, progress, token, currentFile, password);
+        StatusMessage = StreamingExtractStatus(result, destination, encrypted);
       }
       finally { CurrentFileStatus = null; }
     });

@@ -132,7 +132,8 @@ public sealed class LzmaArchiveService : IArchiveService
       string destination,
       System.IProgress<SevenZipProgress>? progress = null,
       System.Threading.CancellationToken token = default,
-      System.IProgress<string>? currentFile = null)
+      System.IProgress<string>? currentFile = null,
+      string? password = null)
   {
     return Task.Run(() =>
     {
@@ -142,8 +143,8 @@ public sealed class LzmaArchiveService : IArchiveService
         // Если путь — первый том (.001), склеиваем тома на лету через VolumeSpanningReadStream.
         using System.IO.Stream archive = OpenArchiveReadStream(archivePath);
 
-        return SevenZipArchiveDecoder.ExtractToDirectoryFromStream(
-            archive, SevenZipDecodeOptions.Default, destination, overwrite: false, progress, token, currentFile);
+        return WithOptions(password, options => SevenZipArchiveDecoder.ExtractToDirectoryFromStream(
+            archive, options, destination, overwrite: false, progress, token, currentFile));
       }
       catch (System.IO.IOException)
       {
@@ -188,6 +189,28 @@ public sealed class LzmaArchiveService : IArchiveService
     {
       SevenZipArchiveInspector.TryDescribeMethods(bytes, password, out string description);
       return description ?? string.Empty;
+    });
+  }
+
+  /// <inheritdoc />
+  public Task<bool> IsArchiveEncryptedAsync(string archivePath)
+  {
+    return Task.Run(() =>
+    {
+      try
+      {
+        using System.IO.Stream archive = OpenArchiveReadStream(archivePath);
+        return SevenZipArchiveDecoder.TryDetectStreamEncryption(archive, out bool encrypted) == SevenZipArchiveDecodeResult.Ok
+            && encrypted;
+      }
+      catch (System.IO.IOException)
+      {
+        return false;
+      }
+      catch (System.UnauthorizedAccessException)
+      {
+        return false;
+      }
     });
   }
 

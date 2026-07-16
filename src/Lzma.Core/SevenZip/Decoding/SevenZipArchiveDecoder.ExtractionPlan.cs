@@ -46,6 +46,35 @@ public static partial class SevenZipArchiveDecoder
     return SevenZipArchiveDecodeResult.Ok;
   }
 
+  /// <summary>
+  /// Определяет по заголовку (без распаковки данных), зашифрован ли архив из <see cref="Stream"/> —
+  /// есть ли у какого-либо folder-а AES-coder (7zAES). Для решения, спрашивать ли пароль перед
+  /// потоковым извлечением больших/томовых архивов.
+  /// </summary>
+  public static SevenZipArchiveDecodeResult TryDetectStreamEncryption(Stream archive, out bool encrypted)
+  {
+    encrypted = false;
+
+    ArgumentNullException.ThrowIfNull(archive);
+
+    SevenZipArchiveDecodeResult headerRes = SevenZipArchiveStreamReader.ReadHeader(archive, out SevenZipHeader header, out _);
+    if (headerRes != SevenZipArchiveDecodeResult.Ok)
+      return headerRes;
+
+    if (header.StreamsInfo?.UnpackInfo is { } unpackInfo)
+    {
+      foreach (SevenZipFolder folder in unpackInfo.Folders)
+        foreach (SevenZipCoderInfo coder in folder.Coders)
+          if (SevenZipAesCoder.IsAesMethodId(coder.MethodId))
+          {
+            encrypted = true;
+            return SevenZipArchiveDecodeResult.Ok;
+          }
+    }
+
+    return SevenZipArchiveDecodeResult.Ok;
+  }
+
   internal enum ExtractEntryKind
   {
     Directory,

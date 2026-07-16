@@ -102,8 +102,12 @@ public interface IArchiveService
       string destination,
       IProgress<SevenZipProgress>? progress = null,
       CancellationToken token = default,
-      IProgress<string>? currentFile = null)
+      IProgress<string>? currentFile = null,
+      string? password = null)
       => Task.FromResult(SevenZipArchiveDecodeResult.NotSupported);
+
+  /// <summary>Определяет по заголовку (без распаковки), зашифрован ли архив по пути (в т.ч. первый том).</summary>
+  Task<bool> IsArchiveEncryptedAsync(string archivePath) => Task.FromResult(false);
 
   /// <summary>
   /// ОБЗОР архива по пути <paramref name="archivePath"/>: возвращает листинг содержимого (имена/
