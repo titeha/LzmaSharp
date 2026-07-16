@@ -55,3 +55,45 @@ public sealed class SevenZipArchiveWriterCurrentFileTests
     Assert.Equal(new[] { "one.txt", "two.txt" }, progress.Names);
   }
 }
+
+/// <summary>Тесты канала «текущий файл» при ИЗВЛЕЧЕНИИ: имена файлов репортятся по ходу распаковки.</summary>
+public sealed class SevenZipExtractCurrentFileTests
+{
+  private sealed class CollectingProgress : IProgress<string>
+  {
+    public readonly List<string> Names = [];
+    public void Report(string value) => Names.Add(value);
+  }
+
+  [Fact]
+  public void ExtractToDirectory_РепортитИменаФайлов()
+  {
+    byte[] a = Encoding.UTF8.GetBytes("файл один");
+    byte[] b = Encoding.UTF8.GetBytes("файл два — подлиннее");
+
+    var entries = new List<SevenZipStreamingEntry>
+    {
+      new("first.txt", a.LongLength, () => new MemoryStream(a)),
+      new("second.txt", b.LongLength, () => new MemoryStream(b)),
+    };
+
+    using var ms = new MemoryStream();
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, SevenZipArchiveWriter.BuildLzma2ArchiveToStream(entries, ms, 1 << 20));
+
+    string dir = Path.Combine(Path.GetTempPath(), "LzmaExtractCurFile", Guid.NewGuid().ToString("N"));
+    try
+    {
+      var progress = new CollectingProgress();
+      Assert.Equal(SevenZipArchiveDecodeResult.Ok,
+          SevenZipArchiveDecoder.ExtractToDirectory(ms.ToArray(), SevenZipDecodeOptions.Default, dir,
+              overwrite: false, out _, null, default, progress));
+
+      Assert.Contains("first.txt", progress.Names);
+      Assert.Contains("second.txt", progress.Names);
+    }
+    finally
+    {
+      try { Directory.Delete(dir, recursive: true); } catch { }
+    }
+  }
+}

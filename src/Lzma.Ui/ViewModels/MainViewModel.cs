@@ -506,14 +506,19 @@ public sealed class MainViewModel : ObservableObject
       return; // выбор папки отменён
 
     IProgress<SevenZipProgress> progress = CreateProgress();
+    var currentFile = new Progress<string>(name => CurrentFileStatus = FormatExtractingFileStatus(name));
 
     // Открыт как «большой» (потоковый) архив — извлекаем прямо из файла, не грузя в память.
     if (_archivePath is { } archivePath)
     {
       await RunOperationAsync(async token =>
       {
-        SevenZipArchiveDecodeResult result = await _archiveService.ExtractArchiveFileAsync(archivePath, destination, progress, token);
-        StatusMessage = ExtractStatus(result, destination);
+        try
+        {
+          SevenZipArchiveDecodeResult result = await _archiveService.ExtractArchiveFileAsync(archivePath, destination, progress, token, currentFile);
+          StatusMessage = ExtractStatus(result, destination);
+        }
+        finally { CurrentFileStatus = null; }
       });
       return;
     }
@@ -523,8 +528,12 @@ public sealed class MainViewModel : ObservableObject
 
     await RunOperationAsync(async token =>
     {
-      SevenZipArchiveDecodeResult result = await _archiveService.ExtractAllAsync(bytes, password, destination, progress, token);
-      StatusMessage = ExtractStatus(result, destination);
+      try
+      {
+        SevenZipArchiveDecodeResult result = await _archiveService.ExtractAllAsync(bytes, password, destination, progress, token, currentFile);
+        StatusMessage = ExtractStatus(result, destination);
+      }
+      finally { CurrentFileStatus = null; }
     });
   }
 
@@ -549,18 +558,23 @@ public sealed class MainViewModel : ObservableObject
       return; // выбор папки отменён
 
     IProgress<SevenZipProgress> progress = CreateProgress();
+    var currentFile = new Progress<string>(name => CurrentFileStatus = FormatExtractingFileStatus(name));
 
     await RunOperationAsync(async token =>
     {
-      SevenZipArchiveDecodeResult result = await _archiveService.ExtractArchiveFileAsync(archivePath, destination, progress, token);
-
-      StatusMessage = result switch
+      try
       {
-        SevenZipArchiveDecodeResult.Ok => $"Извлечено в: {destination}",
-        SevenZipArchiveDecodeResult.NotSupported =>
-            "Извлечение этого архива не поддерживается (например, шифрование или сложные фильтры).",
-        _ => "Не удалось извлечь: ошибка данных или файл уже существует.",
-      };
+        SevenZipArchiveDecodeResult result = await _archiveService.ExtractArchiveFileAsync(archivePath, destination, progress, token, currentFile);
+
+        StatusMessage = result switch
+        {
+          SevenZipArchiveDecodeResult.Ok => $"Извлечено в: {destination}",
+          SevenZipArchiveDecodeResult.NotSupported =>
+              "Извлечение этого архива не поддерживается (например, шифрование или сложные фильтры).",
+          _ => "Не удалось извлечь: ошибка данных или файл уже существует.",
+        };
+      }
+      finally { CurrentFileStatus = null; }
     });
   }
 
@@ -760,6 +774,9 @@ public sealed class MainViewModel : ObservableObject
 
   // Строка «сжимается прямо сейчас» (как в 7-Zip). internal — для тестов.
   internal static string FormatCurrentFileStatus(string name) => $"Сжатие: {name}";
+
+  // Строка «извлекается прямо сейчас». internal — для тестов.
+  internal static string FormatExtractingFileStatus(string name) => $"Извлечение: {name}";
 
   // Итог создания архива: путь + размеры и коэффициент сжатия. internal — для тестов.
   internal static string FormatCreateSummary(string path, long originalBytes, long compressedBytes)

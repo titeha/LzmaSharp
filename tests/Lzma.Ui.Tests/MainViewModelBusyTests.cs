@@ -25,7 +25,8 @@ public sealed class MainViewModelBusyTests
     public async Task<SevenZipArchiveDecodeResult> ExtractAllAsync(
         byte[] bytes, string? password, string destination,
         System.IProgress<SevenZipProgress>? progress = null,
-        System.Threading.CancellationToken token = default)
+        System.Threading.CancellationToken token = default,
+        System.IProgress<string>? currentFile = null)
     {
       if (ExtractGate is not null)
         await ExtractGate.Task;

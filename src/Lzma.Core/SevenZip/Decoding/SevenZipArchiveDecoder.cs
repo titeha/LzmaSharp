@@ -755,7 +755,8 @@ public static partial class SevenZipArchiveDecoder
       bool overwrite,
       out int bytesConsumed,
       IProgress<SevenZipProgress>? progress = null,
-      System.Threading.CancellationToken token = default)
+      System.Threading.CancellationToken token = default,
+      IProgress<string>? currentFile = null)
   {
     ArgumentNullException.ThrowIfNull(options);
     bytesConsumed = 0;
@@ -1061,16 +1062,21 @@ public static partial class SevenZipArchiveDecoder
 
           try
           {
+            string? folderFirstName = null;
             for (int i = 0; i < plan.Length; i++)
             {
               if (plan[i].Kind != ExtractEntryKind.DataFile || plan[i].FolderIndex != folder)
                 continue;
 
+              folderFirstName ??= plan[i].Name;
               var fs = new FileStream(fullPaths[i], FileMode.Create, FileAccess.Write);
               openStreams.Add(fs);
               createdFiles.Add(fullPaths[i]);
               segments.Add(new SubstreamRoutingWriter.Segment(fs, plan[i].Size, plan[i].HasCrc, plan[i].ExpectedCrc));
             }
+
+            if (folderFirstName is not null)
+              currentFile?.Report(folderFirstName);
 
             var routing = new SubstreamRoutingWriter([.. segments]);
 
@@ -1278,7 +1284,8 @@ public static partial class SevenZipArchiveDecoder
       string destinationDirectory,
       bool overwrite = false,
       IProgress<SevenZipProgress>? progress = null,
-      System.Threading.CancellationToken token = default)
+      System.Threading.CancellationToken token = default,
+      IProgress<string>? currentFile = null)
   {
     ArgumentNullException.ThrowIfNull(archive);
     ArgumentNullException.ThrowIfNull(options);
@@ -1532,16 +1539,21 @@ public static partial class SevenZipArchiveDecoder
 
           try
           {
+            string? folderFirstName = null;
             for (int i = 0; i < plan.Length; i++)
             {
               if (plan[i].Kind != ExtractEntryKind.DataFile || plan[i].FolderIndex != folder)
                 continue;
 
+              folderFirstName ??= plan[i].Name;
               var fs = new FileStream(fullPaths[i], FileMode.Create, FileAccess.Write);
               openStreams.Add(fs);
               createdFiles.Add(fullPaths[i]);
               segments.Add(new SubstreamRoutingWriter.Segment(fs, plan[i].Size, plan[i].HasCrc, plan[i].ExpectedCrc));
             }
+
+            if (folderFirstName is not null)
+              currentFile?.Report(folderFirstName);
 
             var routing = new SubstreamRoutingWriter([.. segments]);
 

@@ -69,7 +69,8 @@ public sealed class MainViewModelCancelTests
 
     public Task<SevenZipArchiveDecodeResult> ExtractAllAsync(
         byte[] bytes, string? password, string destination,
-        IProgress<SevenZipProgress>? progress = null, CancellationToken token = default)
+        IProgress<SevenZipProgress>? progress = null, CancellationToken token = default,
+        IProgress<string>? currentFile = null)
         => Task.FromResult(SevenZipArchiveDecodeResult.Ok);
 
     public async Task<ArchiveCreateOutcome> CreateArchiveAsync(

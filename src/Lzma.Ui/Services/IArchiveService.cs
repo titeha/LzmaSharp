@@ -53,7 +53,8 @@ public interface IArchiveService
       string? password,
       string destination,
       IProgress<SevenZipProgress>? progress = null,
-      CancellationToken token = default);
+      CancellationToken token = default,
+      IProgress<string>? currentFile = null);
 
   /// <summary>
   /// Собирает 7z-архив из набора записей выбранным методом сжатия. Возвращает байты архива;
@@ -98,7 +99,8 @@ public interface IArchiveService
       string archivePath,
       string destination,
       IProgress<SevenZipProgress>? progress = null,
-      CancellationToken token = default)
+      CancellationToken token = default,
+      IProgress<string>? currentFile = null)
       => Task.FromResult(SevenZipArchiveDecodeResult.NotSupported);
 
   /// <summary>

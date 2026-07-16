@@ -29,10 +29,11 @@ public sealed class LzmaArchiveService : IArchiveService
       string? password,
       string destination,
       System.IProgress<SevenZipProgress>? progress = null,
-      System.Threading.CancellationToken token = default)
+      System.Threading.CancellationToken token = default,
+      System.IProgress<string>? currentFile = null)
   {
     return Task.Run(() => WithOptions(password, options =>
-        SevenZipArchiveDecoder.ExtractToDirectory(bytes, options, destination, overwrite: false, out _, progress, token)), token);
+        SevenZipArchiveDecoder.ExtractToDirectory(bytes, options, destination, overwrite: false, out _, progress, token, currentFile)), token);
   }
 
   /// <inheritdoc />
@@ -122,7 +123,8 @@ public sealed class LzmaArchiveService : IArchiveService
       string archivePath,
       string destination,
       System.IProgress<SevenZipProgress>? progress = null,
-      System.Threading.CancellationToken token = default)
+      System.Threading.CancellationToken token = default,
+      System.IProgress<string>? currentFile = null)
   {
     return Task.Run(() =>
     {
@@ -133,7 +135,7 @@ public sealed class LzmaArchiveService : IArchiveService
             archivePath, System.IO.FileMode.Open, System.IO.FileAccess.Read);
 
         return SevenZipArchiveDecoder.ExtractToDirectoryFromStream(
-            archive, SevenZipDecodeOptions.Default, destination, overwrite: false, progress, token);
+            archive, SevenZipDecodeOptions.Default, destination, overwrite: false, progress, token, currentFile);
       }
       catch (System.IO.IOException)
       {

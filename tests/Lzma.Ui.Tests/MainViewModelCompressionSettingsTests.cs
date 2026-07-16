@@ -53,7 +53,7 @@ public sealed class MainViewModelCompressionSettingsTests
     public SevenZipWriterCompressionMethod CapturedMethod = (SevenZipWriterCompressionMethod)(-1);
 
     public Task<ArchiveOpenOutcome> OpenAsync(byte[] b, string? p) => Task.FromResult(new ArchiveOpenOutcome(SevenZipArchiveDecodeResult.Ok, []));
-    public Task<SevenZipArchiveDecodeResult> ExtractAllAsync(byte[] b, string? p, string d, IProgress<SevenZipProgress>? pr = null, CancellationToken t = default) => Task.FromResult(SevenZipArchiveDecodeResult.Ok);
+    public Task<SevenZipArchiveDecodeResult> ExtractAllAsync(byte[] b, string? p, string d, IProgress<SevenZipProgress>? pr = null, CancellationToken t = default, IProgress<string>? cf = null) => Task.FromResult(SevenZipArchiveDecodeResult.Ok);
     public Task<ArchiveCreateOutcome> CreateArchiveAsync(IReadOnlyList<SevenZipArchiveWriterEntry> e, SevenZipWriterCompressionMethod m, IProgress<SevenZipProgress>? pr = null, CancellationToken t = default) => Task.FromResult(new ArchiveCreateOutcome(SevenZipArchiveWriteResult.Ok, []));
     public Task<bool> WriteArchiveAsync(byte[] a, string p) => Task.FromResult(true);
     public Task<string> DescribeMethodsAsync(byte[] b, string? p) => Task.FromResult(string.Empty);
