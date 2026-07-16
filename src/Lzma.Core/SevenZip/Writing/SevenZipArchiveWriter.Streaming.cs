@@ -1,5 +1,7 @@
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 
 using Lzma.Core.Checksums;
 using Lzma.Core.Lzma1;
@@ -89,40 +91,100 @@ public static partial class SevenZipArchiveWriter
 
     progress?.Report(new SevenZipProgress(0, totalContent));
     long processed = 0;
-    int streamIndex = 0;
 
+    // Индексы data-entry в порядке архива (packed-стримы пишутся строго в этом порядке).
+    var dataOrder = new List<int>(count);
     for (int i = 0; i < entries.Count; i++)
-    {
-      SevenZipStreamingEntry entry = entries[i];
-      if (!IsStreamingDataEntry(entry))
-        continue;
+      if (IsStreamingDataEntry(entries[i]))
+        dataOrder.Add(i);
 
+    // Файл <= размера блока сжимается ОДНИМ блоком (Encode) — байт-в-байт как блочно-параллельный
+    // путь для одноблочного файла. Такие файлы жмём ПАРАЛЛЕЛЬНО МЕЖДУ СОБОЙ (волнами), а пишем по
+    // порядку. Файлы больше блока — блочно-параллельно напрямую в output (внутри-файловый параллелизм).
+    int blockSize = Math.Max(effectiveDictionarySize, 1 << 20);
+    int maxDegreeOfParallelism = Environment.ProcessorCount;
+    const long waveMemoryLimit = 128L << 20; // ограничение памяти на волну
+    var parallelOptions = new ParallelOptions
+    {
+      MaxDegreeOfParallelism = maxDegreeOfParallelism,
+      CancellationToken = token,
+    };
+
+    int di = 0;
+    while (di < dataOrder.Count)
+    {
       token.ThrowIfCancellationRequested();
 
-      long packSize;
-      uint crc;
+      SevenZipStreamingEntry entry = entries[dataOrder[di]];
 
-      // Прогресс ВНУТРИ файла: локально обработанные байты → глобальный отчёт (как within-folder в декоде).
-      long processedBefore = processed;
-      IProgress<long>? fileProgress = progress is null ? null
-          : new LongProgressAdapter(local => progress.Report(
-              new SevenZipProgress(Math.Min(processedBefore + local, totalContent), totalContent)));
-
-      using (Stream source = entry.OpenRead())
+      if (entry.Length > blockSize)
       {
-        // МНОГОПОТОЧНОЕ блочное сжатие (как 7-Zip mt): кратное ускорение на многоядерных CPU.
-        packSize = Lzma2LzmaEncoder.EncodeParallelToStream(
-            source, entry.Length, lzmaProperties, effectiveDictionarySize, output,
-            out crc, bytesProgress: fileProgress, token: token);
+        // Большой файл — блочно-параллельно напрямую в output (с прогрессом внутри файла).
+        long processedBefore = processed;
+        IProgress<long>? fileProgress = progress is null ? null
+            : new LongProgressAdapter(local => progress.Report(
+                new SevenZipProgress(Math.Min(processedBefore + local, totalContent), totalContent)));
+
+        long packSize;
+        uint crc;
+        using (Stream source = entry.OpenRead())
+          packSize = Lzma2LzmaEncoder.EncodeParallelToStream(
+              source, entry.Length, lzmaProperties, effectiveDictionarySize, output,
+              out crc, bytesProgress: fileProgress, token: token);
+
+        packSizes[di] = (ulong)packSize;
+        unpackSizes[di] = (ulong)entry.Length;
+        crcs[di] = crc;
+
+        processed += entry.Length;
+        progress?.Report(new SevenZipProgress(processed, totalContent));
+        di++;
+        continue;
       }
 
-      packSizes[streamIndex] = (ulong)packSize;
-      unpackSizes[streamIndex] = (ulong)entry.Length;
-      crcs[streamIndex] = crc;
-      streamIndex++;
+      // Собираем волну подряд идущих мелких файлов (<= размера блока), с лимитом памяти/потоков.
+      int waveStart = di;
+      long waveBytes = 0;
+      while (di < dataOrder.Count)
+      {
+        SevenZipStreamingEntry e = entries[dataOrder[di]];
+        if (e.Length > blockSize)
+          break;
 
-      processed += entry.Length;
-      progress?.Report(new SevenZipProgress(processed, totalContent));
+        int waveCount = di - waveStart;
+        if (waveCount >= maxDegreeOfParallelism || (waveCount > 0 && waveBytes + e.Length > waveMemoryLimit))
+          break;
+
+        waveBytes += e.Length;
+        di++;
+      }
+
+      int n = di - waveStart;
+      var compressed = new byte[n][];
+      var waveCrcs = new uint[n];
+
+      // Сжимаем файлы волны ПАРАЛЛЕЛЬНО (каждый — одним Encode, детерминировано).
+      Parallel.For(0, n, parallelOptions, k =>
+      {
+        SevenZipStreamingEntry e = entries[dataOrder[waveStart + k]];
+        byte[] data = ReadExactlyToArray(e.OpenRead(), (int)e.Length);
+        waveCrcs[k] = Crc32.Compute(data);
+        compressed[k] = Lzma2LzmaEncoder.Encode(data, lzmaProperties, effectiveDictionarySize);
+      });
+
+      // Пишем сжатые буферы СТРОГО по порядку.
+      for (int k = 0; k < n; k++)
+      {
+        SevenZipStreamingEntry e = entries[dataOrder[waveStart + k]];
+        output.Write(compressed[k], 0, compressed[k].Length);
+
+        packSizes[waveStart + k] = (ulong)compressed[k].Length;
+        unpackSizes[waveStart + k] = (ulong)e.Length;
+        crcs[waveStart + k] = waveCrcs[k];
+
+        processed += e.Length;
+        progress?.Report(new SevenZipProgress(processed, totalContent));
+      }
     }
 
     // Синтетические entries для переиспользования FilesInfo-writer-ов: им нужен лишь признак
@@ -164,6 +226,25 @@ public static partial class SevenZipArchiveWriter
 
   private static bool IsStreamingDataEntry(SevenZipStreamingEntry e)
       => !e.IsDirectory && e.Length > 0;
+
+  // Читает ровно length байт из потока в массив и закрывает поток (для параллельного сжатия мелких файлов).
+  private static byte[] ReadExactlyToArray(Stream source, int length)
+  {
+    using (source)
+    {
+      byte[] buffer = new byte[length];
+      int offset = 0;
+      while (offset < length)
+      {
+        int n = source.Read(buffer, offset, length - offset);
+        if (n <= 0)
+          throw new EndOfStreamException("Входной файл короче заявленной длины.");
+        offset += n;
+      }
+
+      return buffer;
+    }
+  }
 
   // Строит next-header для потокового LZMA2-сценария: PackInfo/UnpackInfo с ulong-размерами
   // (поддержка >2 ГБ), FilesInfo — через существующие writer-ы (по синтетическим entries).
