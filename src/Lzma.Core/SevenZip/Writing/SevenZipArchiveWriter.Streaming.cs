@@ -412,7 +412,8 @@ public static partial class SevenZipArchiveWriter
     return FinalizeStreamingArchive(entries, output, startPos, perFolder, packSizes, unpackSizes, crcs);
   }
 
-  // Общая финализация: синтетические entries для FilesInfo + next-header (coder СВОЙ на folder) + патч.
+  // Финализация: ОДИН coder на каждый folder (LZMA2/PPMd/Copy/Auto). Оборачивает coder в тело
+  // folder-а (numCoders=1) и один packed-stream/один размер выхода на folder → общий multi-folder.
   private static SevenZipArchiveWriteResult FinalizeStreamingArchive(
       IReadOnlyList<SevenZipStreamingEntry> entries,
       Stream output,
@@ -420,6 +421,38 @@ public static partial class SevenZipArchiveWriter
       byte[][] coderBytesPerFolder,
       ulong[] packSizes,
       ulong[] unpackSizes,
+      uint[] crcs)
+  {
+    var folderBodies = new byte[coderBytesPerFolder.Length][];
+    var coderUnpackSizes = new ulong[coderBytesPerFolder.Length][];
+    for (int i = 0; i < coderBytesPerFolder.Length; i++)
+    {
+      folderBodies[i] = WrapSingleCoderFolderBody(coderBytesPerFolder[i]);
+      coderUnpackSizes[i] = [unpackSizes[i]];
+    }
+
+    return FinalizeStreamingArchiveMultiFolder(entries, output, startPos, folderBodies, packSizes, coderUnpackSizes, crcs);
+  }
+
+  // Оборачивает байты одного coder-а в тело folder-а: numCoders=1 + coder (один packed-stream, без bind pairs).
+  private static byte[] WrapSingleCoderFolderBody(byte[] coderBytes)
+  {
+    var body = new List<byte>(1 + coderBytes.Length);
+    TryWriteUInt64(body, 1);
+    body.AddRange(coderBytes);
+    return [.. body];
+  }
+
+  // Общая финализация ЛЮБЫХ folder-ов (в т.ч. много-coder/много-стрим, напр. BCJ2): готовые тела
+  // folder-ов + ПЛОСКИЙ packSizes (по всем folder-ам) + размеры выходов coder-ов на folder + CRC.
+  // Синтетические entries для FilesInfo + next-header + патч сигнатуры.
+  private static SevenZipArchiveWriteResult FinalizeStreamingArchiveMultiFolder(
+      IReadOnlyList<SevenZipStreamingEntry> entries,
+      Stream output,
+      long startPos,
+      byte[][] folderBodies,
+      ulong[] packSizes,
+      ulong[][] coderUnpackSizes,
       uint[] crcs)
   {
     var synthetic = new SevenZipArchiveWriterEntry[entries.Count];
@@ -430,7 +463,7 @@ public static partial class SevenZipArchiveWriter
       synthetic[i] = new SevenZipArchiveWriterEntry(e.Name, marker, e.IsDirectory, e.WindowsAttributes, e.LastWriteTimeUtc);
     }
 
-    if (!TryBuildLzma2StreamingNextHeader(synthetic, packSizes, unpackSizes, crcs, coderBytesPerFolder, out byte[] nextHeaderBytes))
+    if (!TryBuildStreamingNextHeader(synthetic, packSizes, coderUnpackSizes, crcs, folderBodies, out byte[] nextHeaderBytes))
       return SevenZipArchiveWriteResult.InternalError;
 
     long packedEnd = output.Position;
@@ -480,12 +513,12 @@ public static partial class SevenZipArchiveWriter
 
   // Строит next-header для потокового LZMA2-сценария: PackInfo/UnpackInfo с ulong-размерами
   // (поддержка >2 ГБ), FilesInfo — через существующие writer-ы (по синтетическим entries).
-  private static bool TryBuildLzma2StreamingNextHeader(
+  private static bool TryBuildStreamingNextHeader(
       IReadOnlyList<SevenZipArchiveWriterEntry> syntheticEntries,
       ulong[] packSizes,
-      ulong[] unpackSizes,
+      ulong[][] coderUnpackSizes,
       uint[] unpackCrcs,
-      byte[][] coderBytesPerFolder,
+      byte[][] folderBodies,
       out byte[] nextHeaderBytes)
   {
     nextHeaderBytes = [];
@@ -499,7 +532,7 @@ public static partial class SevenZipArchiveWriter
     if (!TryWriteStreamingPackInfo(header, packSizes))
       return false;
 
-    if (!TryWriteStreamingFoldersUnpackInfo(header, unpackSizes, unpackCrcs, coderBytesPerFolder))
+    if (!TryWriteStreamingFoldersUnpackInfo(header, folderBodies, coderUnpackSizes, unpackCrcs))
       return false;
 
     header.Add(SevenZipNid.End);
@@ -539,35 +572,33 @@ public static partial class SevenZipArchiveWriter
     return true;
   }
 
-  // UnpackInfo (по одному coder-folder на файл) с ulong-размерами; coder СВОЙ на каждый folder
-  // (для Auto разные файлы могут получить LZMA2 или PPMd).
+  // UnpackInfo с ulong-размерами: у каждого folder-а СВОЁ готовое тело (folderBodies[i] уже содержит
+  // numCoders + coder-ы + bind pairs + packed-индексы) и свои размеры выходов coder-ов
+  // (coderUnpackSizes[i][j]). Поддерживает и одно-coder folder-ы (LZMA2/PPMd/Copy), и много-coder
+  // (BCJ2: 3×LZMA2 + BCJ2). CRC — по одному на folder (финальный выход).
   private static bool TryWriteStreamingFoldersUnpackInfo(
-      List<byte> header, ulong[] unpackSizes, uint[] unpackCrcs, byte[][] coderBytesPerFolder)
+      List<byte> header, byte[][] folderBodies, ulong[][] coderUnpackSizes, uint[] unpackCrcs)
   {
-    if (coderBytesPerFolder.Length != unpackSizes.Length)
+    if (folderBodies.Length != coderUnpackSizes.Length || folderBodies.Length != unpackCrcs.Length)
       return false;
 
     header.Add(SevenZipNid.UnpackInfo);
     header.Add(SevenZipNid.Folder);
 
-    if (!TryWriteUInt64(header, (ulong)unpackSizes.Length))
+    if (!TryWriteUInt64(header, (ulong)folderBodies.Length))
       return false;
 
     header.Add(0x00);
 
-    for (int i = 0; i < unpackSizes.Length; i++)
-    {
-      if (!TryWriteUInt64(header, 1)) // один coder на folder
-        return false;
-
-      header.AddRange(coderBytesPerFolder[i]);
-    }
+    for (int i = 0; i < folderBodies.Length; i++)
+      header.AddRange(folderBodies[i]);
 
     header.Add(SevenZipNid.CodersUnpackSize);
 
-    for (int i = 0; i < unpackSizes.Length; i++)
-      if (!TryWriteUInt64(header, unpackSizes[i]))
-        return false;
+    for (int i = 0; i < coderUnpackSizes.Length; i++)
+      for (int j = 0; j < coderUnpackSizes[i].Length; j++)
+        if (!TryWriteUInt64(header, coderUnpackSizes[i][j]))
+          return false;
 
     header.Add(SevenZipNid.Crc);
     WriteAllDefinedCrcDigests(header, unpackCrcs);
