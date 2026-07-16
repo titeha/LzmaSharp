@@ -22,6 +22,13 @@ public readonly record struct ArchiveCreateOutcome(
     byte[] Archive);
 
 /// <summary>
+/// Результат обзора архива по пути (потоковый листинг без распаковки): код результата и записи.
+/// </summary>
+public readonly record struct ArchiveListOutcome(
+    SevenZipArchiveDecodeResult Result,
+    SevenZipListedEntry[] Entries);
+
+/// <summary>
 /// Единый шов операций над 7z-архивом для UI: открытие, извлечение, диагностика
 /// (а в дальнейшем — создание, прогресс и т.д.).
 /// </summary>
@@ -91,6 +98,14 @@ public interface IArchiveService
       IProgress<SevenZipProgress>? progress = null,
       CancellationToken token = default)
       => Task.FromResult(SevenZipArchiveDecodeResult.NotSupported);
+
+  /// <summary>
+  /// ОБЗОР архива по пути <paramref name="archivePath"/>: возвращает листинг содержимого (имена/
+  /// каталоги/размеры) БЕЗ распаковки и без загрузки архива в память (для архивов &gt; 2 ГиБ).
+  /// Реализация по умолчанию — <see cref="SevenZipArchiveDecodeResult.NotSupported"/>.
+  /// </summary>
+  Task<ArchiveListOutcome> OpenFromFileAsync(string archivePath)
+      => Task.FromResult(new ArchiveListOutcome(SevenZipArchiveDecodeResult.NotSupported, []));
 
   /// <summary>
   /// Возвращает человекочитаемое описание методов архива (для диагностики при ошибке

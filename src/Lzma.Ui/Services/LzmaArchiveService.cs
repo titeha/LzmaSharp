@@ -133,6 +133,32 @@ public sealed class LzmaArchiveService : IArchiveService
   }
 
   /// <inheritdoc />
+  public Task<ArchiveListOutcome> OpenFromFileAsync(string archivePath)
+  {
+    return Task.Run(() =>
+    {
+      try
+      {
+        using var archive = new System.IO.FileStream(
+            archivePath, System.IO.FileMode.Open, System.IO.FileAccess.Read);
+
+        SevenZipArchiveDecodeResult result =
+            SevenZipArchiveDecoder.ListEntriesFromStream(archive, out SevenZipListedEntry[] entries);
+
+        return new ArchiveListOutcome(result, entries);
+      }
+      catch (System.IO.IOException)
+      {
+        return new ArchiveListOutcome(SevenZipArchiveDecodeResult.InternalError, []);
+      }
+      catch (System.UnauthorizedAccessException)
+      {
+        return new ArchiveListOutcome(SevenZipArchiveDecodeResult.InternalError, []);
+      }
+    });
+  }
+
+  /// <inheritdoc />
   public Task<string> DescribeMethodsAsync(byte[] bytes, string? password)
   {
     return Task.Run(() =>

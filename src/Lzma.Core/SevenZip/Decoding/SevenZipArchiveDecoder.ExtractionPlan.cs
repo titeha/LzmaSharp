@@ -1,6 +1,11 @@
+using System.IO;
+
 using Lzma.Core.Checksums;
 
 namespace Lzma.Core.SevenZip;
+
+/// <summary>Запись архива для обзора (без данных): имя, признак каталога и размер распаковки.</summary>
+public readonly record struct SevenZipListedEntry(string Name, bool IsDirectory, long Size);
 
 // План извлечения: структурная раскладка архива (порядок файлов, вид каждого, для файлов
 // с данными — folder + размер + ожидаемый CRC), полученная из header БЕЗ декодирования данных.
@@ -8,6 +13,39 @@ namespace Lzma.Core.SevenZip;
 // выход каждого folder-а, не держа весь архив в памяти. Зеркалит структурную часть DecodeToArray.
 public static partial class SevenZipArchiveDecoder
 {
+  /// <summary>
+  /// Читает СПИСОК содержимого архива из seekable <see cref="Stream"/> (имена/каталоги/размеры) БЕЗ
+  /// распаковки данных — для обзора архивов больше 2 ГиБ. Использует
+  /// <see cref="SevenZipArchiveStreamReader.ReadHeader"/> + план извлечения.
+  /// </summary>
+  public static SevenZipArchiveDecodeResult ListEntriesFromStream(Stream archive, out SevenZipListedEntry[] entries)
+  {
+    entries = [];
+
+    ArgumentNullException.ThrowIfNull(archive);
+
+    SevenZipArchiveDecodeResult headerRes = SevenZipArchiveStreamReader.ReadHeader(archive, out SevenZipHeader header, out _);
+    if (headerRes != SevenZipArchiveDecodeResult.Ok)
+      return headerRes;
+
+    SevenZipArchiveDecodeResult planRes = TryBuildExtractionPlan(header, out ExtractPlanEntry[] plan, out _);
+    if (planRes != SevenZipArchiveDecodeResult.Ok)
+      return planRes;
+
+    var result = new SevenZipListedEntry[plan.Length];
+    for (int i = 0; i < plan.Length; i++)
+    {
+      ExtractPlanEntry p = plan[i];
+      result[i] = new SevenZipListedEntry(
+          p.Name,
+          p.Kind == ExtractEntryKind.Directory,
+          p.Kind == ExtractEntryKind.DataFile ? p.Size : 0);
+    }
+
+    entries = result;
+    return SevenZipArchiveDecodeResult.Ok;
+  }
+
   internal enum ExtractEntryKind
   {
     Directory,

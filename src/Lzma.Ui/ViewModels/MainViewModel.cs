@@ -33,6 +33,10 @@ public sealed class MainViewModel : ObservableObject
   private byte[]? _archiveBytes;
   private string? _archivePassword;
 
+  // Путь к открытому «большому» архиву (обзор без загрузки в память); null — открыт in-memory либо
+  // архив не открыт. Если задан — извлечение идёт потоковым путём из файла.
+  private string? _archivePath;
+
   // Узел виртуального дерева содержимого архива.
   private sealed class Node(string name, bool isDirectory, Node? parent)
   {
@@ -108,6 +112,7 @@ public sealed class MainViewModel : ObservableObject
     _sourceFolderPicker = sourceFolderPicker;
     _current = _root;
     OpenCommand = new AsyncRelayCommand(OpenAsync);
+    OpenArchiveFileCommand = new AsyncRelayCommand(OpenArchiveFileAsync, () => !IsOperating, this);
     NavigateUpCommand = new RelayCommand(NavigateUp, () => CanGoUp, this);
     ExtractAllCommand = new AsyncRelayCommand(ExtractAllAsync, () => HasArchive && !IsOperating, this);
     ExtractArchiveFileCommand = new AsyncRelayCommand(ExtractArchiveFileAsync, () => !IsOperating, this);
@@ -250,6 +255,12 @@ public sealed class MainViewModel : ObservableObject
 
   /// <summary>Команда «Вверх» (на уровень выше по дереву архива).</summary>
   public RelayCommand NavigateUpCommand { get; }
+
+  /// <summary>
+  /// Команда «Открыть большой архив…» — обзор содержимого .7z по пути БЕЗ загрузки в память
+  /// (для архивов больше 2 ГиБ). Извлечение потом идёт потоковым путём из файла.
+  /// </summary>
+  public AsyncRelayCommand OpenArchiveFileCommand { get; }
 
   /// <summary>Команда «Извлечь всё» — распаковать содержимое архива в выбранную папку.</summary>
   public AsyncRelayCommand ExtractAllCommand { get; }
@@ -424,6 +435,38 @@ public sealed class MainViewModel : ObservableObject
     }
   }
 
+  // Обзор БОЛЬШОГО архива по пути: читаем только листинг (без распаковки и без загрузки в память).
+  private async Task OpenArchiveFileAsync()
+  {
+    string? archivePath = await _picker.PickArchivePathAsync();
+
+    if (archivePath is null)
+      return; // выбор отменён / нет локального пути
+
+    ArchiveListOutcome outcome = await _archiveService.OpenFromFileAsync(archivePath);
+
+    if (outcome.Result == SevenZipArchiveDecodeResult.Ok)
+    {
+      _root = BuildTree(outcome.Entries);
+      _current = _root;
+      RefreshView();
+
+      HasArchive = true;
+      Title = $"{System.IO.Path.GetFileName(archivePath)} — LzmaSharp";
+      _archiveBytes = null;
+      _archivePassword = null;
+      _archivePath = archivePath; // источник для потокового извлечения
+      StatusMessage = outcome.Entries.Length == 0 ? "Архив пуст." : null;
+      return;
+    }
+
+    ResetTree();
+    StatusMessage = outcome.Result == SevenZipArchiveDecodeResult.NotSupported
+        ? "Этот архив нельзя открыть потоково (например, шифрование, закодированный заголовок или "
+          + "сложные фильтры). Небольшой архив попробуйте через «Открыть…»."
+        : "Не удалось открыть архив: файл повреждён или не является поддерживаемым 7z-архивом.";
+  }
+
   // Дополняет сообщение об ошибке списком методов архива (что именно не поддержано).
   private async Task AppendDiagnosticsAsync(byte[] bytes, string? password)
   {
@@ -437,12 +480,13 @@ public sealed class MainViewModel : ObservableObject
   {
     _archiveBytes = bytes;
     _archivePassword = password;
+    _archivePath = null; // in-memory открытие — потоковый источник не используем
   }
 
   // Извлечение содержимого открытого архива в выбранную папку.
   private async Task ExtractAllAsync()
   {
-    if (_archiveBytes is null)
+    if (_archivePath is null && _archiveBytes is null)
       return;
 
     string? destination = await _folderPicker.PickFolderAsync();
@@ -450,23 +494,35 @@ public sealed class MainViewModel : ObservableObject
     if (destination is null)
       return; // выбор папки отменён
 
-    byte[] bytes = _archiveBytes;
-    string? password = _archivePassword;
-
     IProgress<SevenZipProgress> progress = CreateProgress();
+
+    // Открыт как «большой» (потоковый) архив — извлекаем прямо из файла, не грузя в память.
+    if (_archivePath is { } archivePath)
+    {
+      await RunOperationAsync(async token =>
+      {
+        SevenZipArchiveDecodeResult result = await _archiveService.ExtractArchiveFileAsync(archivePath, destination, progress, token);
+        StatusMessage = ExtractStatus(result, destination);
+      });
+      return;
+    }
+
+    byte[] bytes = _archiveBytes!;
+    string? password = _archivePassword;
 
     await RunOperationAsync(async token =>
     {
       SevenZipArchiveDecodeResult result = await _archiveService.ExtractAllAsync(bytes, password, destination, progress, token);
-
-      StatusMessage = result switch
-      {
-        SevenZipArchiveDecodeResult.Ok => $"Извлечено в: {destination}",
-        SevenZipArchiveDecodeResult.NotSupported => "Извлечение не поддерживается для этого архива.",
-        _ => "Не удалось извлечь: ошибка данных или файл уже существует.",
-      };
+      StatusMessage = ExtractStatus(result, destination);
     });
   }
+
+  private static string ExtractStatus(SevenZipArchiveDecodeResult result, string destination) => result switch
+  {
+    SevenZipArchiveDecodeResult.Ok => $"Извлечено в: {destination}",
+    SevenZipArchiveDecodeResult.NotSupported => "Извлечение не поддерживается для этого архива.",
+    _ => "Не удалось извлечь: ошибка данных или файл уже существует.",
+  };
 
   // Прямое потоковое извлечение архива с диска (без открытия/обзора) — для архивов > 2 ГиБ.
   private async Task ExtractArchiveFileAsync()
@@ -870,14 +926,22 @@ public sealed class MainViewModel : ObservableObject
           + "Такой архив можно открыть в 7-Zip.";
   }
 
-  // Строит виртуальное дерево из путей записей (папки выводятся и из путей файлов).
+  // Строит виртуальное дерево из декодированных записей (in-memory открытие).
   private static Node BuildTree(IEnumerable<SevenZipDecodedEntry> entries)
+      => BuildTreeCore(entries.Select(e => (e.Name, e.IsDirectory, e.Bytes.LongLength)));
+
+  // Строит виртуальное дерево из листинга (обзор большого архива без распаковки).
+  private static Node BuildTree(IEnumerable<SevenZipListedEntry> entries)
+      => BuildTreeCore(entries.Select(e => (e.Name, e.IsDirectory, e.Size)));
+
+  // Общее построение дерева из (имя, признак каталога, размер). Папки выводятся и из путей файлов.
+  private static Node BuildTreeCore(IEnumerable<(string Name, bool IsDirectory, long Size)> items)
   {
     var root = new Node(string.Empty, isDirectory: true, parent: null);
 
-    foreach (SevenZipDecodedEntry entry in entries)
+    foreach ((string name, bool isDirectory, long size) in items)
     {
-      string[] parts = entry.Name
+      string[] parts = name
           .Replace('\\', '/')
           .Split('/', StringSplitOptions.RemoveEmptyEntries);
 
@@ -889,7 +953,7 @@ public sealed class MainViewModel : ObservableObject
       for (int i = 0; i < parts.Length; i++)
       {
         bool isLast = i == parts.Length - 1;
-        bool isFile = isLast && !entry.IsDirectory;
+        bool isFile = isLast && !isDirectory;
 
         if (!node.Children.TryGetValue(parts[i], out Node? child))
         {
@@ -898,7 +962,7 @@ public sealed class MainViewModel : ObservableObject
         }
 
         if (isFile)
-          child.Size = entry.Bytes.LongLength;
+          child.Size = size;
 
         node = child;
       }
@@ -917,6 +981,7 @@ public sealed class MainViewModel : ObservableObject
     Title = DefaultTitle;
     _archiveBytes = null;
     _archivePassword = null;
+    _archivePath = null;
   }
 
   // Пересобирает список текущей папки и навигационное состояние.
