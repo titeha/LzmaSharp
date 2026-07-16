@@ -14,6 +14,7 @@ public sealed record CompressionMethodOption(SevenZipWriterCompressionMethod Met
     SevenZipWriterCompressionMethod.Ppmd => new(method, "PPMd — плотнее на тексте"),
     SevenZipWriterCompressionMethod.Auto => new(method, "Авто — выбор по содержимому"),
     SevenZipWriterCompressionMethod.Bcj2 => new(method, "BCJ2 — для .exe/.dll"),
+    SevenZipWriterCompressionMethod.Aes => new(method, "AES — шифрование паролем"),
     SevenZipWriterCompressionMethod.Copy => new(method, "Без сжатия (Copy)"),
     _ => new(method, method.ToString()),
   };

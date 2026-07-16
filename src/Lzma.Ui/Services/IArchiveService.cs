@@ -88,7 +88,8 @@ public interface IArchiveService
       IProgress<SevenZipProgress>? progress = null,
       CancellationToken token = default,
       IProgress<SevenZipCompressionFileProgress>? currentFile = null,
-      long volumeSize = 0)
+      long volumeSize = 0,
+      string? password = null)
       => Task.FromResult(SevenZipArchiveWriteResult.NotSupported);
 
   /// <summary>

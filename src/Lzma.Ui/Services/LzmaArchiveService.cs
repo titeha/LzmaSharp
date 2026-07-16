@@ -83,7 +83,8 @@ public sealed class LzmaArchiveService : IArchiveService
       System.IProgress<SevenZipProgress>? progress = null,
       System.Threading.CancellationToken token = default,
       System.IProgress<SevenZipCompressionFileProgress>? currentFile = null,
-      long volumeSize = 0)
+      long volumeSize = 0,
+      string? password = null)
   {
     return Task.Run(() =>
     {
@@ -105,6 +106,8 @@ public sealed class LzmaArchiveService : IArchiveService
               SevenZipArchiveWriter.BuildAutoArchiveToStream(entries, output, dictionarySize, progress, token, currentFile),
           SevenZipWriterCompressionMethod.Bcj2 =>
               SevenZipArchiveWriter.BuildBcj2ArchiveToStream(entries, output, progress, token, currentFile),
+          SevenZipWriterCompressionMethod.Aes =>
+              BuildAesToStream(entries, output, password, dictionarySize, progress, token, currentFile),
           SevenZipWriterCompressionMethod.Ppmd =>
               SevenZipArchiveWriter.BuildPpmdArchiveToStream(entries, output, progress, token, currentFile),
           SevenZipWriterCompressionMethod.Copy =>
@@ -186,6 +189,31 @@ public sealed class LzmaArchiveService : IArchiveService
       SevenZipArchiveInspector.TryDescribeMethods(bytes, password, out string description);
       return description ?? string.Empty;
     });
+  }
+
+  // Потоковое AES-создание: строит опции из пароля и гарантированно освобождает пароль.
+  private static SevenZipArchiveWriteResult BuildAesToStream(
+      IReadOnlyList<SevenZipStreamingEntry> entries,
+      System.IO.Stream output,
+      string? password,
+      int dictionarySize,
+      System.IProgress<SevenZipProgress>? progress,
+      System.Threading.CancellationToken token,
+      System.IProgress<SevenZipCompressionFileProgress>? currentFile)
+  {
+    if (password is null)
+      return SevenZipArchiveWriteResult.InvalidData;
+
+    SevenZipPassword sevenZipPassword = SevenZipPassword.FromString(password);
+    try
+    {
+      var options = new SevenZipAesEncryptionOptions { Password = sevenZipPassword, CompressWithLzma2 = true };
+      return SevenZipArchiveWriter.BuildAesArchiveToStream(entries, output, options, dictionarySize, progress, token, currentFile);
+    }
+    finally
+    {
+      sevenZipPassword.Dispose();
+    }
   }
 
   // Открывает архив на чтение: если путь — первый том (.001 рядом), склеивает тома

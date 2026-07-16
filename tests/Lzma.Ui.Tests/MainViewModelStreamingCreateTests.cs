@@ -154,11 +154,87 @@ public sealed class MainViewModelStreamingCreateTests
     }
   }
 
+  private sealed class StubCreatePasswordPrompt(string? password) : ICreatePasswordPrompt
+  {
+    public int Calls;
+    public Task<string?> RequestNewPasswordAsync() { Calls++; return Task.FromResult(password); }
+  }
+
   [Fact]
   public void СписокМетодов_СодержитBcj2()
   {
     var vm = new MainViewModel(new StubArchivePicker(), new NullPasswordPrompt(), new StubFolderPicker());
     Assert.Contains(vm.CompressionMethods, m => m.Method == SevenZipWriterCompressionMethod.Bcj2);
+  }
+
+  [Fact]
+  public void СписокМетодов_СодержитAes()
+  {
+    var vm = new MainViewModel(new StubArchivePicker(), new NullPasswordPrompt(), new StubFolderPicker());
+    Assert.Contains(vm.CompressionMethods, m => m.Method == SevenZipWriterCompressionMethod.Aes);
+  }
+
+  [Fact]
+  public async Task ПотоковоеСоздание_Aes_ШифруетИРаспаковываетсяСПаролем()
+  {
+    byte[] data = Encoding.UTF8.GetBytes(string.Concat(System.Linq.Enumerable.Repeat("секретные данные ", 400)));
+    string dir = Path.Combine(Path.GetTempPath(), "LzmaUiAes", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(dir);
+    string outPath = Path.Combine(dir, "out.7z");
+
+    try
+    {
+      var refs = new List<PickedFileRef> { new("secret.txt", data.LongLength, () => new MemoryStream(data)) };
+      var promptStub = new StubCreatePasswordPrompt("p@ssw0rd");
+
+      var vm = new MainViewModel(
+          new StubArchivePicker(), new NullPasswordPrompt(), new StubFolderPicker(),
+          new LzmaArchiveService(), new RefsSourceFilesPicker(refs), new StubSaveFilePicker(outPath),
+          sourceFolderPicker: null, createPasswordPrompt: promptStub)
+      {
+        SelectedCompressionMethod = SevenZipWriterCompressionMethod.Aes,
+      };
+
+      await vm.CreateCommand.ExecuteAsync();
+
+      Assert.Equal(1, promptStub.Calls);
+      Assert.True(File.Exists(outPath));
+
+      byte[] archive = File.ReadAllBytes(outPath);
+      var options = SevenZipDecodeOptions.WithPassword(SevenZipPassword.FromString("p@ssw0rd"));
+      Assert.Equal(SevenZipArchiveDecodeResult.Ok,
+          SevenZipArchiveDecoder.DecodeToEntries(archive, options, out SevenZipDecodedEntry[] entries));
+      Assert.Equal(data, Assert.Single(entries).Bytes);
+    }
+    finally { try { Directory.Delete(dir, recursive: true); } catch { } }
+  }
+
+  [Fact]
+  public async Task ПотоковоеСоздание_Aes_ОтменаПароля_НеСоздаёт()
+  {
+    byte[] data = Encoding.UTF8.GetBytes("данные");
+    string dir = Path.Combine(Path.GetTempPath(), "LzmaUiAesCancel", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(dir);
+    string outPath = Path.Combine(dir, "out.7z");
+
+    try
+    {
+      var refs = new List<PickedFileRef> { new("f.txt", data.LongLength, () => new MemoryStream(data)) };
+
+      var vm = new MainViewModel(
+          new StubArchivePicker(), new NullPasswordPrompt(), new StubFolderPicker(),
+          new LzmaArchiveService(), new RefsSourceFilesPicker(refs), new StubSaveFilePicker(outPath),
+          sourceFolderPicker: null, createPasswordPrompt: new StubCreatePasswordPrompt(null)) // отмена
+      {
+        SelectedCompressionMethod = SevenZipWriterCompressionMethod.Aes,
+      };
+
+      await vm.CreateCommand.ExecuteAsync();
+
+      Assert.False(File.Exists(outPath));
+      Assert.Contains("отменено", vm.StatusMessage);
+    }
+    finally { try { Directory.Delete(dir, recursive: true); } catch { } }
   }
 
   [Fact]

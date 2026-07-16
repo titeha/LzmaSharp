@@ -62,7 +62,8 @@ public sealed class MainViewModelCompressionSettingsTests
     public Task<SevenZipArchiveWriteResult> CreateArchiveToFileAsync(
         IReadOnlyList<SevenZipStreamingEntry> entries, string destinationPath, SevenZipWriterCompressionMethod method,
         int dictionarySize, int maxDegreeOfParallelism = 0, IProgress<SevenZipProgress>? progress = null,
-        CancellationToken token = default, IProgress<SevenZipCompressionFileProgress>? currentFile = null, long volumeSize = 0)
+        CancellationToken token = default, IProgress<SevenZipCompressionFileProgress>? currentFile = null, long volumeSize = 0,
+        string? password = null)
     {
       CapturedMethod = method;
       CapturedDict = dictionarySize;
@@ -96,7 +97,8 @@ public sealed class MainViewModelCompressionSettingsTests
     public Task<SevenZipArchiveWriteResult> CreateArchiveToFileAsync(
         IReadOnlyList<SevenZipStreamingEntry> entries, string destinationPath, SevenZipWriterCompressionMethod method,
         int dictionarySize, int maxDegreeOfParallelism = 0, IProgress<SevenZipProgress>? progress = null,
-        CancellationToken token = default, IProgress<SevenZipCompressionFileProgress>? currentFile = null, long volumeSize = 0)
+        CancellationToken token = default, IProgress<SevenZipCompressionFileProgress>? currentFile = null, long volumeSize = 0,
+        string? password = null)
     {
       // Синхронный репорт кодеков (как в ядре — до возврата), чтобы VM набрал точные счётчики.
       for (int i = 0; i < codecs.Length; i++)

@@ -28,6 +28,7 @@ public sealed class MainViewModel : ObservableObject
   private readonly ISourceFilesPicker? _sourceFilesPicker;
   private readonly ISourceFolderPicker? _sourceFolderPicker;
   private readonly ISaveFilePicker? _saveFilePicker;
+  private readonly ICreatePasswordPrompt? _createPasswordPrompt;
 
   // Байты и пароль успешно открытого архива — нужны для извлечения без повторного открытия.
   private byte[]? _archiveBytes;
@@ -102,7 +103,8 @@ public sealed class MainViewModel : ObservableObject
       IArchiveService archiveService,
       ISourceFilesPicker? sourceFilesPicker,
       ISaveFilePicker? saveFilePicker,
-      ISourceFolderPicker? sourceFolderPicker)
+      ISourceFolderPicker? sourceFolderPicker,
+      ICreatePasswordPrompt? createPasswordPrompt = null)
   {
     _picker = picker;
     _passwordPrompt = passwordPrompt;
@@ -111,6 +113,7 @@ public sealed class MainViewModel : ObservableObject
     _sourceFilesPicker = sourceFilesPicker;
     _saveFilePicker = saveFilePicker;
     _sourceFolderPicker = sourceFolderPicker;
+    _createPasswordPrompt = createPasswordPrompt;
     _current = _root;
     OpenCommand = new AsyncRelayCommand(OpenAsync);
     OpenArchiveFileCommand = new AsyncRelayCommand(OpenArchiveFileAsync, () => !IsOperating, this);
@@ -314,6 +317,7 @@ public sealed class MainViewModel : ObservableObject
       CompressionMethodOption.ForMethod(SevenZipWriterCompressionMethod.Ppmd),
       CompressionMethodOption.ForMethod(SevenZipWriterCompressionMethod.Auto),
       CompressionMethodOption.ForMethod(SevenZipWriterCompressionMethod.Bcj2),
+      CompressionMethodOption.ForMethod(SevenZipWriterCompressionMethod.Aes),
       CompressionMethodOption.ForMethod(SevenZipWriterCompressionMethod.Copy),
   ];
 
@@ -763,6 +767,18 @@ public sealed class MainViewModel : ObservableObject
     if (path is null)
       return;
 
+    // Для AES спрашиваем пароль (с подтверждением) ДО начала операции; отмена — не создаём.
+    string? password = null;
+    if (SelectedCompressionMethod == SevenZipWriterCompressionMethod.Aes)
+    {
+      password = _createPasswordPrompt is null ? null : await _createPasswordPrompt.RequestNewPasswordAsync();
+      if (password is null)
+      {
+        StatusMessage = "Создание отменено: для шифрования нужен пароль.";
+        return;
+      }
+    }
+
     IProgress<SevenZipProgress> progress = CreateProgress();
     // Метку кодека маршалим в UI (Progress), а счётчики кодеков считаем синхронно — ядро зовёт
     // Report в своём потоке ДО возврата, поэтому к моменту завершения create счётчики точны.
@@ -784,7 +800,7 @@ public sealed class MainViewModel : ObservableObject
       try
       {
         result = await _archiveService.CreateArchiveToFileAsync(
-            entries, path, SelectedCompressionMethod, SelectedDictionarySize, SelectedThreadCount, progress, token, currentFile, SelectedVolumeSize);
+            entries, path, SelectedCompressionMethod, SelectedDictionarySize, SelectedThreadCount, progress, token, currentFile, SelectedVolumeSize, password);
       }
       finally
       {
