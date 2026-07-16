@@ -577,10 +577,10 @@ public sealed class MainViewModel : ObservableObject
       await CreateFromSourceAsync(_sourceFolderPicker.PickFolderFilesAsync);
   }
 
-  // Потоковое создание доступно для LZMA2, если пикер умеет отдавать ссылки на файлы (без чтения
-  // в память) — так паковать можно и файлы > 2 ГиБ. Прочие методы идут прежним путём (в память).
+  // Потоковое создание доступно для ВСЕХ методов (LZMA2 многопоточно; PPMd/Copy — пофайлово), если
+  // пикер умеет отдавать ссылки на файлы (без чтения в память) — так паковать можно и файлы > 2 ГиБ.
   private bool UseStreamingCreate(bool pickerSupportsRefs)
-      => pickerSupportsRefs && SelectedCompressionMethod == SevenZipWriterCompressionMethod.Lzma2;
+      => pickerSupportsRefs;
 
   // Общий путь создания: получить источник → выбрать путь → собрать ядром → записать на диск.
   private async Task CreateFromSourceAsync(
@@ -716,7 +716,7 @@ public sealed class MainViewModel : ObservableObject
       }
 
       SevenZipArchiveWriteResult result = await _archiveService.CreateArchiveToFileAsync(
-          entries, path, SelectedDictionarySize, SelectedThreadCount, progress, token);
+          entries, path, SelectedCompressionMethod, SelectedDictionarySize, SelectedThreadCount, progress, token);
 
       if (result != SevenZipArchiveWriteResult.Ok)
       {

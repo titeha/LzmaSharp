@@ -76,6 +76,7 @@ public sealed class LzmaArchiveService : IArchiveService
   public Task<SevenZipArchiveWriteResult> CreateArchiveToFileAsync(
       IReadOnlyList<SevenZipStreamingEntry> entries,
       string destinationPath,
+      SevenZipWriterCompressionMethod method,
       int dictionarySize,
       int maxDegreeOfParallelism = 0,
       System.IProgress<SevenZipProgress>? progress = null,
@@ -89,8 +90,18 @@ public sealed class LzmaArchiveService : IArchiveService
         using var output = new System.IO.FileStream(
             destinationPath, System.IO.FileMode.Create, System.IO.FileAccess.ReadWrite);
 
-        return SevenZipArchiveWriter.BuildLzma2ArchiveToStream(
-            entries, output, dictionarySize, maxDegreeOfParallelism, progress, token);
+        // Диспетчер по методу: LZMA2/Auto — многопоточно; PPMd/Copy — пофайлово (PPMd последователен).
+        return method switch
+        {
+          SevenZipWriterCompressionMethod.Lzma2 or SevenZipWriterCompressionMethod.Auto =>
+              SevenZipArchiveWriter.BuildLzma2ArchiveToStream(
+                  entries, output, dictionarySize, maxDegreeOfParallelism, progress, token),
+          SevenZipWriterCompressionMethod.Ppmd =>
+              SevenZipArchiveWriter.BuildPpmdArchiveToStream(entries, output, progress, token),
+          SevenZipWriterCompressionMethod.Copy =>
+              SevenZipArchiveWriter.BuildCopyArchiveToStream(entries, output, progress, token),
+          _ => SevenZipArchiveWriteResult.NotSupported,
+        };
       }
       catch (System.IO.IOException)
       {

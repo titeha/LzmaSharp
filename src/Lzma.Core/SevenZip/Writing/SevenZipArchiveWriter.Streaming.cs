@@ -55,19 +55,9 @@ public static partial class SevenZipArchiveWriter
     if (!properties.TryGetDictionarySizeInt32(out int effectiveDictionarySize))
       return SevenZipArchiveWriteResult.NotSupported;
 
-    // Валидация записей: имя, корректный путь, отрицательная длина недопустима.
-    for (int i = 0; i < entries.Count; i++)
-    {
-      SevenZipStreamingEntry e = entries[i];
-      if (e is null || e.Name is null || e.Length < 0)
-        return SevenZipArchiveWriteResult.InvalidData;
-      if (!IsSupportedEntryPath(e.Name))
-        return SevenZipArchiveWriteResult.InvalidData;
-      if (e.IsDirectory && e.Length != 0)
-        return SevenZipArchiveWriteResult.InvalidData;
-      if (!e.IsDirectory && e.Length > 0 && e.OpenRead is null)
-        return SevenZipArchiveWriteResult.InvalidData;
-    }
+    SevenZipArchiveWriteResult validation = ValidateStreamingEntries(entries);
+    if (validation != SevenZipArchiveWriteResult.Ok)
+      return validation;
 
     var lzmaProperties = new LzmaProperties(3, 0, 2);
     byte[] coderBytes = [0x21, Lzma2MethodId, 0x01, properties.DictionaryProp];
@@ -188,8 +178,145 @@ public static partial class SevenZipArchiveWriter
       }
     }
 
-    // Синтетические entries для переиспользования FilesInfo-writer-ов: им нужен лишь признак
-    // «пустой поток» (Content.Length == 0), а не сами байты — маркер [0] делает файл непустым.
+    return FinalizeStreamingArchive(entries, output, startPos, coderBytes, packSizes, unpackSizes, crcs);
+  }
+
+  /// <summary>
+  /// ПОТОКОВОЕ создание архива методом, который сжимает КАЖДЫЙ файл целиком (PPMd, Copy): файл
+  /// читается в память (&lt;= 2 ГиБ) по одному, сжимается делегатом и пишется в <paramref name="output"/>
+  /// — не держим весь набор файлов в памяти. Последовательно (без параллелизма — для PPMd это
+  /// обязательно). <paramref name="coderBytes"/> — байты coder-а для next-header.
+  /// </summary>
+  private static SevenZipArchiveWriteResult BuildPerFileStreamingArchiveToStream(
+      IReadOnlyList<SevenZipStreamingEntry> entries,
+      Stream output,
+      byte[] coderBytes,
+      Func<byte[], byte[]> encodeFile,
+      IProgress<SevenZipProgress>? progress,
+      System.Threading.CancellationToken token)
+  {
+    ArgumentNullException.ThrowIfNull(entries);
+    ArgumentNullException.ThrowIfNull(output);
+
+    if (!output.CanWrite || !output.CanSeek)
+      return SevenZipArchiveWriteResult.NotSupported;
+
+    SevenZipArchiveWriteResult validation = ValidateStreamingEntries(entries);
+    if (validation != SevenZipArchiveWriteResult.Ok)
+      return validation;
+
+    long startPos = output.Position;
+    output.Write(new byte[SevenZipSignatureHeader.Size]);
+
+    int count = 0;
+    long totalContent = 0;
+    for (int i = 0; i < entries.Count; i++)
+      if (IsStreamingDataEntry(entries[i]))
+      {
+        count++;
+        totalContent += entries[i].Length;
+      }
+
+    var packSizes = new ulong[count];
+    var unpackSizes = new ulong[count];
+    var crcs = new uint[count];
+
+    progress?.Report(new SevenZipProgress(0, totalContent));
+    long processed = 0;
+    int streamIndex = 0;
+
+    for (int i = 0; i < entries.Count; i++)
+    {
+      SevenZipStreamingEntry entry = entries[i];
+      if (!IsStreamingDataEntry(entry))
+        continue;
+
+      token.ThrowIfCancellationRequested();
+
+      // Пофайловое сжатие держит файл в памяти целиком — > 2 ГиБ на файл пока не поддерживаем.
+      if (entry.Length > int.MaxValue)
+        return SevenZipArchiveWriteResult.NotSupported;
+
+      byte[] data = ReadExactlyToArray(entry.OpenRead(), (int)entry.Length);
+      uint crc = Crc32.Compute(data);
+      byte[] packed = encodeFile(data);
+
+      output.Write(packed, 0, packed.Length);
+      packSizes[streamIndex] = (ulong)packed.Length;
+      unpackSizes[streamIndex] = (ulong)entry.Length;
+      crcs[streamIndex] = crc;
+      streamIndex++;
+
+      processed += entry.Length;
+      progress?.Report(new SevenZipProgress(processed, totalContent));
+    }
+
+    return FinalizeStreamingArchive(entries, output, startPos, coderBytes, packSizes, unpackSizes, crcs);
+  }
+
+  /// <summary>Потоковое создание PPMd-архива (пофайлово, без загрузки всего набора в память).</summary>
+  public static SevenZipArchiveWriteResult BuildPpmdArchiveToStream(
+      IReadOnlyList<SevenZipStreamingEntry> entries,
+      Stream output,
+      IProgress<SevenZipProgress>? progress = null,
+      System.Threading.CancellationToken token = default)
+  {
+    byte[] coderBytes =
+    [
+        0x23,
+        0x03, 0x04, 0x01,
+        0x05,
+        (byte)PpmdOrder,
+        (byte)(PpmdMemSize & 0xFF),
+        (byte)((PpmdMemSize >> 8) & 0xFF),
+        (byte)((PpmdMemSize >> 16) & 0xFF),
+        (byte)((PpmdMemSize >> 24) & 0xFF),
+    ];
+
+    return BuildPerFileStreamingArchiveToStream(entries, output, coderBytes, EncodePpmd, progress, token);
+  }
+
+  /// <summary>Потоковое создание Copy-архива (без сжатия; пофайлово, не держим весь набор в памяти).</summary>
+  public static SevenZipArchiveWriteResult BuildCopyArchiveToStream(
+      IReadOnlyList<SevenZipStreamingEntry> entries,
+      Stream output,
+      IProgress<SevenZipProgress>? progress = null,
+      System.Threading.CancellationToken token = default)
+  {
+    // Copy coder: flags = idSize(1) | без атрибутов = 0x01, method id = 0x00.
+    byte[] coderBytes = [0x01, 0x00];
+    return BuildPerFileStreamingArchiveToStream(entries, output, coderBytes, static data => data, progress, token);
+  }
+
+  // Общая валидация записей потокового создания.
+  private static SevenZipArchiveWriteResult ValidateStreamingEntries(IReadOnlyList<SevenZipStreamingEntry> entries)
+  {
+    for (int i = 0; i < entries.Count; i++)
+    {
+      SevenZipStreamingEntry e = entries[i];
+      if (e is null || e.Name is null || e.Length < 0)
+        return SevenZipArchiveWriteResult.InvalidData;
+      if (!IsSupportedEntryPath(e.Name))
+        return SevenZipArchiveWriteResult.InvalidData;
+      if (e.IsDirectory && e.Length != 0)
+        return SevenZipArchiveWriteResult.InvalidData;
+      if (!e.IsDirectory && e.Length > 0 && e.OpenRead is null)
+        return SevenZipArchiveWriteResult.InvalidData;
+    }
+
+    return SevenZipArchiveWriteResult.Ok;
+  }
+
+  // Общая финализация: синтетические entries для FilesInfo + next-header + патч сигнатуры.
+  private static SevenZipArchiveWriteResult FinalizeStreamingArchive(
+      IReadOnlyList<SevenZipStreamingEntry> entries,
+      Stream output,
+      long startPos,
+      byte[] coderBytes,
+      ulong[] packSizes,
+      ulong[] unpackSizes,
+      uint[] crcs)
+  {
     var synthetic = new SevenZipArchiveWriterEntry[entries.Count];
     for (int i = 0; i < entries.Count; i++)
     {
@@ -206,7 +333,6 @@ public static partial class SevenZipArchiveWriter
 
     output.Write(nextHeaderBytes);
 
-    // Патчим сигнатуру.
     uint nextHeaderCrc = Crc32.Compute(nextHeaderBytes);
     var signature = new SevenZipSignatureHeader(
         NextHeaderOffset: (ulong)nextHeaderOffset,

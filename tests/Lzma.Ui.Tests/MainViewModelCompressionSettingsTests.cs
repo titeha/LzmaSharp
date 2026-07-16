@@ -50,6 +50,7 @@ public sealed class MainViewModelCompressionSettingsTests
   {
     public int CapturedDict = -1;
     public int CapturedDop = -1;
+    public SevenZipWriterCompressionMethod CapturedMethod = (SevenZipWriterCompressionMethod)(-1);
 
     public Task<ArchiveOpenOutcome> OpenAsync(byte[] b, string? p) => Task.FromResult(new ArchiveOpenOutcome(SevenZipArchiveDecodeResult.Ok, []));
     public Task<SevenZipArchiveDecodeResult> ExtractAllAsync(byte[] b, string? p, string d, IProgress<SevenZipProgress>? pr = null, CancellationToken t = default) => Task.FromResult(SevenZipArchiveDecodeResult.Ok);
@@ -58,9 +59,10 @@ public sealed class MainViewModelCompressionSettingsTests
     public Task<string> DescribeMethodsAsync(byte[] b, string? p) => Task.FromResult(string.Empty);
 
     public Task<SevenZipArchiveWriteResult> CreateArchiveToFileAsync(
-        IReadOnlyList<SevenZipStreamingEntry> entries, string destinationPath, int dictionarySize,
-        int maxDegreeOfParallelism = 0, IProgress<SevenZipProgress>? progress = null, CancellationToken token = default)
+        IReadOnlyList<SevenZipStreamingEntry> entries, string destinationPath, SevenZipWriterCompressionMethod method,
+        int dictionarySize, int maxDegreeOfParallelism = 0, IProgress<SevenZipProgress>? progress = null, CancellationToken token = default)
     {
+      CapturedMethod = method;
       CapturedDict = dictionarySize;
       CapturedDop = maxDegreeOfParallelism;
       return Task.FromResult(SevenZipArchiveWriteResult.Ok);

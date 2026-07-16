@@ -81,6 +81,7 @@ public interface IArchiveService
   Task<SevenZipArchiveWriteResult> CreateArchiveToFileAsync(
       IReadOnlyList<SevenZipStreamingEntry> entries,
       string destinationPath,
+      SevenZipWriterCompressionMethod method,
       int dictionarySize,
       int maxDegreeOfParallelism = 0,
       IProgress<SevenZipProgress>? progress = null,

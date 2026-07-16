@@ -113,16 +113,18 @@ public sealed class MainViewModelStreamingCreateTests
   }
 
   [Fact]
-  public async Task НеLZMA2_ПотоковыйПуть_НеИспользуется()
+  public async Task Copy_ТожеИдётПотоковымПутём_БезЧтенияВПамять()
   {
-    // Для не-LZMA2 метода должен идти байтовый путь (RefsSourceFilesPicker.PickFilesAsync бросает),
-    // поэтому выбор Copy приведёт к вызову байтового пикера → исключение подтверждает ветвление.
+    // Теперь ПОТОКОВЫЙ путь используется для ВСЕХ методов (не только LZMA2): для Copy тоже берётся
+    // ref-пикер (PickFileRefsAsync), а не байтовый (PickFilesAsync бросил бы) — и архив создаётся.
+    byte[] a = System.Text.Encoding.UTF8.GetBytes("copy поток");
     string dir = Path.Combine(Path.GetTempPath(), "LzmaUiStreamingCreate2", Guid.NewGuid().ToString("N"));
     Directory.CreateDirectory(dir);
+    string outPath = Path.Combine(dir, "out.7z");
 
     try
     {
-      var refs = new List<PickedFileRef> { new("a.txt", 3, () => new MemoryStream([1, 2, 3])) };
+      var refs = new List<PickedFileRef> { new("a.txt", a.LongLength, () => new MemoryStream(a)) };
 
       var vm = new MainViewModel(
           new StubArchivePicker(),
@@ -130,12 +132,19 @@ public sealed class MainViewModelStreamingCreateTests
           new StubFolderPicker(),
           new LzmaArchiveService(),
           new RefsSourceFilesPicker(refs),
-          new StubSaveFilePicker(Path.Combine(dir, "out.7z")))
+          new StubSaveFilePicker(outPath))
       {
         SelectedCompressionMethod = SevenZipWriterCompressionMethod.Copy,
       };
 
-      await Assert.ThrowsAsync<InvalidOperationException>(() => vm.CreateCommand.ExecuteAsync());
+      await vm.CreateCommand.ExecuteAsync(); // не должно бросить (PickFilesAsync не вызывается)
+
+      Assert.True(File.Exists(outPath));
+      byte[] archive = File.ReadAllBytes(outPath);
+      Assert.Equal(SevenZipArchiveDecodeResult.Ok,
+          SevenZipArchiveDecoder.DecodeToEntries(archive, out SevenZipDecodedEntry[] entries));
+      Assert.Single(entries);
+      Assert.Equal(a, entries[0].Bytes);
     }
     finally
     {
