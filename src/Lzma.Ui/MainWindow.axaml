@@ -64,39 +64,51 @@
                 <Button Content="Извлечь архив с диска…" Command="{Binding ExtractArchiveFileCommand}"
                         ToolTip.Tip="Извлечь .7z прямо с диска потоком, без загрузки в память (для архивов больше 2 ГиБ)" />
                 <Button Content="Вверх" Command="{Binding NavigateUpCommand}" />
-                <ProgressBar Minimum="0" Maximum="100" Value="{Binding ProgressPercent}"
-                             Width="120" VerticalAlignment="Center"
-                             IsVisible="{Binding IsBusy}" />
-                <TextBlock Text="{Binding ProgressPercent, StringFormat='{}{0:0}%'}"
-                           VerticalAlignment="Center" Foreground="Gray" Width="38"
-                           IsVisible="{Binding IsBusy}" />
-                <TextBlock Text="{Binding ProgressText}" VerticalAlignment="Center"
-                           Foreground="Gray" IsVisible="{Binding IsBusy}" />
-                <TextBlock Text="{Binding ProgressEta}" VerticalAlignment="Center"
-                           Foreground="Gray" IsVisible="{Binding IsBusy}" />
-                <!-- Имя файла, сжимаемого прямо сейчас (как в 7-Zip). -->
-                <TextBlock Text="{Binding CurrentFileStatus}" VerticalAlignment="Center"
-                           Foreground="Gray" TextTrimming="CharacterEllipsis" MaxWidth="260"
-                           IsVisible="{Binding CurrentFileStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                <Button Content="Отмена" Command="{Binding CancelCommand}"
-                        VerticalAlignment="Center" IsVisible="{Binding IsCancelVisible}" />
-                <!-- Живой счётчик на фазе сканирования/чтения файлов (до сжатия). -->
-                <ProgressBar IsIndeterminate="True" Width="120" VerticalAlignment="Center"
-                             IsVisible="{Binding IsScanning}" />
-                <TextBlock Text="{Binding ScanStatus}" VerticalAlignment="Center"
-                           Foreground="Gray" IsVisible="{Binding IsScanning}" />
                 <TextBlock Text="{Binding CurrentPath}" VerticalAlignment="Center"
                            Foreground="Gray" TextTrimming="CharacterEllipsis"
                            IsVisible="{Binding !IsBusy}" />
             </StackPanel>
         </Border>
 
-        <!-- Статусная строка (выделяемая — можно скопировать диагностику) -->
-        <Border DockPanel.Dock="Bottom" Padding="8,6" MaxHeight="120"
-                IsVisible="{Binding StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                <SelectableTextBlock Text="{Binding StatusMessage}" TextWrapping="Wrap" Foreground="Gray" />
-            </ScrollViewer>
+        <!-- Нижняя панель: строка прогресса (градусник/проценты/счётчик/текущий файл/ETA/отмена)
+             и статусная строка (выделяемая — можно скопировать диагностику). -->
+        <Border DockPanel.Dock="Bottom" Padding="8,6" BorderThickness="0,1,0,0"
+                BorderBrush="{DynamicResource ThemeBorderMidBrush}"
+                IsVisible="{Binding IsBottomBarVisible}">
+            <StackPanel Spacing="6">
+
+                <!-- Прогресс/скан: видна во время операции или сканирования. -->
+                <WrapPanel IsVisible="{Binding IsCancelVisible}">
+                    <ProgressBar Minimum="0" Maximum="100" Value="{Binding ProgressPercent}"
+                                 Width="180" Height="16" VerticalAlignment="Center" Margin="0,0,8,0"
+                                 IsVisible="{Binding IsBusy}" />
+                    <TextBlock Text="{Binding ProgressPercent, StringFormat='{}{0:0}%'}"
+                               VerticalAlignment="Center" Foreground="Gray" Width="40" Margin="0,0,8,0"
+                               IsVisible="{Binding IsBusy}" />
+                    <TextBlock Text="{Binding ProgressText}" VerticalAlignment="Center" Margin="0,0,8,0"
+                               Foreground="Gray" IsVisible="{Binding IsBusy}" />
+                    <TextBlock Text="{Binding ProgressEta}" VerticalAlignment="Center" Margin="0,0,8,0"
+                               Foreground="Gray" IsVisible="{Binding IsBusy}" />
+                    <!-- Имя файла, сжимаемого/извлекаемого прямо сейчас (как в 7-Zip). -->
+                    <TextBlock Text="{Binding CurrentFileStatus}" VerticalAlignment="Center" Margin="0,0,8,0"
+                               Foreground="Gray" TextTrimming="CharacterEllipsis" MaxWidth="420"
+                               IsVisible="{Binding CurrentFileStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                    <!-- Живой счётчик на фазе сканирования/чтения файлов (до сжатия). -->
+                    <ProgressBar IsIndeterminate="True" Width="180" Height="16" VerticalAlignment="Center" Margin="0,0,8,0"
+                                 IsVisible="{Binding IsScanning}" />
+                    <TextBlock Text="{Binding ScanStatus}" VerticalAlignment="Center" Margin="0,0,8,0"
+                               Foreground="Gray" IsVisible="{Binding IsScanning}" />
+                    <Button Content="Отмена" Command="{Binding CancelCommand}"
+                            VerticalAlignment="Center" IsVisible="{Binding IsCancelVisible}" />
+                </WrapPanel>
+
+                <!-- Статус (итоги/диагностика). -->
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" MaxHeight="120"
+                              IsVisible="{Binding StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                    <SelectableTextBlock Text="{Binding StatusMessage}" TextWrapping="Wrap" Foreground="Gray" />
+                </ScrollViewer>
+
+            </StackPanel>
         </Border>
 
         <!-- Содержимое -->

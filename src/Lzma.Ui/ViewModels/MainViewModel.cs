@@ -133,7 +133,11 @@ public sealed class MainViewModel : ObservableObject
   public string? StatusMessage
   {
     get => _statusMessage;
-    set => Set(ref _statusMessage, value);
+    set
+    {
+      if (Set(ref _statusMessage, value))
+        OnPropertyChanged(nameof(IsBottomBarVisible));
+    }
   }
 
   /// <summary>Открыт ли архив (есть содержимое для показа).</summary>
@@ -167,7 +171,10 @@ public sealed class MainViewModel : ObservableObject
     set
     {
       if (Set(ref _isBusy, value))
+      {
         OnPropertyChanged(nameof(IsCancelVisible));
+        OnPropertyChanged(nameof(IsBottomBarVisible));
+      }
     }
   }
 
@@ -222,7 +229,10 @@ public sealed class MainViewModel : ObservableObject
     private set
     {
       if (Set(ref _isScanning, value))
+      {
         OnPropertyChanged(nameof(IsCancelVisible));
+        OnPropertyChanged(nameof(IsBottomBarVisible));
+      }
     }
   }
 
@@ -231,6 +241,12 @@ public sealed class MainViewModel : ObservableObject
   /// и на фазе сканирования исходных файлов (<see cref="IsScanning"/>).
   /// </summary>
   public bool IsCancelVisible => IsBusy || IsScanning;
+
+  /// <summary>
+  /// Видима ли нижняя панель: во время операции/сканирования (строка прогресса) либо когда есть
+  /// статусное сообщение. Пусто — панель скрыта, чтобы не занимать место.
+  /// </summary>
+  public bool IsBottomBarVisible => IsCancelVisible || !string.IsNullOrEmpty(StatusMessage);
 
   /// <summary>
   /// Живой текст счётчика сканирования («Сканирование: N файлов, X МБ»);

@@ -81,6 +81,31 @@ public sealed class MainViewModelCompressionSettingsTests
   }
 
   [Fact]
+  public void НижняяПанель_СкрытаБезОперацииИСтатуса_ВидимаПриСтатусе()
+  {
+    var vm = new MainViewModel(new StubArchivePicker(), new NullPasswordPrompt(), new StubFolderPicker());
+
+    // Ничего не идёт и статуса нет — панель скрыта (не занимает место).
+    Assert.False(vm.IsBottomBarVisible);
+
+    bool raised = false;
+    vm.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(vm.IsBottomBarVisible)) raised = true; };
+
+    // Появился статус — панель видима, и об изменении видимости уведомили.
+    vm.StatusMessage = "Готово";
+    Assert.True(vm.IsBottomBarVisible);
+    Assert.True(raised);
+
+    // Статус убрали — снова скрыта.
+    vm.StatusMessage = null;
+    Assert.False(vm.IsBottomBarVisible);
+
+    // Идёт операция — видима даже без статуса.
+    vm.IsBusy = true;
+    Assert.True(vm.IsBottomBarVisible);
+  }
+
+  [Fact]
   public async Task Настройки_ПрокидываютсяВСервис()
   {
     var svc = new CapturingService();
