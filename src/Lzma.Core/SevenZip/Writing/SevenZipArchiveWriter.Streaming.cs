@@ -36,6 +36,7 @@ public static partial class SevenZipArchiveWriter
       IReadOnlyList<SevenZipStreamingEntry> entries,
       Stream output,
       int dictionarySize,
+      int maxDegreeOfParallelism = 0,
       IProgress<SevenZipProgress>? progress = null,
       System.Threading.CancellationToken token = default)
   {
@@ -102,11 +103,11 @@ public static partial class SevenZipArchiveWriter
     // путь для одноблочного файла. Такие файлы жмём ПАРАЛЛЕЛЬНО МЕЖДУ СОБОЙ (волнами), а пишем по
     // порядку. Файлы больше блока — блочно-параллельно напрямую в output (внутри-файловый параллелизм).
     int blockSize = Math.Max(effectiveDictionarySize, 1 << 20);
-    int maxDegreeOfParallelism = Environment.ProcessorCount;
+    int dop = maxDegreeOfParallelism > 0 ? maxDegreeOfParallelism : Environment.ProcessorCount;
     const long waveMemoryLimit = 128L << 20; // ограничение памяти на волну
     var parallelOptions = new ParallelOptions
     {
-      MaxDegreeOfParallelism = maxDegreeOfParallelism,
+      MaxDegreeOfParallelism = dop,
       CancellationToken = token,
     };
 
@@ -130,7 +131,7 @@ public static partial class SevenZipArchiveWriter
         using (Stream source = entry.OpenRead())
           packSize = Lzma2LzmaEncoder.EncodeParallelToStream(
               source, entry.Length, lzmaProperties, effectiveDictionarySize, output,
-              out crc, bytesProgress: fileProgress, token: token);
+              out crc, maxDegreeOfParallelism: dop, bytesProgress: fileProgress, token: token);
 
         packSizes[di] = (ulong)packSize;
         unpackSizes[di] = (ulong)entry.Length;
@@ -152,7 +153,7 @@ public static partial class SevenZipArchiveWriter
           break;
 
         int waveCount = di - waveStart;
-        if (waveCount >= maxDegreeOfParallelism || (waveCount > 0 && waveBytes + e.Length > waveMemoryLimit))
+        if (waveCount >= dop || (waveCount > 0 && waveBytes + e.Length > waveMemoryLimit))
           break;
 
         waveBytes += e.Length;

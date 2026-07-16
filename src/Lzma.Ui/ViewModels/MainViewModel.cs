@@ -242,12 +242,6 @@ public sealed class MainViewModel : ObservableObject
   /// </summary>
   internal TimeSpan BusyIndicatorDelay { get; set; } = TimeSpan.FromSeconds(3);
 
-  /// <summary>
-  /// Размер словаря LZMA2 для потокового создания (4 МиБ): баланс степени сжатия и памяти
-  /// (буфер match finder-а масштабируется от размера словаря). internal — для тестов.
-  /// </summary>
-  internal const int StreamingDictionarySize = 1 << 22;
-
   /// <summary>Содержимое текущей папки архива.</summary>
   public ObservableCollection<ArchiveItem> Items { get; } = [];
 
@@ -291,6 +285,53 @@ public sealed class MainViewModel : ObservableObject
   {
     get => _selectedCompressionMethod;
     set => Set(ref _selectedCompressionMethod, value);
+  }
+
+  /// <summary>Доступное число потоков сжатия (Авто + степени двойки до числа ядер).</summary>
+  public IReadOnlyList<ThreadCountOption> ThreadCountOptions { get; } = BuildThreadCountOptions();
+
+  private int _selectedThreadCount; // 0 = авто (все ядра)
+
+  /// <summary>Выбранное число потоков сжатия (0 — авто/все ядра).</summary>
+  public int SelectedThreadCount
+  {
+    get => _selectedThreadCount;
+    set => Set(ref _selectedThreadCount, value);
+  }
+
+  /// <summary>Доступные размеры словаря LZMA2 (больше словарь — лучше сжатие, но больше памяти).</summary>
+  public IReadOnlyList<DictionarySizeOption> DictionarySizeOptions { get; } =
+  [
+      new(1 << 20, "1 МБ"),
+      new(1 << 22, "4 МБ (по умолчанию)"),
+      new(1 << 24, "16 МБ"),
+      new(1 << 26, "64 МБ"),
+      new(1 << 28, "256 МБ"),
+  ];
+
+  private int _selectedDictionarySize = 1 << 22; // 4 МБ
+
+  /// <summary>Выбранный размер словаря LZMA2 (байт) для потокового создания.</summary>
+  public int SelectedDictionarySize
+  {
+    get => _selectedDictionarySize;
+    set => Set(ref _selectedDictionarySize, value);
+  }
+
+  // Строит список опций числа потоков: «Авто (N ядер)» + степени двойки 1..N.
+  private static ThreadCountOption[] BuildThreadCountOptions()
+  {
+    int cores = Environment.ProcessorCount;
+    var list = new List<ThreadCountOption> { new(0, $"Авто (все ядра: {cores})") };
+
+    for (int n = 1; n <= cores; n *= 2)
+      list.Add(new(n, n.ToString()));
+
+    // Если число ядер не степень двойки — добавим само N в конец.
+    if ((cores & (cores - 1)) != 0)
+      list.Add(new(cores, cores.ToString()));
+
+    return [.. list];
   }
 
   /// <summary>Доступно ли создание архива из файлов (внедрены ли соответствующие пикеры).</summary>
@@ -619,7 +660,7 @@ public sealed class MainViewModel : ObservableObject
       }
 
       SevenZipArchiveWriteResult result = await _archiveService.CreateArchiveToFileAsync(
-          entries, path, StreamingDictionarySize, progress, token);
+          entries, path, SelectedDictionarySize, SelectedThreadCount, progress, token);
 
       if (result != SevenZipArchiveWriteResult.Ok)
       {

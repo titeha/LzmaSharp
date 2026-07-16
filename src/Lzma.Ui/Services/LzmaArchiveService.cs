@@ -77,6 +77,7 @@ public sealed class LzmaArchiveService : IArchiveService
       IReadOnlyList<SevenZipStreamingEntry> entries,
       string destinationPath,
       int dictionarySize,
+      int maxDegreeOfParallelism = 0,
       System.IProgress<SevenZipProgress>? progress = null,
       System.Threading.CancellationToken token = default)
   {
@@ -88,7 +89,8 @@ public sealed class LzmaArchiveService : IArchiveService
         using var output = new System.IO.FileStream(
             destinationPath, System.IO.FileMode.Create, System.IO.FileAccess.ReadWrite);
 
-        return SevenZipArchiveWriter.BuildLzma2ArchiveToStream(entries, output, dictionarySize, progress, token);
+        return SevenZipArchiveWriter.BuildLzma2ArchiveToStream(
+            entries, output, dictionarySize, maxDegreeOfParallelism, progress, token);
       }
       catch (System.IO.IOException)
       {

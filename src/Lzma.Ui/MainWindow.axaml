@@ -34,6 +34,30 @@
                         </DataTemplate>
                     </ComboBox.ItemTemplate>
                 </ComboBox>
+                <ComboBox ItemsSource="{Binding ThreadCountOptions}"
+                          SelectedValue="{Binding SelectedThreadCount}"
+                          SelectedValueBinding="{Binding Value}"
+                          IsVisible="{Binding CanCreate}"
+                          VerticalAlignment="Center" MinWidth="150"
+                          ToolTip.Tip="Число потоков сжатия (меньше — система отзывчивее)">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate x:DataType="models:ThreadCountOption">
+                            <TextBlock Text="{Binding DisplayName}" />
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
+                <ComboBox ItemsSource="{Binding DictionarySizeOptions}"
+                          SelectedValue="{Binding SelectedDictionarySize}"
+                          SelectedValueBinding="{Binding Bytes}"
+                          IsVisible="{Binding CanCreate}"
+                          VerticalAlignment="Center" MinWidth="170"
+                          ToolTip.Tip="Размер словаря LZMA2 (больше — лучше сжатие, но больше памяти)">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate x:DataType="models:DictionarySizeOption">
+                            <TextBlock Text="{Binding DisplayName}" />
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
                 <Button Content="Извлечь всё…" Command="{Binding ExtractAllCommand}" />
                 <Button Content="Извлечь архив с диска…" Command="{Binding ExtractArchiveFileCommand}"
                         ToolTip.Tip="Извлечь .7z прямо с диска потоком, без загрузки в память (для архивов больше 2 ГиБ)" />
