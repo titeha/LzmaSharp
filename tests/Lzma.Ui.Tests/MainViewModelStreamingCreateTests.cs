@@ -113,6 +113,48 @@ public sealed class MainViewModelStreamingCreateTests
   }
 
   [Fact]
+  public async Task ПотоковоеСоздание_ПоТомам_ПишетТомаИРаспаковывается()
+  {
+    // Плохо сжимаемое содержимое + маленький том → несколько .001/.002…
+    var payload = new byte[30000];
+    uint x = 0xC0FFEE;
+    for (int i = 0; i < payload.Length; i++) { x = x * 1664525u + 1013904223u; payload[i] = (byte)(x >> 24); }
+
+    string dir = Path.Combine(Path.GetTempPath(), "LzmaUiVolumes", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(dir);
+    string basePath = Path.Combine(dir, "out.7z");
+
+    try
+    {
+      var refs = new List<PickedFileRef> { new("blob.bin", payload.LongLength, () => new MemoryStream(payload)) };
+
+      var vm = new MainViewModel(
+          new StubArchivePicker(), new NullPasswordPrompt(), new StubFolderPicker(),
+          new LzmaArchiveService(), new RefsSourceFilesPicker(refs), new StubSaveFilePicker(basePath))
+      {
+        SelectedVolumeSize = 8192, // маленький том
+      };
+
+      await vm.CreateCommand.ExecuteAsync();
+
+      // Появились тома .001/.002…, а не единый out.7z.
+      Assert.True(File.Exists(basePath + ".001"));
+      Assert.False(File.Exists(basePath));
+      Assert.Contains("Томов:", vm.StatusMessage);
+
+      // Склейка через spanning-read распаковывается.
+      using var r = new VolumeSpanningReadStream(basePath);
+      Assert.Equal(SevenZipArchiveDecodeResult.Ok,
+          SevenZipArchiveDecoder.ExtractToDirectoryFromStream(r, SevenZipDecodeOptions.Default, Path.Combine(dir, "x"), overwrite: false));
+      Assert.Equal(payload, File.ReadAllBytes(Path.Combine(dir, "x", "blob.bin")));
+    }
+    finally
+    {
+      try { Directory.Delete(dir, recursive: true); } catch { }
+    }
+  }
+
+  [Fact]
   public void СписокМетодов_СодержитBcj2()
   {
     var vm = new MainViewModel(new StubArchivePicker(), new NullPasswordPrompt(), new StubFolderPicker());

@@ -82,15 +82,18 @@ public sealed class LzmaArchiveService : IArchiveService
       int maxDegreeOfParallelism = 0,
       System.IProgress<SevenZipProgress>? progress = null,
       System.Threading.CancellationToken token = default,
-      System.IProgress<SevenZipCompressionFileProgress>? currentFile = null)
+      System.IProgress<SevenZipCompressionFileProgress>? currentFile = null,
+      long volumeSize = 0)
   {
     return Task.Run(() =>
     {
       try
       {
         // Пишем прямо в целевой файл потоком — ни файлы, ни архив в памяти не держим.
-        using var output = new System.IO.FileStream(
-            destinationPath, System.IO.FileMode.Create, System.IO.FileAccess.ReadWrite);
+        // volumeSize > 0 → режем на тома destinationPath.001/.002/… на лету.
+        using System.IO.Stream output = volumeSize > 0
+            ? new VolumeSpanningWriteStream(destinationPath, volumeSize)
+            : new System.IO.FileStream(destinationPath, System.IO.FileMode.Create, System.IO.FileAccess.ReadWrite);
 
         // Диспетчер по методу: LZMA2/Auto — многопоточно; PPMd/Copy — пофайлово (PPMd последователен).
         return method switch

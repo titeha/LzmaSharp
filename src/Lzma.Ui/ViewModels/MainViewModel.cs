@@ -357,6 +357,25 @@ public sealed class MainViewModel : ObservableObject
     set => Set(ref _selectedDictionarySize, value);
   }
 
+  /// <summary>Доступные размеры тома (0 = один файл; иначе архив режется на base.001/.002/…).</summary>
+  public IReadOnlyList<VolumeSizeOption> VolumeSizeOptions { get; } =
+  [
+      new(0, "Один файл (без томов)"),
+      new(10L << 20, "10 МБ"),
+      new(100L << 20, "100 МБ"),
+      new(700L << 20, "700 МБ (CD)"),
+      new(4692L << 20, "4692 МБ (DVD)"),
+  ];
+
+  private long _selectedVolumeSize; // 0 = один файл
+
+  /// <summary>Выбранный размер тома (байт); 0 — не резать на тома.</summary>
+  public long SelectedVolumeSize
+  {
+    get => _selectedVolumeSize;
+    set => Set(ref _selectedVolumeSize, value);
+  }
+
   // Строит список опций числа потоков: «Авто (N ядер)» + степени двойки 1..N.
   private static ThreadCountOption[] BuildThreadCountOptions()
   {
@@ -765,7 +784,7 @@ public sealed class MainViewModel : ObservableObject
       try
       {
         result = await _archiveService.CreateArchiveToFileAsync(
-            entries, path, SelectedCompressionMethod, SelectedDictionarySize, SelectedThreadCount, progress, token, currentFile);
+            entries, path, SelectedCompressionMethod, SelectedDictionarySize, SelectedThreadCount, progress, token, currentFile, SelectedVolumeSize);
       }
       finally
       {
@@ -781,10 +800,29 @@ public sealed class MainViewModel : ObservableObject
       }
 
       long compressedBytes = 0;
-      try { compressedBytes = new FileInfo(path).Length; }
-      catch (IOException) { }
+      int volumeCount = 0;
+      if (SelectedVolumeSize > 0)
+      {
+        // Тома: файла `path` нет — есть path.001/.002/…; суммируем их размеры и считаем количество.
+        for (int vi = 0; ; vi++)
+        {
+          string volumePath = VolumeSpanningWriteStream.VolumePath(path, vi);
+          if (!File.Exists(volumePath))
+            break;
+          try { compressedBytes += new FileInfo(volumePath).Length; }
+          catch (IOException) { }
+          volumeCount++;
+        }
+      }
+      else
+      {
+        try { compressedBytes = new FileInfo(path).Length; }
+        catch (IOException) { }
+      }
 
       StatusMessage = FormatCreateSummary(path, originalBytes, compressedBytes);
+      if (volumeCount > 0)
+        StatusMessage += $"  Томов: {volumeCount} (по {ByteSizeFormat.Format(SelectedVolumeSize)}).";
 
       // Для «Авто» — разбивка, какими кодеками сжаты файлы (остаётся на экране, в отличие от
       // бегущей строки). Точна: счётчики набраны синхронно во время create.

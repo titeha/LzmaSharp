@@ -50,6 +50,7 @@ public sealed class MainViewModelCompressionSettingsTests
   {
     public int CapturedDict = -1;
     public int CapturedDop = -1;
+    public long CapturedVolumeSize = -1;
     public SevenZipWriterCompressionMethod CapturedMethod = (SevenZipWriterCompressionMethod)(-1);
 
     public Task<ArchiveOpenOutcome> OpenAsync(byte[] b, string? p) => Task.FromResult(new ArchiveOpenOutcome(SevenZipArchiveDecodeResult.Ok, []));
@@ -61,11 +62,12 @@ public sealed class MainViewModelCompressionSettingsTests
     public Task<SevenZipArchiveWriteResult> CreateArchiveToFileAsync(
         IReadOnlyList<SevenZipStreamingEntry> entries, string destinationPath, SevenZipWriterCompressionMethod method,
         int dictionarySize, int maxDegreeOfParallelism = 0, IProgress<SevenZipProgress>? progress = null,
-        CancellationToken token = default, IProgress<SevenZipCompressionFileProgress>? currentFile = null)
+        CancellationToken token = default, IProgress<SevenZipCompressionFileProgress>? currentFile = null, long volumeSize = 0)
     {
       CapturedMethod = method;
       CapturedDict = dictionarySize;
       CapturedDop = maxDegreeOfParallelism;
+      CapturedVolumeSize = volumeSize;
       return Task.FromResult(SevenZipArchiveWriteResult.Ok);
     }
   }
@@ -76,8 +78,10 @@ public sealed class MainViewModelCompressionSettingsTests
     var vm = new MainViewModel(new StubArchivePicker(), new NullPasswordPrompt(), new StubFolderPicker());
     Assert.Equal(1 << 22, vm.SelectedDictionarySize); // 4 МБ
     Assert.Equal(0, vm.SelectedThreadCount);          // авто
+    Assert.Equal(0, vm.SelectedVolumeSize);           // один файл, без томов
     Assert.NotEmpty(vm.ThreadCountOptions);
     Assert.NotEmpty(vm.DictionarySizeOptions);
+    Assert.NotEmpty(vm.VolumeSizeOptions);
   }
 
   // Сервис, который во время «создания» репортит кодеки пофайлово через currentFile.
@@ -92,7 +96,7 @@ public sealed class MainViewModelCompressionSettingsTests
     public Task<SevenZipArchiveWriteResult> CreateArchiveToFileAsync(
         IReadOnlyList<SevenZipStreamingEntry> entries, string destinationPath, SevenZipWriterCompressionMethod method,
         int dictionarySize, int maxDegreeOfParallelism = 0, IProgress<SevenZipProgress>? progress = null,
-        CancellationToken token = default, IProgress<SevenZipCompressionFileProgress>? currentFile = null)
+        CancellationToken token = default, IProgress<SevenZipCompressionFileProgress>? currentFile = null, long volumeSize = 0)
     {
       // Синхронный репорт кодеков (как в ядре — до возврата), чтобы VM набрал точные счётчики.
       for (int i = 0; i < codecs.Length; i++)
@@ -181,11 +185,13 @@ public sealed class MainViewModelCompressionSettingsTests
     {
       SelectedDictionarySize = 1 << 24, // 16 МБ
       SelectedThreadCount = 4,
+      SelectedVolumeSize = 100L << 20,  // 100 МБ тома
     };
 
     await vm.CreateCommand.ExecuteAsync();
 
     Assert.Equal(1 << 24, svc.CapturedDict);
     Assert.Equal(4, svc.CapturedDop);
+    Assert.Equal(100L << 20, svc.CapturedVolumeSize);
   }
 }

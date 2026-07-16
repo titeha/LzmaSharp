@@ -60,6 +60,18 @@
                         </DataTemplate>
                     </ComboBox.ItemTemplate>
                 </ComboBox>
+                <ComboBox ItemsSource="{Binding VolumeSizeOptions}"
+                          SelectedValue="{Binding SelectedVolumeSize}"
+                          SelectedValueBinding="{Binding Bytes}"
+                          IsVisible="{Binding CanCreate}"
+                          VerticalAlignment="Center" MinWidth="170"
+                          ToolTip.Tip="Разбить архив на тома (.001/.002/…); открывается выбором первого тома">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate x:DataType="models:VolumeSizeOption">
+                            <TextBlock Text="{Binding DisplayName}" />
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
                 <Button Content="Извлечь всё…" Command="{Binding ExtractAllCommand}" />
                 <Button Content="Извлечь архив с диска…" Command="{Binding ExtractArchiveFileCommand}"
                         ToolTip.Tip="Извлечь .7z прямо с диска потоком, без загрузки в память (для архивов больше 2 ГиБ)" />
