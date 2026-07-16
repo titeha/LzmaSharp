@@ -164,9 +164,10 @@ public static class SevenZipFolderDecoder
   /// Декодирует folder ПОТОКОВО из архива-<see cref="System.IO.Stream"/> (по смещению/размеру из
   /// метаданных), не загружая packed-данные в память — для извлечения архивов больше 2 ГиБ. Пишет
   /// выход в <paramref name="output"/>. <paramref name="packedBaseOffset"/> — начало packed-региона
-  /// в файле (обычно 32). Поддерживается ТОЛЬКО простой folder из одного LZMA2-coder-а (наш writer
-  /// такие и пишет); прочие формы — <see cref="SevenZipFolderDecodeResult.NotSupported"/> (их packed
-  /// обычно мал и извлекается span-путём).
+  /// в файле (обычно 32). Одиночный LZMA2-folder декодируется чисто потоково (для файлов &gt; 2 ГиБ);
+  /// прочие формы (PPMd/BCJ2/Copy/цепочки — их производит потоковый Auto) декодируются фолбэком:
+  /// packed этого folder-а читается в память (folder = один файл, размер ограничен) и обрабатывается
+  /// полноценным ин-мемори декодером.
   /// </summary>
   public static SevenZipFolderDecodeResult DecodeFolderStreamToStream(
       SevenZipStreamsInfo streamsInfo,
@@ -186,31 +187,133 @@ public static class SevenZipFolderDecoder
     ArgumentNullException.ThrowIfNull(output);
     ArgumentNullException.ThrowIfNull(options);
 
-    if (!TryGetSingleLzma2CoderLocation(streamsInfo, folderIndex,
+    // Быстрый путь: одиночный LZMA2-folder — чистый потоковый декод (для больших файлов).
+    if (TryGetSingleLzma2CoderLocation(streamsInfo, folderIndex,
             out ulong packStart, out ulong packSize, out byte lzma2PropertiesByte))
-      return SevenZipFolderDecodeResult.NotSupported;
-
-    if (packSize > long.MaxValue)
-      return SevenZipFolderDecodeResult.NotSupported;
-
-    long fileOffset = packedBaseOffset + (long)packStart;
-    if (fileOffset < 0 || fileOffset + (long)packSize > archive.Length)
-      return SevenZipFolderDecodeResult.InvalidData;
-
-    if (!Lzma2Properties.TryParse(lzma2PropertiesByte, out Lzma2Properties properties))
-      return SevenZipFolderDecodeResult.InvalidData;
-
-    archive.Position = fileOffset;
-
-    Lzma2DecodeResult r = Lzma2Decoder.DecodeStreamToStream(
-        archive, (long)packSize, properties, output, out bytesWritten, progress, token);
-
-    return r switch
     {
-      Lzma2DecodeResult.Finished => SevenZipFolderDecodeResult.Ok,
-      Lzma2DecodeResult.NotSupported => SevenZipFolderDecodeResult.NotSupported,
-      _ => SevenZipFolderDecodeResult.InvalidData,
-    };
+      if (packSize > long.MaxValue)
+        return SevenZipFolderDecodeResult.NotSupported;
+
+      long fileOffset = packedBaseOffset + (long)packStart;
+      if (fileOffset < 0 || fileOffset + (long)packSize > archive.Length)
+        return SevenZipFolderDecodeResult.InvalidData;
+
+      if (!Lzma2Properties.TryParse(lzma2PropertiesByte, out Lzma2Properties properties))
+        return SevenZipFolderDecodeResult.InvalidData;
+
+      archive.Position = fileOffset;
+
+      Lzma2DecodeResult r = Lzma2Decoder.DecodeStreamToStream(
+          archive, (long)packSize, properties, output, out bytesWritten, progress, token);
+
+      return r switch
+      {
+        Lzma2DecodeResult.Finished => SevenZipFolderDecodeResult.Ok,
+        Lzma2DecodeResult.NotSupported => SevenZipFolderDecodeResult.NotSupported,
+        _ => SevenZipFolderDecodeResult.InvalidData,
+      };
+    }
+
+    // Прочие folder-ы (PPMd/BCJ2/Copy/цепочки — их производит потоковый Auto): читаем packed этого
+    // folder-а из потока в память (folder = один файл, размер ограничен) и декодируем ин-мемори
+    // логикой DecodeFolderToArray через синтетический одно-folder StreamsInfo.
+    return DecodeNonLzma2FolderFromStream(
+        streamsInfo, archive, packedBaseOffset, folderIndex, options, output, out bytesWritten, progress, token);
+  }
+
+  // Фолбэк потокового декода для не-LZMA2 folder-ов: вычисляет байтовый packed-регион folder-а,
+  // читает его в память и переиспользует полноценный ин-мемори декодер (BCJ2/PPMd/Copy/цепочки),
+  // подсовывая ему синтетический StreamsInfo, где этот folder — единственный (folderIndex 0, PackPos 0).
+  private static SevenZipFolderDecodeResult DecodeNonLzma2FolderFromStream(
+      SevenZipStreamsInfo streamsInfo,
+      System.IO.Stream archive,
+      long packedBaseOffset,
+      int folderIndex,
+      SevenZipDecodeOptions options,
+      System.IO.Stream output,
+      out long bytesWritten,
+      IProgress<LzmaProgress>? progress,
+      System.Threading.CancellationToken token)
+  {
+    bytesWritten = 0;
+
+    if (streamsInfo.PackInfo is not { } packInfo)
+      return SevenZipFolderDecodeResult.InvalidData;
+    if (streamsInfo.UnpackInfo is not { } unpackInfo)
+      return SevenZipFolderDecodeResult.InvalidData;
+    if ((uint)folderIndex >= (uint)unpackInfo.Folders.Length)
+      return SevenZipFolderDecodeResult.InvalidData;
+    if ((uint)folderIndex >= (uint)unpackInfo.FolderUnpackSizes.Length)
+      return SevenZipFolderDecodeResult.InvalidData;
+
+    SevenZipFolder folder = unpackInfo.Folders[folderIndex];
+    ulong[]? folderUnpackSizes = unpackInfo.FolderUnpackSizes[folderIndex];
+    if (folderUnpackSizes is null)
+      return SevenZipFolderDecodeResult.InvalidData;
+
+    int packCount = folder.PackedStreamIndices.Length;
+
+    // Глобальный индекс первого pack-стрима folder-а (pack-стримы folder-ов идут подряд).
+    ulong startPackIndex = 0;
+    for (int i = 0; i < folderIndex; i++)
+      startPackIndex += (ulong)unpackInfo.Folders[i].PackedStreamIndices.Length;
+
+    if (startPackIndex + (ulong)packCount > (ulong)packInfo.PackSizes.Length)
+      return SevenZipFolderDecodeResult.InvalidData;
+
+    // Байтовое смещение и размер packed-региона folder-а + его pack-размеры (в порядке folder-а).
+    ulong regionStart = packInfo.PackPos;
+    for (ulong i = 0; i < startPackIndex; i++)
+      regionStart += packInfo.PackSizes[(int)i];
+
+    ulong regionSize = 0;
+    var folderPackSizes = new ulong[packCount];
+    for (int i = 0; i < packCount; i++)
+    {
+      ulong sz = packInfo.PackSizes[(int)startPackIndex + i];
+      folderPackSizes[i] = sz;
+      regionSize += sz;
+    }
+
+    if (regionSize > int.MaxValue) // ин-мемори декодер работает со span/int
+      return SevenZipFolderDecodeResult.NotSupported;
+
+    long fileOffset = packedBaseOffset + (long)regionStart;
+    if (fileOffset < 0 || fileOffset + (long)regionSize > archive.Length)
+      return SevenZipFolderDecodeResult.InvalidData;
+
+    byte[] localPacked = new byte[(int)regionSize];
+    archive.Position = fileOffset;
+    ReadExactly(archive, localPacked);
+
+    // Синтетика: этот folder — единственный (folderIndex 0), packed-регион с нуля.
+    var synthPack = new SevenZipPackInfo(0, folderPackSizes);
+    var synthUnpack = new SevenZipUnpackInfo([folder], [folderUnpackSizes]);
+    var synthStreams = new SevenZipStreamsInfo(synthPack, synthUnpack, null);
+
+    SevenZipFolderDecodeResult result = DecodeFolderToArray(
+        synthStreams, localPacked, folderIndex: 0, options, out byte[] decoded, progress, token);
+
+    if (result == SevenZipFolderDecodeResult.Ok)
+    {
+      output.Write(decoded, 0, decoded.Length);
+      bytesWritten = decoded.LongLength;
+    }
+
+    return result;
+  }
+
+  // Читает ровно buffer.Length байт из потока (или бросает при неожиданном конце).
+  private static void ReadExactly(System.IO.Stream source, byte[] buffer)
+  {
+    int offset = 0;
+    while (offset < buffer.Length)
+    {
+      int n = source.Read(buffer, offset, buffer.Length - offset);
+      if (n <= 0)
+        throw new System.IO.EndOfStreamException("Packed-регион folder-а короче заявленного.");
+      offset += n;
+    }
   }
 
   // Как TryGetSingleLzma2Coder, но вместо среза packed-данных отдаёт СМЕЩЕНИЕ и РАЗМЕР pack-стрима
