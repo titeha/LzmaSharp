@@ -1,10 +1,70 @@
 <Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="Lzma.Ui.App"
-             RequestedThemeVariant="Default">
-             <!-- "Default" ThemeVariant follows system theme variant. "Dark" or "Light" are other available options. -->
+             RequestedThemeVariant="Dark">
+    <!-- По умолчанию — тёмная «воронёная сталь» (приоритетная для десктоп-утилиты). Переключается на светлую. -->
 
     <Application.Styles>
         <FluentTheme />
     </Application.Styles>
+
+    <Application.Resources>
+        <ResourceDictionary>
+            <!-- Палитра «сталь и медь»: медь = действие/прогресс, сталь = метаданные/кодеки,
+                 зелёный = верифицировано, красный = повреждено. Плоские заливки, без градиентов. -->
+            <ResourceDictionary.ThemeDictionaries>
+
+                <!-- Тёмная тема «воронёная сталь» -->
+                <ResourceDictionary x:Key="Dark">
+                    <Color x:Key="SystemAccentColor">#E08B54</Color>
+                    <Color x:Key="SystemAccentColorLight1">#E89A6B</Color>
+                    <Color x:Key="SystemAccentColorLight2">#EFAA82</Color>
+                    <Color x:Key="SystemAccentColorLight3">#F5BC9C</Color>
+                    <Color x:Key="SystemAccentColorDark1">#C9743F</Color>
+                    <Color x:Key="SystemAccentColorDark2">#B0632F</Color>
+                    <Color x:Key="SystemAccentColorDark3">#98531F</Color>
+
+                    <SolidColorBrush x:Key="AppBg" Color="#16181D" />
+                    <SolidColorBrush x:Key="AppSurface" Color="#1E222A" />
+                    <SolidColorBrush x:Key="AppSurfaceRaised" Color="#262B34" />
+                    <SolidColorBrush x:Key="AppInk" Color="#E7E9EC" />
+                    <SolidColorBrush x:Key="AppInkSecondary" Color="#9BA3B0" />
+                    <SolidColorBrush x:Key="AppHairline" Color="#2E333D" />
+                    <SolidColorBrush x:Key="AppCopper" Color="#E08B54" />
+                    <SolidColorBrush x:Key="AppCopperContainer" Color="#3F2A1B" />
+                    <SolidColorBrush x:Key="AppSteel" Color="#7FA8C9" />
+                    <SolidColorBrush x:Key="AppSuccess" Color="#5FA97F" />
+                    <SolidColorBrush x:Key="AppDanger" Color="#D96A5E" />
+                </ResourceDictionary>
+
+                <!-- Светлая тема «светлая сталь» -->
+                <ResourceDictionary x:Key="Light">
+                    <Color x:Key="SystemAccentColor">#B85C2E</Color>
+                    <Color x:Key="SystemAccentColorLight1">#C56E40</Color>
+                    <Color x:Key="SystemAccentColorLight2">#D18153</Color>
+                    <Color x:Key="SystemAccentColorLight3">#DD9569</Color>
+                    <Color x:Key="SystemAccentColorDark1">#A54F26</Color>
+                    <Color x:Key="SystemAccentColorDark2">#91431E</Color>
+                    <Color x:Key="SystemAccentColorDark3">#7D3717</Color>
+
+                    <SolidColorBrush x:Key="AppBg" Color="#F4F4F2" />
+                    <SolidColorBrush x:Key="AppSurface" Color="#FFFFFF" />
+                    <SolidColorBrush x:Key="AppSurfaceRaised" Color="#FFFFFF" />
+                    <SolidColorBrush x:Key="AppInk" Color="#1B1D22" />
+                    <SolidColorBrush x:Key="AppInkSecondary" Color="#5B616E" />
+                    <SolidColorBrush x:Key="AppHairline" Color="#E3E4E1" />
+                    <SolidColorBrush x:Key="AppCopper" Color="#B85C2E" />
+                    <SolidColorBrush x:Key="AppCopperContainer" Color="#F7E4D8" />
+                    <SolidColorBrush x:Key="AppSteel" Color="#33658A" />
+                    <SolidColorBrush x:Key="AppSuccess" Color="#2F7D4F" />
+                    <SolidColorBrush x:Key="AppDanger" Color="#B3372E" />
+                </ResourceDictionary>
+
+            </ResourceDictionary.ThemeDictionaries>
+
+            <!-- Типографика: UI — гротеск; ДАННЫЕ (размеры/CRC/скорости/%) — моноширинный. -->
+            <FontFamily x:Key="AppUiFont">Segoe UI Variable Text, Segoe UI, Inter, sans-serif</FontFamily>
+            <FontFamily x:Key="AppMonoFont">Cascadia Mono, Cascadia Code, Consolas, monospace</FontFamily>
+        </ResourceDictionary>
+    </Application.Resources>
 </Application>

@@ -9,18 +9,22 @@
         x:DataType="vm:MainViewModel"
         Title="{Binding Title}"
         Width="900" Height="560"
-        WindowStartupLocation="CenterScreen">
+        WindowStartupLocation="CenterScreen"
+        Background="{DynamicResource AppBg}"
+        FontFamily="{DynamicResource AppUiFont}">
 
     <DockPanel>
 
         <!-- Тулбар -->
         <Border DockPanel.Dock="Top" Padding="8" BorderThickness="0,0,0,1"
-                BorderBrush="{DynamicResource ThemeBorderMidBrush}">
+                Background="{DynamicResource AppSurface}"
+                BorderBrush="{DynamicResource AppHairline}">
             <StackPanel Orientation="Horizontal" Spacing="8">
                 <Button Content="Открыть…" Command="{Binding OpenCommand}" />
                 <Button Content="Открыть большой архив…" Command="{Binding OpenArchiveFileCommand}"
                         ToolTip.Tip="Обзор .7z по пути без загрузки в память (для архивов больше 2 ГиБ)" />
                 <Button Content="Создать…" Command="{Binding CreateCommand}"
+                        Classes="accent"
                         IsVisible="{Binding CanCreate}" />
                 <Button Content="Создать из папки…" Command="{Binding CreateFromFolderCommand}"
                         IsVisible="{Binding CanCreateFromFolder}" />
@@ -76,8 +80,10 @@
                 <Button Content="Извлечь архив с диска…" Command="{Binding ExtractArchiveFileCommand}"
                         ToolTip.Tip="Извлечь .7z прямо с диска потоком, без загрузки в память (для архивов больше 2 ГиБ)" />
                 <Button Content="Вверх" Command="{Binding NavigateUpCommand}" />
+                <Button Content="◐" Click="OnToggleTheme" VerticalAlignment="Center"
+                        ToolTip.Tip="Переключить тему (тёмная/светлая)" />
                 <TextBlock Text="{Binding CurrentPath}" VerticalAlignment="Center"
-                           Foreground="Gray" TextTrimming="CharacterEllipsis"
+                           Foreground="{DynamicResource AppInkSecondary}" TextTrimming="CharacterEllipsis"
                            IsVisible="{Binding !IsBusy}" />
             </StackPanel>
         </Border>
@@ -85,7 +91,8 @@
         <!-- Нижняя панель: строка прогресса (градусник/проценты/счётчик/текущий файл/ETA/отмена)
              и статусная строка (выделяемая — можно скопировать диагностику). -->
         <Border DockPanel.Dock="Bottom" Padding="8,6" BorderThickness="0,1,0,0"
-                BorderBrush="{DynamicResource ThemeBorderMidBrush}"
+                Background="{DynamicResource AppSurface}"
+                BorderBrush="{DynamicResource AppHairline}"
                 IsVisible="{Binding IsBottomBarVisible}">
             <StackPanel Spacing="6">
 
@@ -93,23 +100,27 @@
                 <WrapPanel IsVisible="{Binding IsCancelVisible}">
                     <ProgressBar Minimum="0" Maximum="100" Value="{Binding ProgressPercent}"
                                  Width="180" Height="16" VerticalAlignment="Center" Margin="0,0,8,0"
+                                 Foreground="{DynamicResource AppCopper}"
                                  IsVisible="{Binding IsBusy}" />
                     <TextBlock Text="{Binding ProgressPercent, StringFormat='{}{0:0}%'}"
-                               VerticalAlignment="Center" Foreground="Gray" Width="40" Margin="0,0,8,0"
+                               VerticalAlignment="Center" Foreground="{DynamicResource AppCopper}" Width="40" Margin="0,0,8,0"
+                               FontFamily="{DynamicResource AppMonoFont}" FontWeight="SemiBold"
                                IsVisible="{Binding IsBusy}" />
                     <TextBlock Text="{Binding ProgressText}" VerticalAlignment="Center" Margin="0,0,8,0"
-                               Foreground="Gray" IsVisible="{Binding IsBusy}" />
+                               Foreground="{DynamicResource AppInk}" FontFamily="{DynamicResource AppMonoFont}"
+                               IsVisible="{Binding IsBusy}" />
                     <TextBlock Text="{Binding ProgressEta}" VerticalAlignment="Center" Margin="0,0,8,0"
-                               Foreground="Gray" IsVisible="{Binding IsBusy}" />
+                               Foreground="{DynamicResource AppInkSecondary}" FontFamily="{DynamicResource AppMonoFont}"
+                               IsVisible="{Binding IsBusy}" />
                     <!-- Имя файла, сжимаемого/извлекаемого прямо сейчас (как в 7-Zip). -->
                     <TextBlock Text="{Binding CurrentFileStatus}" VerticalAlignment="Center" Margin="0,0,8,0"
-                               Foreground="Gray" TextTrimming="CharacterEllipsis" MaxWidth="420"
+                               Foreground="{DynamicResource AppInkSecondary}" TextTrimming="CharacterEllipsis" MaxWidth="420"
                                IsVisible="{Binding CurrentFileStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                     <!-- Живой счётчик на фазе сканирования/чтения файлов (до сжатия). -->
                     <ProgressBar IsIndeterminate="True" Width="180" Height="16" VerticalAlignment="Center" Margin="0,0,8,0"
                                  IsVisible="{Binding IsScanning}" />
                     <TextBlock Text="{Binding ScanStatus}" VerticalAlignment="Center" Margin="0,0,8,0"
-                               Foreground="Gray" IsVisible="{Binding IsScanning}" />
+                               Foreground="{DynamicResource AppInkSecondary}" IsVisible="{Binding IsScanning}" />
                     <Button Content="Отмена" Command="{Binding CancelCommand}"
                             VerticalAlignment="Center" IsVisible="{Binding IsCancelVisible}" />
                 </WrapPanel>
@@ -117,7 +128,7 @@
                 <!-- Статус (итоги/диагностика). -->
                 <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" MaxHeight="120"
                               IsVisible="{Binding StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-                    <SelectableTextBlock Text="{Binding StatusMessage}" TextWrapping="Wrap" Foreground="Gray" />
+                    <SelectableTextBlock Text="{Binding StatusMessage}" TextWrapping="Wrap" Foreground="{DynamicResource AppInkSecondary}" />
                 </ScrollViewer>
 
             </StackPanel>
@@ -128,7 +139,7 @@
             <!-- Пустое состояние -->
             <TextBlock Text="Откройте архив для просмотра — или соберите новый кнопкой «Создать…»."
                        HorizontalAlignment="Center" VerticalAlignment="Center"
-                       Foreground="Gray" Margin="24"
+                       Foreground="{DynamicResource AppInkSecondary}" Margin="24"
                        IsVisible="{Binding !HasArchive}" />
 
             <!-- Таблица содержимого -->
@@ -136,8 +147,8 @@
 
                 <!-- Заголовок таблицы -->
                 <Border Grid.Row="0" Padding="14,6" BorderThickness="0,0,0,1"
-                        BorderBrush="{DynamicResource ThemeBorderMidBrush}"
-                        Background="{DynamicResource ThemeBackgroundBrush}">
+                        BorderBrush="{DynamicResource AppHairline}"
+                        Background="{DynamicResource AppSurfaceRaised}">
                     <Grid ColumnDefinitions="24,*,120,90">
                         <TextBlock Grid.Column="1" Text="Имя" FontWeight="SemiBold" />
                         <TextBlock Grid.Column="2" Text="Размер" FontWeight="SemiBold" />
@@ -153,8 +164,9 @@
                             <Grid ColumnDefinitions="24,*,120,90">
                                 <TextBlock Grid.Column="0" Text="{Binding Icon}" />
                                 <TextBlock Grid.Column="1" Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
-                                <TextBlock Grid.Column="2" Text="{Binding DisplaySize}" Foreground="Gray" />
-                                <TextBlock Grid.Column="3" Text="{Binding Kind}" Foreground="Gray" />
+                                <TextBlock Grid.Column="2" Text="{Binding DisplaySize}" Foreground="{DynamicResource AppInkSecondary}"
+                                           FontFamily="{DynamicResource AppMonoFont}" />
+                                <TextBlock Grid.Column="3" Text="{Binding Kind}" Foreground="{DynamicResource AppInkSecondary}" />
                             </Grid>
                         </DataTemplate>
                     </ListBox.ItemTemplate>
