@@ -29,4 +29,7 @@ public interface IFileSystemBrowser
   /// корень диска (тогда навигация вверх ведёт к списку корней).
   /// </summary>
   string? GetParent(string fullPath);
+
+  /// <summary>Открывает файл для чтения (например, чтобы открыть архив из браузера).</summary>
+  System.IO.Stream OpenRead(string fullPath);
 }

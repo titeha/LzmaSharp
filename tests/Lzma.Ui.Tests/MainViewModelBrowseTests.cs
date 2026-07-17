@@ -1,10 +1,11 @@
+using Lzma.Core.SevenZip;
 using Lzma.Ui.Models;
 using Lzma.Ui.Services;
 using Lzma.Ui.ViewModels;
 
 namespace Lzma.Ui.Tests;
 
-// Режим браузера файловой системы в главном окне (этап D, шаг 1: навигация по ФС).
+// Режим браузера файловой системы в главном окне (этап D, шаги 1–3).
 public sealed class MainViewModelBrowseTests
 {
   private sealed class StubArchivePicker : IArchivePicker
@@ -24,7 +25,8 @@ public sealed class MainViewModelBrowseTests
   }
 
   // Фейковая ФС: корень C:\ с папкой docs и архивом a.7z; docs содержит readme.txt.
-  private sealed class FakeBrowser : IFileSystemBrowser
+  // OpenRead("C:\a.7z") отдаёт переданные байты архива (для теста открытия из браузера).
+  private sealed class FakeBrowser(byte[]? archiveBytes = null) : IFileSystemBrowser
   {
     public IReadOnlyList<FileSystemEntry> ListRoots() =>
         [new("C:\\", "C:\\", IsDirectory: true, Size: 0)];
@@ -49,12 +51,16 @@ public sealed class MainViewModelBrowseTests
       "C:\\" => null,
       _ => null,
     };
+
+    public System.IO.Stream OpenRead(string fullPath) => fullPath == "C:\\a.7z" && archiveBytes is not null
+        ? new System.IO.MemoryStream(archiveBytes, writable: false)
+        : throw new System.IO.FileNotFoundException(fullPath);
   }
 
-  private static MainViewModel CreateWithBrowser()
+  private static MainViewModel CreateWithBrowser(byte[]? archiveBytes = null)
       => new(new StubArchivePicker(), new CancellingPasswordPrompt(), new CancellingFolderPicker(),
              new LzmaArchiveService(), sourceFilesPicker: null, saveFilePicker: null,
-             sourceFolderPicker: null, createPasswordPrompt: null, fileSystemBrowser: new FakeBrowser());
+             sourceFolderPicker: null, createPasswordPrompt: null, fileSystemBrowser: new FakeBrowser(archiveBytes));
 
   private static ArchiveItem Find(MainViewModel vm, string name)
       => vm.Items.Single(i => i.Name == name);
@@ -136,11 +142,45 @@ public sealed class MainViewModelBrowseTests
     MainViewModel vm = CreateWithBrowser();
     vm.NavigateInto(Find(vm, "C:\\"));
 
-    // Двойной клик по файлу-архиву пока не открывает его (следующий шаг), список не меняется.
+    // Одиночная навигация по файлу-архиву не открывает его (открытие — двойной клик/ActivateItemAsync).
     vm.NavigateInto(Find(vm, "a.7z"));
 
     Assert.Equal("C:\\", vm.CurrentPath);
     Assert.Contains(vm.Items, i => i.Name == "docs");
+  }
+
+  // ---- D3a: открытие архива из браузера двойным кликом ----
+
+  [Fact]
+  public async Task ActivateItem_Архив_ОткрываетЕгоСодержимое()
+  {
+    // Реальный 7z с одним файлом внутри.
+    byte[] content = System.Text.Encoding.UTF8.GetBytes("inside the archive opened from browser");
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, SevenZipArchiveWriter.BuildArchive(
+        [new SevenZipArchiveWriterEntry("inner.txt", content)], out byte[] archive));
+
+    MainViewModel vm = CreateWithBrowser(archive);
+    vm.NavigateInto(Find(vm, "C:\\"));
+
+    await vm.ActivateItemAsync(Find(vm, "a.7z"));
+
+    // Перешли в режим архива, видно его содержимое.
+    Assert.True(vm.HasArchive);
+    Assert.False(vm.IsFileSystemMode);
+    Assert.Contains(vm.Items, i => i.Name == "inner.txt");
+    Assert.Contains("a.7z", vm.Title);
+  }
+
+  [Fact]
+  public async Task ActivateItem_Папка_ЗаходитВнутрь()
+  {
+    MainViewModel vm = CreateWithBrowser();
+    vm.NavigateInto(Find(vm, "C:\\"));
+
+    await vm.ActivateItemAsync(Find(vm, "docs"));
+
+    Assert.Equal("C:\\docs", vm.CurrentPath);
+    Assert.Contains(vm.Items, i => i.Name == "readme.txt");
   }
 
   // ---- D2: мультивыбор ----

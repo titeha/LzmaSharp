@@ -40,13 +40,13 @@ public partial class MainWindow : Window
         }
     }
 
-    // Двойной клик по строке: для папки — перейти внутрь (навигация живёт в VM).
-    private void OnItemDoubleTapped(object? sender, TappedEventArgs e)
+    // Двойной клик по строке: папка — заход внутрь, файл-архив — открытие (логика в VM).
+    private async void OnItemDoubleTapped(object? sender, TappedEventArgs e)
     {
         if (DataContext is MainViewModel viewModel
             && sender is ListBox { SelectedItem: ArchiveItem item })
         {
-            viewModel.NavigateInto(item);
+            await viewModel.ActivateItemAsync(item);
         }
     }
 }

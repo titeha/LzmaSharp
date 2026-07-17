@@ -434,6 +434,64 @@ public sealed class MainViewModel : ObservableObject
   /// <summary>Доступно ли создание архива из папки (внедрены ли соответствующие пикеры).</summary>
   public bool CanCreateFromFolder => _sourceFolderPicker is not null && _saveFilePicker is not null;
 
+  /// <summary>
+  /// Активировать элемент (двойной клик): в браузере ФС файл-архив открывается, папка/диск —
+  /// заход внутрь; в режиме архива — заход в папку. Общая точка для двойного клика из UI.
+  /// </summary>
+  public async Task ActivateItemAsync(ArchiveItem item)
+  {
+    if (item is null)
+      return;
+
+    // Браузер ФС: двойной клик по файлу-архиву открывает его.
+    if (IsFileSystemMode && !item.IsDirectory)
+    {
+      if (item.IsArchiveFile && item.FullPath is not null)
+        await OpenArchiveFromBrowserAsync(item);
+
+      return; // прочие файлы двойным кликом пока не открываем
+    }
+
+    NavigateInto(item);
+  }
+
+  // Открывает архив по пути из браузера ФС (читает в память ≤2 ГиБ, дальше общий путь обработки).
+  private async Task OpenArchiveFromBrowserAsync(ArchiveItem item)
+  {
+    if (_fileSystemBrowser is null || item.FullPath is not { } path)
+      return;
+
+    if (item.Size > int.MaxValue)
+    {
+      StatusMessage = "Архив больше 2 ГиБ — откройте его кнопкой «Открыть большой архив…».";
+      return;
+    }
+
+    byte[] bytes;
+    try
+    {
+      bytes = await Task.Run(() =>
+      {
+        using Stream stream = _fileSystemBrowser.OpenRead(path);
+        using var buffer = new MemoryStream();
+        stream.CopyTo(buffer);
+        return buffer.ToArray();
+      });
+    }
+    catch (IOException)
+    {
+      StatusMessage = "Не удалось прочитать файл архива.";
+      return;
+    }
+    catch (UnauthorizedAccessException)
+    {
+      StatusMessage = "Нет доступа к файлу архива.";
+      return;
+    }
+
+    await ProcessOpenedArchiveAsync(new PickedArchive(item.Name, bytes));
+  }
+
   /// <summary>Войти в элемент: для папки — перейти внутрь; файлы пока игнорируются.</summary>
   public void NavigateInto(ArchiveItem item)
   {
@@ -551,6 +609,13 @@ public sealed class MainViewModel : ObservableObject
     if (picked is null)
       return; // выбор отменён — состояние не трогаем
 
+    await ProcessOpenedArchiveAsync(picked);
+  }
+
+  // Обрабатывает уже прочитанный в память архив (формат → zip/7z → при необходимости пароль).
+  // Общий путь для «Открыть…» (диалог) и открытия архива из браузера ФС.
+  private async Task ProcessOpenedArchiveAsync(PickedArchive picked)
+  {
     // ZIP-контейнер обрабатываем отдельным путём (свой ридер, без пароля/потока).
     if (DetectFormat(picked.Bytes) == ArchiveFormat.Zip)
     {

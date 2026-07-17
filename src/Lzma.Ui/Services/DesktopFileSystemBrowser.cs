@@ -89,6 +89,9 @@ public sealed class DesktopFileSystemBrowser : IFileSystemBrowser
   }
 
   /// <inheritdoc />
+  public Stream OpenRead(string fullPath) => File.OpenRead(fullPath);
+
+  /// <inheritdoc />
   public string? GetParent(string fullPath)
   {
     try
