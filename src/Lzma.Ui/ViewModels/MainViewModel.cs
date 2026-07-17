@@ -952,9 +952,13 @@ public sealed class MainViewModel : ObservableObject
     // Снимок выбранных путей на момент запуска (список может измениться при навигации).
     IReadOnlyList<string> paths = SelectedPaths;
 
-    await CreateStreamingFromSourceAsync((scanProgress, token) => Task.Run<IReadOnlyList<PickedFileRef>?>(() =>
+    await CreateStreamingFromSourceAsync(async (scanProgress, token) =>
     {
-      IReadOnlyList<ArchiveSourceFile> sources = _fileSystemBrowser.EnumerateForArchive(paths);
+      // Тяжёлый обход диска — вне UI-потока. А сбор ссылок и отчёты прогресса — ПОСЛЕ await, на
+      // UI-потоке (await без ConfigureAwait возобновляется в UI-контексте): установка IsScanning
+      // дёргает CanExecuteChanged у кнопок Avalonia, что из фонового потока падает VerifyAccess.
+      IReadOnlyList<ArchiveSourceFile> sources =
+          await Task.Run(() => _fileSystemBrowser.EnumerateForArchive(paths), token);
 
       var refs = new List<PickedFileRef>(sources.Count);
       long bytes = 0;
@@ -967,8 +971,8 @@ public sealed class MainViewModel : ObservableObject
         scanProgress?.Report(new ScanProgress(refs.Count, bytes));
       }
 
-      return refs;
-    }, token));
+      return (IReadOnlyList<PickedFileRef>?)refs;
+    });
   }
 
   // Потоковое создание доступно для ВСЕХ методов (LZMA2 многопоточно; PPMd/Copy — пофайлово), если
