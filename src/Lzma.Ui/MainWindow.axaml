@@ -36,6 +36,9 @@
                 <TextBlock Text="{Binding CurrentPath}" VerticalAlignment="Center"
                            Foreground="{DynamicResource AppInkSecondary}" TextTrimming="CharacterEllipsis"
                            IsVisible="{Binding !IsBusy}" />
+                <TextBlock Text="{Binding SelectedCount, StringFormat='• Выбрано: {0}'}" VerticalAlignment="Center"
+                           Foreground="{DynamicResource AppCopper}" FontFamily="{DynamicResource AppMonoFont}"
+                           IsVisible="{Binding HasSelection}" />
             </StackPanel>
         </Border>
 
@@ -100,10 +103,10 @@
                 <Border Grid.Row="0" Padding="14,6" BorderThickness="0,0,0,1"
                         BorderBrush="{DynamicResource AppHairline}"
                         Background="{DynamicResource AppSurfaceRaised}">
-                    <Grid ColumnDefinitions="24,*,120,90">
-                        <TextBlock Grid.Column="1" Text="Имя" FontWeight="SemiBold" />
-                        <TextBlock Grid.Column="2" Text="Размер" FontWeight="SemiBold" />
-                        <TextBlock Grid.Column="3" Text="Тип" FontWeight="SemiBold" />
+                    <Grid ColumnDefinitions="28,24,*,120,90">
+                        <TextBlock Grid.Column="2" Text="Имя" FontWeight="SemiBold" />
+                        <TextBlock Grid.Column="3" Text="Размер" FontWeight="SemiBold" />
+                        <TextBlock Grid.Column="4" Text="Тип" FontWeight="SemiBold" />
                     </Grid>
                 </Border>
 
@@ -112,12 +115,15 @@
                          DoubleTapped="OnItemDoubleTapped">
                     <ListBox.ItemTemplate>
                         <DataTemplate x:DataType="models:ArchiveItem">
-                            <Grid ColumnDefinitions="24,*,120,90">
-                                <TextBlock Grid.Column="0" Text="{Binding Icon}" />
-                                <TextBlock Grid.Column="1" Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
-                                <TextBlock Grid.Column="2" Text="{Binding DisplaySize}" Foreground="{DynamicResource AppInkSecondary}"
-                                           FontFamily="{DynamicResource AppMonoFont}" />
-                                <TextBlock Grid.Column="3" Text="{Binding Kind}" Foreground="{DynamicResource AppInkSecondary}" />
+                            <Grid ColumnDefinitions="28,24,*,120,90">
+                                <CheckBox Grid.Column="0" IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                          VerticalAlignment="Center" Padding="0" MinWidth="0"
+                                          ToolTip.Tip="Отметить для действий (создать архив, …)" />
+                                <TextBlock Grid.Column="1" Text="{Binding Icon}" VerticalAlignment="Center" />
+                                <TextBlock Grid.Column="2" Text="{Binding Name}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                                <TextBlock Grid.Column="3" Text="{Binding DisplaySize}" Foreground="{DynamicResource AppInkSecondary}"
+                                           FontFamily="{DynamicResource AppMonoFont}" VerticalAlignment="Center" />
+                                <TextBlock Grid.Column="4" Text="{Binding Kind}" Foreground="{DynamicResource AppInkSecondary}" VerticalAlignment="Center" />
                             </Grid>
                         </DataTemplate>
                     </ListBox.ItemTemplate>

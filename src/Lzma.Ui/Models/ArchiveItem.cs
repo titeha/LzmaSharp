@@ -1,11 +1,15 @@
+using MvvmUtilites;
+
 namespace Lzma.Ui.Models;
 
 /// <summary>
 /// Строка списка для отображения в UI: элемент содержимого архива ИЛИ элемент файловой системы
 /// (в режиме браузера). Для элементов ФС задан <see cref="FullPath"/>.
 /// </summary>
-public sealed class ArchiveItem
+public sealed class ArchiveItem : ObservableObject
 {
+  private bool _isSelected;
+
   /// <summary>Имя (путь внутри архива либо имя файла/папки в ФС).</summary>
   public required string Name { get; init; }
 
@@ -20,6 +24,13 @@ public sealed class ArchiveItem
   /// содержимого архива <see langword="null"/>.
   /// </summary>
   public string? FullPath { get; init; }
+
+  /// <summary>Отмечен ли элемент галочкой (мультивыбор в браузере ФС).</summary>
+  public bool IsSelected
+  {
+    get => _isSelected;
+    set => Set(ref _isSelected, value);
+  }
 
   /// <summary>Человекочитаемый размер; для каталога — пусто.</summary>
   public string DisplaySize => IsDirectory ? string.Empty : ByteSizeFormat.Format(Size);

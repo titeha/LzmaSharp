@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -34,6 +35,9 @@ public sealed class MainViewModel : ObservableObject
 
   // Текущий каталог браузера ФС; null — показываем корни (диски / «Этот компьютер»).
   private string? _currentDirectory;
+
+  // Число отмеченных галочкой элементов текущего списка (мультивыбор в браузере ФС).
+  private int _selectedCount;
 
   // Байты и пароль успешно открытого архива — нужны для извлечения без повторного открытия.
   private byte[]? _archiveBytes;
@@ -485,13 +489,13 @@ public sealed class MainViewModel : ObservableObject
         ? _fileSystemBrowser.ListRoots()
         : _fileSystemBrowser.ListDirectory(directory);
 
-    Items.Clear();
+    ClearItems();
 
     foreach (FileSystemEntry entry in entries
                  .OrderByDescending(e => e.IsDirectory)
                  .ThenBy(e => e.Name, StringComparer.OrdinalIgnoreCase))
     {
-      Items.Add(new ArchiveItem
+      AddItem(new ArchiveItem
       {
         Name = entry.Name,
         IsDirectory = entry.IsDirectory,
@@ -1369,13 +1373,13 @@ public sealed class MainViewModel : ObservableObject
   // Пересобирает список текущей папки и навигационное состояние.
   private void RefreshView()
   {
-    Items.Clear();
+    ClearItems();
 
     foreach (Node child in _current.Children.Values
                  .OrderByDescending(n => n.IsDirectory)
                  .ThenBy(n => n.Name, StringComparer.OrdinalIgnoreCase))
     {
-      Items.Add(new ArchiveItem
+      AddItem(new ArchiveItem
       {
         Name = child.Name,
         IsDirectory = child.IsDirectory,
@@ -1385,6 +1389,47 @@ public sealed class MainViewModel : ObservableObject
 
     CurrentPath = BuildCurrentPath();
     CanGoUp = _current.Parent is not null;
+  }
+
+  /// <summary>Число отмеченных галочкой элементов текущего списка.</summary>
+  public int SelectedCount
+  {
+    get => _selectedCount;
+    private set
+    {
+      if (Set(ref _selectedCount, value))
+        OnPropertyChanged(nameof(HasSelection));
+    }
+  }
+
+  /// <summary>Есть ли отмеченные элементы.</summary>
+  public bool HasSelection => SelectedCount > 0;
+
+  /// <summary>Полные пути отмеченных элементов ФС (папки и файлы) — для действий над выбором.</summary>
+  public IReadOnlyList<string> SelectedPaths =>
+      [.. Items.Where(i => i.IsSelected && i.FullPath is not null).Select(i => i.FullPath!)];
+
+  // Очищает список, отписываясь от уведомлений выбора (без утечек), и сбрасывает счётчик.
+  private void ClearItems()
+  {
+    foreach (ArchiveItem item in Items)
+      item.PropertyChanged -= OnItemPropertyChanged;
+
+    Items.Clear();
+    SelectedCount = 0;
+  }
+
+  // Добавляет элемент и подписывается на изменение его галочки.
+  private void AddItem(ArchiveItem item)
+  {
+    item.PropertyChanged += OnItemPropertyChanged;
+    Items.Add(item);
+  }
+
+  private void OnItemPropertyChanged(object? sender, PropertyChangedEventArgs e)
+  {
+    if (e.PropertyName == nameof(ArchiveItem.IsSelected))
+      SelectedCount = Items.Count(i => i.IsSelected);
   }
 
   private string BuildCurrentPath()

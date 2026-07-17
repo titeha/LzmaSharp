@@ -142,4 +142,56 @@ public sealed class MainViewModelBrowseTests
     Assert.Equal("C:\\", vm.CurrentPath);
     Assert.Contains(vm.Items, i => i.Name == "docs");
   }
+
+  // ---- D2: мультивыбор ----
+
+  [Fact]
+  public void Выбор_ГалочкиОбновляютСчётчикИПути()
+  {
+    MainViewModel vm = CreateWithBrowser();
+    vm.NavigateInto(Find(vm, "C:\\"));
+
+    Assert.Equal(0, vm.SelectedCount);
+    Assert.False(vm.HasSelection);
+
+    Find(vm, "docs").IsSelected = true;
+    Find(vm, "a.7z").IsSelected = true;
+
+    Assert.Equal(2, vm.SelectedCount);
+    Assert.True(vm.HasSelection);
+    Assert.Equal(["C:\\docs", "C:\\a.7z"], vm.SelectedPaths);
+
+    Find(vm, "docs").IsSelected = false;
+    Assert.Equal(1, vm.SelectedCount);
+    Assert.Equal(["C:\\a.7z"], vm.SelectedPaths);
+  }
+
+  [Fact]
+  public void Выбор_СбрасываетсяПриНавигации()
+  {
+    MainViewModel vm = CreateWithBrowser();
+    vm.NavigateInto(Find(vm, "C:\\"));
+    Find(vm, "docs").IsSelected = true;
+    Assert.Equal(1, vm.SelectedCount);
+
+    vm.NavigateInto(Find(vm, "docs")); // переход в папку пересобирает список
+
+    Assert.Equal(0, vm.SelectedCount);
+    Assert.False(vm.HasSelection);
+    Assert.Empty(vm.SelectedPaths);
+  }
+
+  [Fact]
+  public void Выбор_ОтпискаПослеОчистки_НеСчитаетСтарыеЭлементы()
+  {
+    MainViewModel vm = CreateWithBrowser();
+    vm.NavigateInto(Find(vm, "C:\\"));
+    ArchiveItem stale = Find(vm, "docs");
+
+    vm.NavigateUp(); // список пересобран, stale больше не в Items
+
+    // Изменение галочки на «оторванном» элементе не должно влиять на счётчик.
+    stale.IsSelected = true;
+    Assert.Equal(0, vm.SelectedCount);
+  }
 }
