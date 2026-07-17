@@ -220,6 +220,9 @@ public static class GostKuznyechikCipher
       block[i] = _inverseSBox[block[i]];
   }
 
+  // PERF: L-функция (16× R с GF(2^8)-умножением) — узкое место managed-Кузнечика (~0.2 МиБ/с).
+  // Ускорение — предвычислить L∘S как T-таблицы (16×256×16 байт). ОТЛОЖЕНО (низкий приоритет),
+  // см. docs/PERFORMANCE_PLAN.md §7 и bench/BASELINE.md (раздел «Крипта»).
   private static void ApplyLInPlace(Span<byte> block)
   {
     for (int i = 0; i < 16; i++)
