@@ -1,9 +1,13 @@
 name: Publish Core (NuGet)
 
 # Публикация пакета Ti-Soft.LzmaSharp по тегу core/X.Y.Z (напр. core/0.1.0).
-# MinVer возьмёт версию из тега; для UI будет отдельный трек по тегам ui/*.
-# Требует секрет репозитория NUGET_API_KEY (ключ nuget.org). GitFlic — зеркало;
-# сборку релизов на инфраструктуре в РФ (self-hosted runner) подключим отдельным шагом.
+# MinVer берёт версию из тега. Публикация — через NuGet TRUSTED PUBLISHING (OIDC): долгоживущий
+# API-ключ НЕ нужен; nuget.org выдаёт временный ключ по OIDC-токену воркфлоу.
+#
+# Настройка на стороне nuget.org (один раз): создать trusted-publishing ПОЛИТИКУ для пакета
+# Ti-Soft.LzmaSharp (или glob Ti-Soft.*), привязанную к репозиторию titeha/LzmaSharp и этому
+# workflow-файлу (publish-core.yml). Плюс задать repo-переменную NUGET_USER = имя аккаунта nuget.org
+# (Settings → Secrets and variables → Actions → Variables). GitFlic — зеркало; РФ-раннер — отдельный шаг.
 on:
   push:
     tags: ['core/*']
@@ -12,6 +16,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
+      id-token: write # OIDC для trusted publishing
       contents: write # для создания GitHub Release
     steps:
       - uses: actions/checkout@v4
@@ -36,8 +41,15 @@ jobs:
           dotnet CycloneDX src/Lzma.Core/Lzma.Core.csproj --output out --json
         continue-on-error: true # SBOM не должен блокировать публикацию; флаги CLI зависят от версии тулзы
 
+      # Trusted publishing: обмен OIDC-токена на временный ключ nuget.org.
+      - name: NuGet login (trusted publishing / OIDC)
+        id: nuget-login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ vars.NUGET_USER }}
+
       - name: Push to NuGet
-        run: dotnet nuget push "out/*.nupkg" -k "${{ secrets.NUGET_API_KEY }}" -s https://api.nuget.org/v3/index.json --skip-duplicate
+        run: dotnet nuget push "out/*.nupkg" --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json --skip-duplicate
 
       - name: GitHub Release
         uses: softprops/action-gh-release@v2
