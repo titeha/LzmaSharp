@@ -30,6 +30,10 @@ public sealed class MainViewModel : ObservableObject
   private readonly ISourceFolderPicker? _sourceFolderPicker;
   private readonly ISaveFilePicker? _saveFilePicker;
   private readonly ICreatePasswordPrompt? _createPasswordPrompt;
+  private readonly IFileSystemBrowser? _fileSystemBrowser;
+
+  // Текущий каталог браузера ФС; null — показываем корни (диски / «Этот компьютер»).
+  private string? _currentDirectory;
 
   // Байты и пароль успешно открытого архива — нужны для извлечения без повторного открытия.
   private byte[]? _archiveBytes;
@@ -109,7 +113,8 @@ public sealed class MainViewModel : ObservableObject
       ISourceFilesPicker? sourceFilesPicker,
       ISaveFilePicker? saveFilePicker,
       ISourceFolderPicker? sourceFolderPicker,
-      ICreatePasswordPrompt? createPasswordPrompt = null)
+      ICreatePasswordPrompt? createPasswordPrompt = null,
+      IFileSystemBrowser? fileSystemBrowser = null)
   {
     _picker = picker;
     _passwordPrompt = passwordPrompt;
@@ -119,6 +124,7 @@ public sealed class MainViewModel : ObservableObject
     _saveFilePicker = saveFilePicker;
     _sourceFolderPicker = sourceFolderPicker;
     _createPasswordPrompt = createPasswordPrompt;
+    _fileSystemBrowser = fileSystemBrowser;
     _current = _root;
     OpenCommand = new AsyncRelayCommand(OpenAsync);
     OpenArchiveFileCommand = new AsyncRelayCommand(OpenArchiveFileAsync, () => !IsOperating, this);
@@ -128,6 +134,10 @@ public sealed class MainViewModel : ObservableObject
     CreateCommand = new AsyncRelayCommand(CreateFromFilesAsync, () => CanCreate && !IsOperating, this);
     CreateFromFolderCommand = new AsyncRelayCommand(CreateFromFolderAsync, () => CanCreateFromFolder && !IsOperating, this);
     CancelCommand = new RelayCommand(Cancel, () => IsOperating || IsScanning, this);
+
+    // На старте (если шов ФС внедрён) показываем браузер файловой системы с корней.
+    if (_fileSystemBrowser is not null)
+      ShowFileSystem(null);
   }
 
   /// <summary>Заголовок окна: базовый либо «имя_архива — LzmaSharp» при открытом архиве.</summary>
@@ -152,8 +162,21 @@ public sealed class MainViewModel : ObservableObject
   public bool HasArchive
   {
     get => _hasArchive;
-    set => Set(ref _hasArchive, value);
+    set
+    {
+      if (Set(ref _hasArchive, value))
+      {
+        OnPropertyChanged(nameof(IsFileSystemMode));
+        OnPropertyChanged(nameof(HasContent));
+      }
+    }
   }
+
+  /// <summary>Активен ли режим браузера файловой системы (шов внедрён и архив не открыт).</summary>
+  public bool IsFileSystemMode => _fileSystemBrowser is not null && !HasArchive;
+
+  /// <summary>Есть ли что показывать в таблице: содержимое архива или список ФС.</summary>
+  public bool HasContent => HasArchive || IsFileSystemMode;
 
   /// <summary>Текущий путь внутри архива (пусто = корень).</summary>
   public string CurrentPath
@@ -410,7 +433,20 @@ public sealed class MainViewModel : ObservableObject
   /// <summary>Войти в элемент: для папки — перейти внутрь; файлы пока игнорируются.</summary>
   public void NavigateInto(ArchiveItem item)
   {
-    if (item is null || !item.IsDirectory)
+    if (item is null)
+      return;
+
+    // Режим браузера ФС: заходим в папку/диск по полному пути.
+    if (IsFileSystemMode)
+    {
+      if (item.IsDirectory && item.FullPath is { } path)
+        ShowFileSystem(path);
+      // Файлы (в т.ч. архивы) — открытие/заход подключим отдельным шагом.
+      return;
+    }
+
+    // Режим архива: навигация по виртуальному дереву.
+    if (!item.IsDirectory)
       return;
 
     if (_current.Children.TryGetValue(item.Name, out Node? child) && child.IsDirectory)
@@ -420,14 +456,52 @@ public sealed class MainViewModel : ObservableObject
     }
   }
 
-  /// <summary>Подняться на уровень вверх по дереву архива.</summary>
+  /// <summary>Подняться на уровень вверх (в ФС — к родителю/корням; в архиве — по дереву).</summary>
   public void NavigateUp()
   {
+    if (IsFileSystemMode)
+    {
+      if (_currentDirectory is { } dir)
+        ShowFileSystem(_fileSystemBrowser!.GetParent(dir)); // null → к списку корней
+      return;
+    }
+
     if (_current.Parent is { } parent)
     {
       _current = parent;
       RefreshView();
     }
+  }
+
+  // Показывает содержимое каталога ФС (или список корней при directory=null) в общей таблице.
+  private void ShowFileSystem(string? directory)
+  {
+    if (_fileSystemBrowser is null)
+      return;
+
+    _currentDirectory = directory;
+
+    IReadOnlyList<FileSystemEntry> entries = directory is null
+        ? _fileSystemBrowser.ListRoots()
+        : _fileSystemBrowser.ListDirectory(directory);
+
+    Items.Clear();
+
+    foreach (FileSystemEntry entry in entries
+                 .OrderByDescending(e => e.IsDirectory)
+                 .ThenBy(e => e.Name, StringComparer.OrdinalIgnoreCase))
+    {
+      Items.Add(new ArchiveItem
+      {
+        Name = entry.Name,
+        IsDirectory = entry.IsDirectory,
+        Size = entry.Size,
+        FullPath = entry.FullPath,
+      });
+    }
+
+    CurrentPath = directory ?? "Этот компьютер";
+    CanGoUp = directory is not null;
   }
 
   /// <summary>Формат архива, определяемый по сигнатуре первых байт.</summary>
@@ -1286,6 +1360,10 @@ public sealed class MainViewModel : ObservableObject
     _archivePassword = null;
     _archivePath = null;
     _zipEntries = null;
+
+    // Если доступен браузер ФС — возвращаемся к нему (на тот же каталог), а не к пустому состоянию.
+    if (_fileSystemBrowser is not null)
+      ShowFileSystem(_currentDirectory);
   }
 
   // Пересобирает список текущей папки и навигационное состояние.

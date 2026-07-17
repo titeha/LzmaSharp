@@ -26,6 +26,7 @@ public partial class App : Application
             var saveFilePicker = new AvaloniaSaveFilePicker(window);
             var sourceFolderPicker = new AvaloniaSourceFolderPicker(window);
             var createPasswordPrompt = new AvaloniaCreatePasswordPrompt(window);
+            var fileSystemBrowser = new DesktopFileSystemBrowser();
             window.DataContext = new MainViewModel(
                 picker,
                 passwordPrompt,
@@ -34,7 +35,8 @@ public partial class App : Application
                 sourceFilesPicker,
                 saveFilePicker,
                 sourceFolderPicker,
-                createPasswordPrompt);
+                createPasswordPrompt,
+                fileSystemBrowser);
             desktop.MainWindow = window;
         }
 

@@ -1,11 +1,12 @@
 namespace Lzma.Ui.Models;
 
 /// <summary>
-/// Строка списка содержимого архива для отображения в UI.
+/// Строка списка для отображения в UI: элемент содержимого архива ИЛИ элемент файловой системы
+/// (в режиме браузера). Для элементов ФС задан <see cref="FullPath"/>.
 /// </summary>
 public sealed class ArchiveItem
 {
-  /// <summary>Имя (путь внутри архива).</summary>
+  /// <summary>Имя (путь внутри архива либо имя файла/папки в ФС).</summary>
   public required string Name { get; init; }
 
   /// <summary>Признак каталога.</summary>
@@ -14,12 +15,34 @@ public sealed class ArchiveItem
   /// <summary>Размер в байтах (для файлов; для каталогов — 0).</summary>
   public required long Size { get; init; }
 
+  /// <summary>
+  /// Полный путь в файловой системе — задан только в режиме браузера ФС; для элементов
+  /// содержимого архива <see langword="null"/>.
+  /// </summary>
+  public string? FullPath { get; init; }
+
   /// <summary>Человекочитаемый размер; для каталога — пусто.</summary>
   public string DisplaySize => IsDirectory ? string.Empty : ByteSizeFormat.Format(Size);
 
-  /// <summary>Тип элемента для колонки.</summary>
-  public string Kind => IsDirectory ? "папка" : "файл";
+  /// <summary>Является ли элемент файлом-архивом (по расширению) — для значка/действий.</summary>
+  public bool IsArchiveFile => !IsDirectory && IsArchiveName(Name);
 
-  /// <summary>Значок элемента (папка/файл).</summary>
-  public string Icon => IsDirectory ? "📁" : "📄";
+  /// <summary>Тип элемента для колонки.</summary>
+  public string Kind => IsDirectory ? "папка" : IsArchiveFile ? "архив" : "файл";
+
+  /// <summary>Значок элемента (папка/архив/файл).</summary>
+  public string Icon => IsDirectory ? "📁" : IsArchiveFile ? "📦" : "📄";
+
+  /// <summary>Распознаёт имя архива по расширению (.7z/.zip и первый том .7z.001).</summary>
+  public static bool IsArchiveName(string name)
+  {
+    if (name.EndsWith(".7z", System.StringComparison.OrdinalIgnoreCase) ||
+        name.EndsWith(".zip", System.StringComparison.OrdinalIgnoreCase))
+    {
+      return true;
+    }
+
+    // Первый том многотомного 7z: name.7z.001
+    return name.EndsWith(".7z.001", System.StringComparison.OrdinalIgnoreCase);
+  }
 }
