@@ -1,0 +1,62 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:Lzma.Ui.ViewModels"
+        mc:Ignorable="d" d:DesignWidth="460" d:DesignHeight="320"
+        x:Class="Lzma.Ui.ExtractArchiveWindow"
+        x:DataType="vm:MainViewModel"
+        Title="Извлечь архив"
+        Width="460" SizeToContent="Height"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False"
+        Background="{DynamicResource AppBg}"
+        FontFamily="{DynamicResource AppUiFont}">
+
+    <StackPanel Margin="18" Spacing="14">
+
+        <!-- Источник извлечения -->
+        <TextBlock Text="АРХИВ" FontWeight="SemiBold" FontSize="12"
+                   Foreground="{DynamicResource AppInkSecondary}" />
+        <StackPanel Spacing="8">
+            <Button Content="Извлечь открытый архив…" Command="{Binding ExtractAllCommand}"
+                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                    IsVisible="{Binding HasArchive}"
+                    ToolTip.Tip="Извлечь все файлы сейчас открытого архива в выбранную папку" />
+            <Button Content="Извлечь архив с диска…" Command="{Binding ExtractArchiveFileCommand}"
+                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                    ToolTip.Tip="Выбрать .7z на диске и извлечь потоком, без загрузки в память (в т.ч. архивы больше 2 ГиБ)" />
+        </StackPanel>
+
+        <!-- Прогресс (виден во время операции/сканирования) -->
+        <StackPanel Spacing="6" IsVisible="{Binding IsCancelVisible}">
+            <Border Height="1" Background="{DynamicResource AppHairline}" />
+            <ProgressBar Minimum="0" Maximum="100" Value="{Binding ProgressPercent}"
+                         Height="16" Foreground="{DynamicResource AppCopper}"
+                         IsVisible="{Binding IsBusy}" />
+            <WrapPanel>
+                <TextBlock Text="{Binding ProgressPercent, StringFormat='{}{0:0}%'}" Margin="0,0,10,0"
+                           Foreground="{DynamicResource AppCopper}" FontFamily="{DynamicResource AppMonoFont}"
+                           FontWeight="SemiBold" IsVisible="{Binding IsBusy}" />
+                <TextBlock Text="{Binding ProgressText}" Margin="0,0,10,0"
+                           Foreground="{DynamicResource AppInk}" FontFamily="{DynamicResource AppMonoFont}"
+                           IsVisible="{Binding IsBusy}" />
+                <TextBlock Text="{Binding ProgressEta}" Margin="0,0,10,0"
+                           Foreground="{DynamicResource AppInkSecondary}" FontFamily="{DynamicResource AppMonoFont}"
+                           IsVisible="{Binding IsBusy}" />
+            </WrapPanel>
+            <TextBlock Text="{Binding CurrentFileStatus}" TextTrimming="CharacterEllipsis"
+                       Foreground="{DynamicResource AppInkSecondary}"
+                       IsVisible="{Binding CurrentFileStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+            <Button Content="Отмена" Command="{Binding CancelCommand}" HorizontalAlignment="Left" />
+        </StackPanel>
+
+        <!-- Итог/диагностика -->
+        <SelectableTextBlock Text="{Binding StatusMessage}" TextWrapping="Wrap"
+                             Foreground="{DynamicResource AppInkSecondary}"
+                             IsVisible="{Binding StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+
+        <Button Content="Закрыть" Click="OnClose" HorizontalAlignment="Right" MinWidth="90" />
+    </StackPanel>
+</Window>

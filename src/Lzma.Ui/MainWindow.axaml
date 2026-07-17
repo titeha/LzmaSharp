@@ -26,10 +26,10 @@
                 <Button Content="Создать архив…" Click="OnOpenCreateWindow" Classes="accent"
                         IsVisible="{Binding CanCreate}"
                         ToolTip.Tip="Настройки сжатия и создание архива в отдельном окне" />
-                <!-- Настройки сжатия (метод/потоки/словарь/тома) переехали в окно «Создать архив». -->
-                <Button Content="Извлечь всё…" Command="{Binding ExtractAllCommand}" />
-                <Button Content="Извлечь архив с диска…" Command="{Binding ExtractArchiveFileCommand}"
-                        ToolTip.Tip="Извлечь .7z прямо с диска потоком, без загрузки в память (для архивов больше 2 ГиБ)" />
+                <!-- Настройки сжатия (метод/потоки/словарь/тома) переехали в окно «Создать архив».
+                     Извлечение (открытый архив / архив с диска) — в окне «Извлечь…». -->
+                <Button Content="Извлечь…" Click="OnOpenExtractWindow"
+                        ToolTip.Tip="Извлечь открытый архив или архив с диска в отдельном окне" />
                 <Button Content="Вверх" Command="{Binding NavigateUpCommand}" />
                 <Button Content="◐" Click="OnToggleTheme" VerticalAlignment="Center"
                         ToolTip.Tip="Переключить тему (тёмная/светлая)" />

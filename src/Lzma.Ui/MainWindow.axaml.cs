@@ -23,6 +23,13 @@ public partial class MainWindow : Window
         _ = window.ShowDialog(this);
     }
 
+    // Открыть отдельное окно «Извлечь архив»: источник + прогресс. DataContext общий с главным окном.
+    private void OnOpenExtractWindow(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        var window = new ExtractArchiveWindow { DataContext = DataContext };
+        _ = window.ShowDialog(this);
+    }
+
     // Переключение тёмная/светлая тема на лету.
     private void OnToggleTheme(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
