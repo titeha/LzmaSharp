@@ -55,6 +55,8 @@ public sealed class MainViewModelBrowseTests
     public System.IO.Stream OpenRead(string fullPath) => fullPath == "C:\\a.7z" && archiveBytes is not null
         ? new System.IO.MemoryStream(archiveBytes, writable: false)
         : throw new System.IO.FileNotFoundException(fullPath);
+
+    public IReadOnlyList<ArchiveSourceFile> EnumerateForArchive(IReadOnlyList<string> paths) => [];
   }
 
   private static MainViewModel CreateWithBrowser(byte[]? archiveBytes = null)
@@ -181,6 +183,28 @@ public sealed class MainViewModelBrowseTests
 
     Assert.Equal("C:\\docs", vm.CurrentPath);
     Assert.Contains(vm.Items, i => i.Name == "readme.txt");
+  }
+
+  [Fact]
+  public async Task ВыходИзАрхива_ВверхСКорня_ВозвращаетВБраузер()
+  {
+    byte[] content = System.Text.Encoding.UTF8.GetBytes("archive content for exit test");
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, SevenZipArchiveWriter.BuildArchive(
+        [new SevenZipArchiveWriterEntry("inner.txt", content)], out byte[] archive));
+
+    MainViewModel vm = CreateWithBrowser(archive);
+    vm.NavigateInto(Find(vm, "C:\\"));            // C:\ (папка docs + a.7z)
+    await vm.ActivateItemAsync(Find(vm, "a.7z")); // открыли архив
+
+    Assert.True(vm.HasArchive);
+    Assert.True(vm.CanGoUp);                       // «Вверх» доступен на корне архива (есть браузер)
+
+    vm.NavigateUp();                               // выход из архива → браузер ФС
+
+    Assert.False(vm.HasArchive);
+    Assert.True(vm.IsFileSystemMode);
+    Assert.Equal("C:\\", vm.CurrentPath);          // вернулись в папку, где лежал архив
+    Assert.Contains(vm.Items, i => i.Name == "docs");
   }
 
   // ---- D2: мультивыбор ----

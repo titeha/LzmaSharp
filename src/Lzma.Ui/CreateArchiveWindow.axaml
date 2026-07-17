@@ -27,6 +27,13 @@
                     IsVisible="{Binding CanCreateFromFolder}" />
         </StackPanel>
 
+        <!-- Создание из отмеченного галочками в браузере главного окна (файлы + папки). -->
+        <Button Content="{Binding SelectedCount, StringFormat='Создать из выбранного в браузере ({0})'}"
+                Command="{Binding CreateFromSelectionCommand}"
+                Classes="accent" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                IsVisible="{Binding HasSelection}"
+                ToolTip.Tip="Упаковать отмеченные в браузере файлы и папки текущими настройками сжатия" />
+
         <Border Height="1" Background="{DynamicResource AppHairline}" />
 
         <!-- Настройки сжатия -->

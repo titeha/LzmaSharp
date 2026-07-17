@@ -92,6 +92,42 @@ public sealed class DesktopFileSystemBrowser : IFileSystemBrowser
   public Stream OpenRead(string fullPath) => File.OpenRead(fullPath);
 
   /// <inheritdoc />
+  public IReadOnlyList<ArchiveSourceFile> EnumerateForArchive(IReadOnlyList<string> paths)
+  {
+    var result = new List<ArchiveSourceFile>();
+
+    // Недоступные подкаталоги при обходе папки просто пропускаются.
+    var options = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true };
+
+    foreach (string path in paths)
+    {
+      if (Directory.Exists(path))
+      {
+        IEnumerable<string> files;
+        try { files = Directory.EnumerateFiles(path, "*", options); }
+        catch (IOException) { continue; }
+        catch (System.UnauthorizedAccessException) { continue; }
+
+        foreach (string file in files)
+          result.Add(new ArchiveSourceFile(ArchiveEntryNaming.ForFileUnderFolder(path, file), file, SafeLength(file)));
+      }
+      else if (File.Exists(path))
+      {
+        result.Add(new ArchiveSourceFile(Path.GetFileName(path), path, SafeLength(path)));
+      }
+    }
+
+    return result;
+  }
+
+  private static long SafeLength(string file)
+  {
+    try { return new FileInfo(file).Length; }
+    catch (IOException) { return 0; }
+    catch (System.UnauthorizedAccessException) { return 0; }
+  }
+
+  /// <inheritdoc />
   public string? GetParent(string fullPath)
   {
     try

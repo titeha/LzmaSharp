@@ -137,6 +137,7 @@ public sealed class MainViewModel : ObservableObject
     ExtractArchiveFileCommand = new AsyncRelayCommand(ExtractArchiveFileAsync, () => !IsOperating, this);
     CreateCommand = new AsyncRelayCommand(CreateFromFilesAsync, () => CanCreate && !IsOperating, this);
     CreateFromFolderCommand = new AsyncRelayCommand(CreateFromFolderAsync, () => CanCreateFromFolder && !IsOperating, this);
+    CreateFromSelectionCommand = new AsyncRelayCommand(CreateFromSelectionAsync, () => CanCreateFromSelection && !IsOperating, this);
     CancelCommand = new RelayCommand(Cancel, () => IsOperating || IsScanning, this);
 
     // На старте (если шов ФС внедрён) показываем браузер файловой системы с корней.
@@ -339,6 +340,9 @@ public sealed class MainViewModel : ObservableObject
   /// <summary>Команда «Создать из папки…» — упаковать содержимое выбранной папки (рекурсивно).</summary>
   public AsyncRelayCommand CreateFromFolderCommand { get; }
 
+  /// <summary>Команда «Создать из выбранного» — упаковать отмеченные в браузере файлы и папки.</summary>
+  public AsyncRelayCommand CreateFromSelectionCommand { get; }
+
   /// <summary>Команда «Отмена» — прерывает текущую длительную операцию (сжатие/извлечение).</summary>
   public RelayCommand CancelCommand { get; }
 
@@ -434,6 +438,9 @@ public sealed class MainViewModel : ObservableObject
   /// <summary>Доступно ли создание архива из папки (внедрены ли соответствующие пикеры).</summary>
   public bool CanCreateFromFolder => _sourceFolderPicker is not null && _saveFilePicker is not null;
 
+  /// <summary>Доступно ли создание из выбранного в браузере (есть шов ФС, куда сохранять и что паковать).</summary>
+  public bool CanCreateFromSelection => _fileSystemBrowser is not null && _saveFilePicker is not null && HasSelection;
+
   /// <summary>
   /// Активировать элемент (двойной клик): в браузере ФС файл-архив открывается, папка/диск —
   /// заход внутрь; в режиме архива — заход в папку. Общая точка для двойного клика из UI.
@@ -528,10 +535,16 @@ public sealed class MainViewModel : ObservableObject
       return;
     }
 
+    // Режим архива: вверх по дереву; с корня архива (Parent == null) — закрываем архив и
+    // возвращаемся в браузер ФС (как в 7-Zip: «вверх» из корня архива ведёт наружу).
     if (_current.Parent is { } parent)
     {
       _current = parent;
       RefreshView();
+    }
+    else if (_fileSystemBrowser is not null)
+    {
+      ResetTree();
     }
   }
 
@@ -928,6 +941,34 @@ public sealed class MainViewModel : ObservableObject
       await CreateStreamingFromSourceAsync(_sourceFolderPicker.PickFolderFileRefsAsync);
     else
       await CreateFromSourceAsync(_sourceFolderPicker.PickFolderFilesAsync);
+  }
+
+  // Создание из отмеченных в браузере ФС файлов и папок (потоково, файлы читаются лениво).
+  private async Task CreateFromSelectionAsync()
+  {
+    if (_fileSystemBrowser is null || !HasSelection)
+      return;
+
+    // Снимок выбранных путей на момент запуска (список может измениться при навигации).
+    IReadOnlyList<string> paths = SelectedPaths;
+
+    await CreateStreamingFromSourceAsync((scanProgress, token) => Task.Run<IReadOnlyList<PickedFileRef>?>(() =>
+    {
+      IReadOnlyList<ArchiveSourceFile> sources = _fileSystemBrowser.EnumerateForArchive(paths);
+
+      var refs = new List<PickedFileRef>(sources.Count);
+      long bytes = 0;
+      foreach (ArchiveSourceFile source in sources)
+      {
+        token.ThrowIfCancellationRequested();
+        string full = source.FullPath;
+        refs.Add(new PickedFileRef(source.EntryName, source.Length, () => _fileSystemBrowser.OpenRead(full)));
+        bytes += source.Length;
+        scanProgress?.Report(new ScanProgress(refs.Count, bytes));
+      }
+
+      return refs;
+    }, token));
   }
 
   // Потоковое создание доступно для ВСЕХ методов (LZMA2 многопоточно; PPMd/Copy — пофайлово), если
@@ -1453,7 +1494,8 @@ public sealed class MainViewModel : ObservableObject
     }
 
     CurrentPath = BuildCurrentPath();
-    CanGoUp = _current.Parent is not null;
+    // На корне архива «Вверх» доступен, если есть браузер ФС — чтобы можно было выйти из архива.
+    CanGoUp = _current.Parent is not null || _fileSystemBrowser is not null;
   }
 
   /// <summary>Число отмеченных галочкой элементов текущего списка.</summary>
