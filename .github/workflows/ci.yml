@@ -1,0 +1,30 @@
+name: CI
+
+# Сборка и тесты на каждый пуш ветки и PR. Теги обрабатываются отдельными publish-воркфлоу.
+on:
+  push:
+    branches: ['**']
+    tags-ignore: ['**']
+  pull_request:
+
+jobs:
+  build-test:
+    # ubuntu — заодно доказывает кроссплатформенную managed-сборку (ядро без нативных зависимостей).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # MinVer выводит версию из полной истории git
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build (Release)
+        run: dotnet build -c Release --no-restore
+
+      - name: Test (Release)
+        run: dotnet test -c Release --no-build --verbosity quiet

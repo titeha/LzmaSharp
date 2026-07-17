@@ -1,0 +1,48 @@
+name: Publish Core (NuGet)
+
+# Публикация пакета Ti-Soft.LzmaSharp по тегу core/X.Y.Z (напр. core/0.1.0).
+# MinVer возьмёт версию из тега; для UI будет отдельный трек по тегам ui/*.
+# Требует секрет репозитория NUGET_API_KEY (ключ nuget.org). GitFlic — зеркало;
+# сборку релизов на инфраструктуре в РФ (self-hosted runner) подключим отдельным шагом.
+on:
+  push:
+    tags: ['core/*']
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # для создания GitHub Release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # MinVer: версия из тега
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      # Публикуем ТОЛЬКО ядро — независимо от UI (core отдельный трек).
+      - name: Test core
+        run: dotnet test tests/Lzma.Core.Tests/Lzma.Core.Tests.csproj -c Release --verbosity quiet
+
+      - name: Pack
+        run: dotnet pack src/Lzma.Core/Lzma.Core.csproj -c Release -o out
+
+      # SBOM (CycloneDX) — приложение к релизу (задел под провенанс/госсектор).
+      - name: SBOM
+        run: |
+          dotnet tool install --global CycloneDX
+          dotnet CycloneDX src/Lzma.Core/Lzma.Core.csproj --output out --json
+        continue-on-error: true # SBOM не должен блокировать публикацию; флаги CLI зависят от версии тулзы
+
+      - name: Push to NuGet
+        run: dotnet nuget push "out/*.nupkg" -k "${{ secrets.NUGET_API_KEY }}" -s https://api.nuget.org/v3/index.json --skip-duplicate
+
+      - name: GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            out/*.nupkg
+            out/*.snupkg
+            out/*.json

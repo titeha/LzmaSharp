@@ -9,7 +9,9 @@
   <!-- NuGet-пакет: Ti-Soft.LzmaSharp -->
   <PropertyGroup>
     <PackageId>Ti-Soft.LzmaSharp</PackageId>
-    <Version>0.1.0</Version>
+    <!-- Версия выводится из git-тега MinVer (тег core/1.2.3 → пакет 1.2.3; между тегами — pre-release). -->
+    <MinVerTagPrefix>core/</MinVerTagPrefix>
+    <MinVerMinimumMajorMinor>0.1</MinVerMinimumMajorMinor>
     <Authors>Artemy Sobolev</Authors>
     <Company>Ti-Soft</Company>
     <Product>LzmaSharp</Product>
@@ -33,6 +35,11 @@
   <ItemGroup>
     <InternalsVisibleTo Include="$(MSBuildProjectName).Tests" />
     <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <!-- MinVer — только на этапе сборки (PrivateAssets=all): в зависимости пакета НЕ попадает. -->
+  <ItemGroup>
+    <PackageReference Include="MinVer" Version="6.0.0" PrivateAssets="all" />
   </ItemGroup>
 
   <!-- Внешних codec-зависимостей нет: Deflate/Deflate64/BZip2/PPMd — собственные управляемые декодеры. -->
