@@ -46,7 +46,9 @@ jobs:
         id: nuget-login
         uses: NuGet/login@v1
         with:
-          user: ${{ secrets.NUGET_USER }}
+          # NUGET_USER = имя аккаунта nuget.org. Берём из repo-Variable, а если пусто — из Secret
+          # (устойчиво к тому, куда именно положено значение — vars ИЛИ secrets; конец пинг-понга).
+          user: ${{ vars.NUGET_USER || secrets.NUGET_USER }}
 
       - name: Push to NuGet
         run: dotnet nuget push "out/*.nupkg" --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json --skip-duplicate
