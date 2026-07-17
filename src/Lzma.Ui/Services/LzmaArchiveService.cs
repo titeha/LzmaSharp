@@ -35,6 +35,18 @@ public sealed class LzmaArchiveService : IArchiveService
   }
 
   /// <inheritdoc />
+  public Task<ZipExtractResult> ExtractZipAsync(
+      IReadOnlyList<ZipEntry> entries,
+      string destination,
+      System.Threading.CancellationToken token = default,
+      System.IProgress<string>? currentFile = null)
+  {
+    return Task.Run(
+        () => ZipExtractor.ExtractToDirectory(entries, destination, overwrite: false, currentFile, token),
+        token);
+  }
+
+  /// <inheritdoc />
   public Task<SevenZipArchiveDecodeResult> ExtractAllAsync(
       byte[] bytes,
       string? password,

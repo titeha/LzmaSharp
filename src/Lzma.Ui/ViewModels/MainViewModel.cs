@@ -615,10 +615,10 @@ public sealed class MainViewModel : ObservableObject
   // Извлечение содержимого открытого архива в выбранную папку.
   private async Task ExtractAllAsync()
   {
-    // Открыт ZIP — распаковка ZIP на диск подключается отдельным шагом.
-    if (_zipEntries is not null)
+    // Открыт ZIP — своя in-memory распаковка (Store/Deflate).
+    if (_zipEntries is { } zipEntries)
     {
-      StatusMessage = "Распаковка ZIP на диск ещё не подключена (следующий шаг). Пока доступен обзор содержимого.";
+      await ExtractZipAsync(zipEntries);
       return;
     }
 
@@ -674,6 +674,34 @@ public sealed class MainViewModel : ObservableObject
     SevenZipArchiveDecodeResult.Ok => $"Извлечено в: {destination}",
     SevenZipArchiveDecodeResult.NotSupported => "Извлечение не поддерживается для этого архива.",
     _ => "Не удалось извлечь: ошибка данных или файл уже существует.",
+  };
+
+  // Распаковка открытого ZIP на диск (уже прочитанные элементы, in-memory).
+  private async Task ExtractZipAsync(ZipEntry[] entries)
+  {
+    string? destination = await _folderPicker.PickFolderAsync();
+
+    if (destination is null)
+      return; // выбор папки отменён
+
+    var currentFile = new Progress<string>(name => CurrentFileStatus = FormatExtractingFileStatus(name));
+
+    await RunOperationAsync(async token =>
+    {
+      try
+      {
+        ZipExtractResult result = await _archiveService.ExtractZipAsync(entries, destination, token, currentFile);
+        StatusMessage = ZipExtractStatus(result, destination);
+      }
+      finally { CurrentFileStatus = null; }
+    });
+  }
+
+  internal static string ZipExtractStatus(ZipExtractResult result, string destination) => result switch
+  {
+    ZipExtractResult.Ok => $"Извлечено в: {destination}",
+    ZipExtractResult.IOError => "Не удалось извлечь ZIP: ошибка записи на диск.",
+    _ => "Не удалось извлечь ZIP: небезопасный путь, конфликт имён или файл уже существует.",
   };
 
   // Итог потокового извлечения по пути с учётом шифрования: при неудаче зашифрованного архива

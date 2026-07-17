@@ -25,8 +25,17 @@ public sealed class MainViewModelZipTests
     public Task<string?> PickFolderAsync() => Task.FromResult<string?>(null);
   }
 
+  // Фейк выбора папки: всегда возвращает заданный путь (для теста распаковки на диск).
+  private sealed class StubFolderPicker(string path) : IFolderPicker
+  {
+    public Task<string?> PickFolderAsync() => Task.FromResult<string?>(path);
+  }
+
   private static MainViewModel CreateViewModel(PickedArchive? picked)
       => new(new StubArchivePicker(picked), new CancellingPasswordPrompt(), new CancellingFolderPicker());
+
+  private static MainViewModel CreateViewModel(PickedArchive? picked, IFolderPicker folderPicker)
+      => new(new StubArchivePicker(picked), new CancellingPasswordPrompt(), folderPicker);
 
   // ---- DetectFormat: чистая функция определения формата по сигнатуре ----
 
@@ -113,21 +122,40 @@ public sealed class MainViewModelZipTests
     Assert.Contains("ZIP", vm.StatusMessage);
   }
 
-  // ---- ExtractAll на открытом ZIP: честная заглушка (распаковка — следующий шаг) ----
+  // ---- ExtractAll на открытом ZIP: реальная распаковка на диск ----
 
   [Fact]
-  public async Task ExtractAll_ОткрытЗип_СообщаетЧтоРаспаковкаНеПодключена()
+  public async Task ExtractAll_ОткрытЗип_РаспаковываетНаДиск()
   {
+    byte[] content = Encoding.UTF8.GetBytes("zip extraction through the view model");
     Assert.Equal(ZipWriteResult.Ok, ZipWriter.Build(
-        [new ZipWriterEntry("a.txt", Encoding.UTF8.GetBytes("data"))], out byte[] zip));
+        [new ZipWriterEntry("folder/a.txt", content)], out byte[] zip));
 
-    MainViewModel vm = CreateViewModel(new PickedArchive("x.zip", zip));
-    await vm.OpenCommand.ExecuteAsync();
-    Assert.True(vm.HasArchive);
+    string dest = Path.Combine(Path.GetTempPath(), "lzs-vm-zipx-" + Guid.NewGuid().ToString("N"));
+    try
+    {
+      MainViewModel vm = CreateViewModel(new PickedArchive("x.zip", zip), new StubFolderPicker(dest));
+      await vm.OpenCommand.ExecuteAsync();
+      Assert.True(vm.HasArchive);
 
-    await vm.ExtractAllCommand.ExecuteAsync();
+      await vm.ExtractAllCommand.ExecuteAsync();
 
-    Assert.NotNull(vm.StatusMessage);
-    Assert.Contains("ZIP", vm.StatusMessage);
+      Assert.Equal(content, File.ReadAllBytes(Path.Combine(dest, "folder", "a.txt")));
+      Assert.NotNull(vm.StatusMessage);
+      Assert.Contains("Извлечено", vm.StatusMessage);
+    }
+    finally
+    {
+      if (Directory.Exists(dest))
+        Directory.Delete(dest, recursive: true);
+    }
+  }
+
+  [Fact]
+  public void ZipExtractStatus_Ok_УказываетПапку()
+  {
+    Assert.Contains("Извлечено", MainViewModel.ZipExtractStatus(ZipExtractResult.Ok, @"C:\out"));
+    Assert.Contains("диск", MainViewModel.ZipExtractStatus(ZipExtractResult.IOError, @"C:\out"));
+    Assert.Contains("путь", MainViewModel.ZipExtractStatus(ZipExtractResult.InvalidData, @"C:\out"));
   }
 }

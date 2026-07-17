@@ -26,7 +26,7 @@ public static partial class SevenZipArchiveDecoder
   /// Сейчас достаточно снять специальные атрибуты (в первую очередь ReadOnly),
   /// чтобы обычная запись поверх файла не падала по доступу.
   /// </summary>
-  private static bool TryPrepareExistingFileForOverwrite(string fullPath)
+  internal static bool TryPrepareExistingFileForOverwrite(string fullPath)
   {
     try
     {
@@ -51,7 +51,7 @@ public static partial class SevenZipArchiveDecoder
   /// Строит безопасный путь назначения для элемента архива.
   /// Запрещает абсолютные пути, пустые сегменты, "."/"..", и выход за пределы root.
   /// </summary>
-  private static bool TryBuildSafePath(
+  internal static bool TryBuildSafePath(
     string rootWithSep,
     string entryName,
     StringComparison comparison,
@@ -221,7 +221,7 @@ public static partial class SevenZipArchiveDecoder
   /// Для каталогов includeSelf=true, чтобы поймать случай
   /// "в архиве каталог, а на диске по тому же пути уже файл".
   /// </summary>
-  private static bool HasFileOnPath(
+  internal static bool HasFileOnPath(
       string root,
       string fullPath,
       bool includeSelf,
@@ -252,7 +252,7 @@ public static partial class SevenZipArchiveDecoder
   /// и что среди его родительских сегментов нет файлов.
   /// Если по пути уже встречается существующий каталог, дальше вверх можно не идти.
   /// </summary>
-  private static bool HasFileOnDirectoryPath(string fullDirectoryPath, StringComparison comparison)
+  internal static bool HasFileOnDirectoryPath(string fullDirectoryPath, StringComparison comparison)
   {
     string? current = fullDirectoryPath;
 

@@ -62,6 +62,18 @@ public interface IArchiveService
       => Task.FromResult(new ZipOpenOutcome(ZipReadResult.NotSupported, []));
 
   /// <summary>
+  /// Распаковывает уже прочитанные ZIP-элементы на диск в <paramref name="destination"/> с защитой
+  /// путей и откатом при сбое. Реализация по умолчанию — <see cref="ZipExtractResult.IOError"/>
+  /// (шов подключается только в боевой службе).
+  /// </summary>
+  Task<ZipExtractResult> ExtractZipAsync(
+      IReadOnlyList<ZipEntry> entries,
+      string destination,
+      CancellationToken token = default,
+      IProgress<string>? currentFile = null)
+      => Task.FromResult(ZipExtractResult.IOError);
+
+  /// <summary>
   /// Извлекает всё содержимое архива в указанную папку. Опциональный <paramref name="progress"/>
   /// получает отчёт о ходе извлечения (по folder-ам/файлам ядра).
   /// </summary>
