@@ -20,14 +20,23 @@ public static class GostMagmaCtrTransform
     if (key.Length != GostMagmaCipher.KeySize)
       return false;
 
-    return GostCtrTransform.Transform(
-        GostMagmaCipher.TryEncryptBlock,
-        GostMagmaCipher.BlockSize,
-        InitializationVectorSize,
-        key,
-        initializationVector,
-        input,
-        output);
+    // Расписание ключа считаем один раз (не на каждый блок) и шифруем им все блоки-счётчики.
+    uint[] roundKeys = new uint[32];
+    GostMagmaCipher.ExpandRoundKeys(key, roundKeys);
+    try
+    {
+      return GostCtrTransform.Transform(
+          (counterBlock, gamma) => GostMagmaCipher.EncryptBlock(roundKeys, counterBlock, gamma),
+          GostMagmaCipher.BlockSize,
+          InitializationVectorSize,
+          initializationVector,
+          input,
+          output);
+    }
+    finally
+    {
+      System.Array.Clear(roundKeys);
+    }
   }
 
   /// <summary>Пытается выполнить CTR-преобразование.</summary>

@@ -12,14 +12,16 @@ namespace Lzma.Core.Crypto.Gost;
 /// </remarks>
 internal static class GostCtrTransform
 {
-  /// <summary>Делегат блочного шифрования.</summary>
-  public delegate bool EncryptBlock(ReadOnlySpan<byte> key, ReadOnlySpan<byte> block, Span<byte> output);
+  /// <summary>
+  /// Делегат выработки гаммы: шифрует блок-счётчик УЖЕ подготовленным ключом (расписание ключа
+  /// связано в замыкании и считается ОДИН раз на всё преобразование, а не на каждый блок).
+  /// </summary>
+  public delegate void ProduceGamma(ReadOnlySpan<byte> counterBlock, Span<byte> gamma);
 
   public static bool Transform(
-      EncryptBlock encrypt,
+      ProduceGamma produceGamma,
       int blockSize,
       int ivSize,
-      ReadOnlySpan<byte> key,
       ReadOnlySpan<byte> initializationVector,
       ReadOnlySpan<byte> input,
       Span<byte> output)
@@ -44,11 +46,7 @@ internal static class GostCtrTransform
       int offset = 0;
       while (offset < input.Length)
       {
-        if (!encrypt(key, counter, gamma))
-        {
-          output[..input.Length].Clear();
-          return false;
-        }
+        produceGamma(counter, gamma);
 
         int chunkLength = Math.Min(blockSize, input.Length - offset);
         for (int i = 0; i < chunkLength; i++)

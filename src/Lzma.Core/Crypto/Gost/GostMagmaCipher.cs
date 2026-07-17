@@ -46,29 +46,37 @@ public static class GostMagmaCipher
 
     try
     {
-      // (a1, a0): a1 — старшие 32 бита блока, a0 — младшие (big-endian).
-      uint a1 = ReadBigEndian(plaintext);
-      uint a0 = ReadBigEndian(plaintext[4..]);
-
-      // 31 раунд G[K_1..K_31] + финальный G*[K_32] (без перестановки половин).
-      for (int r = 0; r < 31; r++)
-      {
-        uint next = G(a0, roundKeys[r]) ^ a1;
-        a1 = a0;
-        a0 = next;
-      }
-
-      uint high = G(a0, roundKeys[31]) ^ a1;
-
-      WriteBigEndian(ciphertext, high);
-      WriteBigEndian(ciphertext[4..], a0);
-
+      EncryptBlock(roundKeys, plaintext, ciphertext);
       return true;
     }
     finally
     {
       CryptographicOperations.ZeroMemory(MemoryMarshalAsBytes(roundKeys));
     }
+  }
+
+  /// <summary>
+  /// Шифрует один блок УЖЕ развёрнутыми раундовыми ключами — без пересчёта расписания. Используется
+  /// CTR-режимом (расписание один раз на всё преобразование, а не на каждый блок). Размеры — на вызывающем.
+  /// </summary>
+  internal static void EncryptBlock(ReadOnlySpan<uint> roundKeys, ReadOnlySpan<byte> plaintext, Span<byte> ciphertext)
+  {
+    // (a1, a0): a1 — старшие 32 бита блока, a0 — младшие (big-endian).
+    uint a1 = ReadBigEndian(plaintext);
+    uint a0 = ReadBigEndian(plaintext[4..]);
+
+    // 31 раунд G[K_1..K_31] + финальный G*[K_32] (без перестановки половин).
+    for (int r = 0; r < 31; r++)
+    {
+      uint next = G(a0, roundKeys[r]) ^ a1;
+      a1 = a0;
+      a0 = next;
+    }
+
+    uint high = G(a0, roundKeys[31]) ^ a1;
+
+    WriteBigEndian(ciphertext, high);
+    WriteBigEndian(ciphertext[4..], a0);
   }
 
   /// <summary>Пытается расшифровать один блок.</summary>
@@ -113,7 +121,7 @@ public static class GostMagmaCipher
   /// Разворачивает 256-битный ключ в 32 раундовых ключа (RFC 8891 §4.3): K_1..K_8 —
   /// big-endian 32-битные слова ключа; K_9..K_24 повторяют K_1..K_8; K_25..K_32 — K_8..K_1.
   /// </summary>
-  private static void ExpandRoundKeys(ReadOnlySpan<byte> key, Span<uint> roundKeys)
+  internal static void ExpandRoundKeys(ReadOnlySpan<byte> key, Span<uint> roundKeys)
   {
     for (int i = 0; i < 8; i++)
     {

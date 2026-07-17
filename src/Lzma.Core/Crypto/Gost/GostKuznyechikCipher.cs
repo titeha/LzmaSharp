@@ -86,8 +86,26 @@ public static class GostKuznyechikCipher
 
     byte[][] roundKeys = ExpandRoundKeys(key);
 
+    try
+    {
+      EncryptBlock(roundKeys, plaintext, ciphertext);
+      return true;
+    }
+    finally
+    {
+      ZeroRoundKeys(roundKeys);
+    }
+  }
+
+  /// <summary>
+  /// Шифрует один блок УЖЕ развёрнутыми раундовыми ключами — без пересчёта расписания ключа.
+  /// Используется CTR-режимом, где расписание считается один раз на всё преобразование (а не на
+  /// каждый блок, что раньше делало Кузнечик катастрофически медленным). Размеры проверяет вызывающий.
+  /// </summary>
+  internal static void EncryptBlock(byte[][] roundKeys, ReadOnlySpan<byte> plaintext, Span<byte> ciphertext)
+  {
     Span<byte> state = stackalloc byte[BlockSize];
-    plaintext.CopyTo(state);
+    plaintext[..BlockSize].CopyTo(state);
 
     try
     {
@@ -100,13 +118,10 @@ public static class GostKuznyechikCipher
 
       XorInPlace(state, roundKeys[9]);
       state.CopyTo(ciphertext);
-
-      return true;
     }
     finally
     {
       CryptographicOperations.ZeroMemory(state);
-      ZeroRoundKeys(roundKeys);
     }
   }
 
@@ -153,7 +168,7 @@ public static class GostKuznyechikCipher
     }
   }
 
-  private static byte[][] ExpandRoundKeys(ReadOnlySpan<byte> key)
+  internal static byte[][] ExpandRoundKeys(ReadOnlySpan<byte> key)
   {
     var roundKeys = new byte[10][];
 
@@ -314,7 +329,7 @@ public static class GostKuznyechikCipher
     return constants;
   }
 
-  private static void ZeroRoundKeys(byte[][] roundKeys)
+  internal static void ZeroRoundKeys(byte[][] roundKeys)
   {
     for (int i = 0; i < roundKeys.Length; i++)
     {

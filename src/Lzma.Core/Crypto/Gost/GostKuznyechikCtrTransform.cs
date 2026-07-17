@@ -25,14 +25,23 @@ public static class GostKuznyechikCtrTransform
     if (key.Length != GostKuznyechikCipher.KeySize)
       return false;
 
-    return GostCtrTransform.Transform(
-        GostKuznyechikCipher.TryEncryptBlock,
-        GostKuznyechikCipher.BlockSize,
-        InitializationVectorSize,
-        key,
-        initializationVector,
-        input,
-        output);
+    // Расписание ключа Кузнечика — дорогое (L-преобразования). Считаем его ОДИН раз на всё
+    // преобразование и шифруем им все блоки-счётчики (раньше пересчёт на каждый блок давал ~0.04 МиБ/с).
+    byte[][] roundKeys = GostKuznyechikCipher.ExpandRoundKeys(key);
+    try
+    {
+      return GostCtrTransform.Transform(
+          (counterBlock, gamma) => GostKuznyechikCipher.EncryptBlock(roundKeys, counterBlock, gamma),
+          GostKuznyechikCipher.BlockSize,
+          InitializationVectorSize,
+          initializationVector,
+          input,
+          output);
+    }
+    finally
+    {
+      GostKuznyechikCipher.ZeroRoundKeys(roundKeys);
+    }
   }
 
   /// <summary>
