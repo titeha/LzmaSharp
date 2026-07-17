@@ -23,59 +23,10 @@
                 <Button Content="Открыть…" Command="{Binding OpenCommand}" />
                 <Button Content="Открыть большой архив…" Command="{Binding OpenArchiveFileCommand}"
                         ToolTip.Tip="Обзор .7z по пути без загрузки в память (для архивов больше 2 ГиБ)" />
-                <Button Content="Создать…" Command="{Binding CreateCommand}"
-                        Classes="accent"
-                        IsVisible="{Binding CanCreate}" />
-                <Button Content="Создать из папки…" Command="{Binding CreateFromFolderCommand}"
-                        IsVisible="{Binding CanCreateFromFolder}" />
-                <ComboBox ItemsSource="{Binding CompressionMethods}"
-                          SelectedValue="{Binding SelectedCompressionMethod}"
-                          SelectedValueBinding="{Binding Method}"
-                          IsVisible="{Binding CanCreate}"
-                          VerticalAlignment="Center" MinWidth="190"
-                          ToolTip.Tip="Метод сжатия для создаваемого архива">
-                    <ComboBox.ItemTemplate>
-                        <DataTemplate x:DataType="models:CompressionMethodOption">
-                            <TextBlock Text="{Binding DisplayName}" />
-                        </DataTemplate>
-                    </ComboBox.ItemTemplate>
-                </ComboBox>
-                <ComboBox ItemsSource="{Binding ThreadCountOptions}"
-                          SelectedValue="{Binding SelectedThreadCount}"
-                          SelectedValueBinding="{Binding Value}"
-                          IsVisible="{Binding CanCreate}"
-                          VerticalAlignment="Center" MinWidth="150"
-                          ToolTip.Tip="Число потоков сжатия (меньше — система отзывчивее)">
-                    <ComboBox.ItemTemplate>
-                        <DataTemplate x:DataType="models:ThreadCountOption">
-                            <TextBlock Text="{Binding DisplayName}" />
-                        </DataTemplate>
-                    </ComboBox.ItemTemplate>
-                </ComboBox>
-                <ComboBox ItemsSource="{Binding DictionarySizeOptions}"
-                          SelectedValue="{Binding SelectedDictionarySize}"
-                          SelectedValueBinding="{Binding Bytes}"
-                          IsVisible="{Binding CanCreate}"
-                          VerticalAlignment="Center" MinWidth="170"
-                          ToolTip.Tip="Размер словаря LZMA2 (больше — лучше сжатие, но больше памяти)">
-                    <ComboBox.ItemTemplate>
-                        <DataTemplate x:DataType="models:DictionarySizeOption">
-                            <TextBlock Text="{Binding DisplayName}" />
-                        </DataTemplate>
-                    </ComboBox.ItemTemplate>
-                </ComboBox>
-                <ComboBox ItemsSource="{Binding VolumeSizeOptions}"
-                          SelectedValue="{Binding SelectedVolumeSize}"
-                          SelectedValueBinding="{Binding Bytes}"
-                          IsVisible="{Binding CanCreate}"
-                          VerticalAlignment="Center" MinWidth="170"
-                          ToolTip.Tip="Разбить архив на тома (.001/.002/…); открывается выбором первого тома">
-                    <ComboBox.ItemTemplate>
-                        <DataTemplate x:DataType="models:VolumeSizeOption">
-                            <TextBlock Text="{Binding DisplayName}" />
-                        </DataTemplate>
-                    </ComboBox.ItemTemplate>
-                </ComboBox>
+                <Button Content="Создать архив…" Click="OnOpenCreateWindow" Classes="accent"
+                        IsVisible="{Binding CanCreate}"
+                        ToolTip.Tip="Настройки сжатия и создание архива в отдельном окне" />
+                <!-- Настройки сжатия (метод/потоки/словарь/тома) переехали в окно «Создать архив». -->
                 <Button Content="Извлечь всё…" Command="{Binding ExtractAllCommand}" />
                 <Button Content="Извлечь архив с диска…" Command="{Binding ExtractArchiveFileCommand}"
                         ToolTip.Tip="Извлечь .7z прямо с диска потоком, без загрузки в память (для архивов больше 2 ГиБ)" />

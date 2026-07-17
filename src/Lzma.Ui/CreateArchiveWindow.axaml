@@ -1,0 +1,124 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:Lzma.Ui.ViewModels"
+        xmlns:models="using:Lzma.Ui.Models"
+        mc:Ignorable="d" d:DesignWidth="460" d:DesignHeight="440"
+        x:Class="Lzma.Ui.CreateArchiveWindow"
+        x:DataType="vm:MainViewModel"
+        Title="Создать архив"
+        Width="460" SizeToContent="Height"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False"
+        Background="{DynamicResource AppBg}"
+        FontFamily="{DynamicResource AppUiFont}">
+
+    <StackPanel Margin="18" Spacing="14">
+
+        <!-- Источник -->
+        <TextBlock Text="ИСТОЧНИК" FontWeight="SemiBold" FontSize="12"
+                   Foreground="{DynamicResource AppInkSecondary}" />
+        <StackPanel Orientation="Horizontal" Spacing="8">
+            <Button Content="Добавить файлы…" Command="{Binding CreateCommand}"
+                    IsVisible="{Binding CanCreate}" />
+            <Button Content="Добавить папку…" Command="{Binding CreateFromFolderCommand}"
+                    IsVisible="{Binding CanCreateFromFolder}" />
+        </StackPanel>
+
+        <Border Height="1" Background="{DynamicResource AppHairline}" />
+
+        <!-- Настройки сжатия -->
+        <TextBlock Text="СЖАТИЕ" FontWeight="SemiBold" FontSize="12"
+                   Foreground="{DynamicResource AppInkSecondary}" />
+        <Grid ColumnDefinitions="120,*" RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="8" ColumnSpacing="10">
+            <TextBlock Grid.Row="0" Grid.Column="0" Text="Метод" VerticalAlignment="Center"
+                       Foreground="{DynamicResource AppInkSecondary}" />
+            <ComboBox Grid.Row="0" Grid.Column="1" HorizontalAlignment="Stretch"
+                      ItemsSource="{Binding CompressionMethods}"
+                      SelectedValue="{Binding SelectedCompressionMethod}"
+                      SelectedValueBinding="{Binding Method}">
+                <ComboBox.ItemTemplate>
+                    <DataTemplate x:DataType="models:CompressionMethodOption">
+                        <TextBlock Text="{Binding DisplayName}" />
+                    </DataTemplate>
+                </ComboBox.ItemTemplate>
+            </ComboBox>
+
+            <TextBlock Grid.Row="1" Grid.Column="0" Text="Потоки" VerticalAlignment="Center"
+                       Foreground="{DynamicResource AppInkSecondary}" />
+            <ComboBox Grid.Row="1" Grid.Column="1" HorizontalAlignment="Stretch"
+                      ItemsSource="{Binding ThreadCountOptions}"
+                      SelectedValue="{Binding SelectedThreadCount}"
+                      SelectedValueBinding="{Binding Value}">
+                <ComboBox.ItemTemplate>
+                    <DataTemplate x:DataType="models:ThreadCountOption">
+                        <TextBlock Text="{Binding DisplayName}" />
+                    </DataTemplate>
+                </ComboBox.ItemTemplate>
+            </ComboBox>
+
+            <TextBlock Grid.Row="2" Grid.Column="0" Text="Словарь" VerticalAlignment="Center"
+                       Foreground="{DynamicResource AppInkSecondary}" />
+            <ComboBox Grid.Row="2" Grid.Column="1" HorizontalAlignment="Stretch"
+                      ItemsSource="{Binding DictionarySizeOptions}"
+                      SelectedValue="{Binding SelectedDictionarySize}"
+                      SelectedValueBinding="{Binding Bytes}">
+                <ComboBox.ItemTemplate>
+                    <DataTemplate x:DataType="models:DictionarySizeOption">
+                        <TextBlock Text="{Binding DisplayName}" />
+                    </DataTemplate>
+                </ComboBox.ItemTemplate>
+            </ComboBox>
+
+            <TextBlock Grid.Row="3" Grid.Column="0" Text="Тома" VerticalAlignment="Center"
+                       Foreground="{DynamicResource AppInkSecondary}" />
+            <ComboBox Grid.Row="3" Grid.Column="1" HorizontalAlignment="Stretch"
+                      ItemsSource="{Binding VolumeSizeOptions}"
+                      SelectedValue="{Binding SelectedVolumeSize}"
+                      SelectedValueBinding="{Binding Bytes}">
+                <ComboBox.ItemTemplate>
+                    <DataTemplate x:DataType="models:VolumeSizeOption">
+                        <TextBlock Text="{Binding DisplayName}" />
+                    </DataTemplate>
+                </ComboBox.ItemTemplate>
+            </ComboBox>
+        </Grid>
+
+        <!-- Прогресс (виден во время операции/сканирования) -->
+        <StackPanel Spacing="6" IsVisible="{Binding IsCancelVisible}">
+            <Border Height="1" Background="{DynamicResource AppHairline}" />
+            <ProgressBar Minimum="0" Maximum="100" Value="{Binding ProgressPercent}"
+                         Height="16" Foreground="{DynamicResource AppCopper}"
+                         IsVisible="{Binding IsBusy}" />
+            <ProgressBar IsIndeterminate="True" Height="16"
+                         Foreground="{DynamicResource AppCopper}"
+                         IsVisible="{Binding IsScanning}" />
+            <WrapPanel>
+                <TextBlock Text="{Binding ProgressPercent, StringFormat='{}{0:0}%'}" Margin="0,0,10,0"
+                           Foreground="{DynamicResource AppCopper}" FontFamily="{DynamicResource AppMonoFont}"
+                           FontWeight="SemiBold" IsVisible="{Binding IsBusy}" />
+                <TextBlock Text="{Binding ProgressText}" Margin="0,0,10,0"
+                           Foreground="{DynamicResource AppInk}" FontFamily="{DynamicResource AppMonoFont}"
+                           IsVisible="{Binding IsBusy}" />
+                <TextBlock Text="{Binding ProgressEta}" Margin="0,0,10,0"
+                           Foreground="{DynamicResource AppInkSecondary}" FontFamily="{DynamicResource AppMonoFont}"
+                           IsVisible="{Binding IsBusy}" />
+                <TextBlock Text="{Binding ScanStatus}" Foreground="{DynamicResource AppInkSecondary}"
+                           IsVisible="{Binding IsScanning}" />
+            </WrapPanel>
+            <TextBlock Text="{Binding CurrentFileStatus}" TextTrimming="CharacterEllipsis"
+                       Foreground="{DynamicResource AppInkSecondary}"
+                       IsVisible="{Binding CurrentFileStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+            <Button Content="Отмена" Command="{Binding CancelCommand}" HorizontalAlignment="Left" />
+        </StackPanel>
+
+        <!-- Итог/диагностика -->
+        <SelectableTextBlock Text="{Binding StatusMessage}" TextWrapping="Wrap"
+                             Foreground="{DynamicResource AppInkSecondary}"
+                             IsVisible="{Binding StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+
+        <Button Content="Закрыть" Click="OnClose" HorizontalAlignment="Right" MinWidth="90" />
+    </StackPanel>
+</Window>

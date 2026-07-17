@@ -15,6 +15,14 @@ public partial class MainWindow : Window
         InitializeComponent();
     }
 
+    // Открыть отдельное окно «Создать архив»: настройки сжатия + источник + прогресс.
+    // DataContext общий с главным окном (тот же MainViewModel) — вся логика создания уже в VM.
+    private void OnOpenCreateWindow(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        var window = new CreateArchiveWindow { DataContext = DataContext };
+        _ = window.ShowDialog(this);
+    }
+
     // Переключение тёмная/светлая тема на лету.
     private void OnToggleTheme(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
