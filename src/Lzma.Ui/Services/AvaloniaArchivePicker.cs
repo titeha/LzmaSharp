@@ -19,7 +19,9 @@ public sealed class AvaloniaArchivePicker(TopLevel topLevel) : IArchivePicker
           AllowMultiple = false,
           FileTypeFilter =
           [
+            new FilePickerFileType("Архивы") { Patterns = ["*.7z", "*.zip"] },
             new FilePickerFileType("Архивы 7z") { Patterns = ["*.7z"] },
+            new FilePickerFileType("ZIP-архивы") { Patterns = ["*.zip"] },
             FilePickerFileTypes.All,
           ],
         });

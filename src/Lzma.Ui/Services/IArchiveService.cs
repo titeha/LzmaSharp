@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Lzma.Core.SevenZip;
+using Lzma.Core.Zip;
 
 namespace Lzma.Ui.Services;
 
@@ -29,6 +30,13 @@ public readonly record struct ArchiveListOutcome(
     SevenZipListedEntry[] Entries);
 
 /// <summary>
+/// Результат открытия ZIP-архива: код результата ядра и набор распакованных элементов.
+/// </summary>
+public readonly record struct ZipOpenOutcome(
+    ZipReadResult Result,
+    ZipEntry[] Entries);
+
+/// <summary>
 /// Единый шов операций над 7z-архивом для UI: открытие, извлечение, диагностика
 /// (а в дальнейшем — создание, прогресс и т.д.).
 /// </summary>
@@ -43,6 +51,15 @@ public interface IArchiveService
 {
   /// <summary>Открывает (декодирует) архив в память с опциональным паролем.</summary>
   Task<ArchiveOpenOutcome> OpenAsync(byte[] bytes, string? password);
+
+  /// <summary>
+  /// Открывает (распаковывает) ZIP-архив в память: разбирает центральный каталог и распаковывает
+  /// содержимое методами Store/Deflate с проверкой CRC. ZIP64/шифрование/прочие методы →
+  /// <see cref="ZipReadResult.NotSupported"/>. Реализация по умолчанию — <c>NotSupported</c>
+  /// (шов подключается только в боевой службе).
+  /// </summary>
+  Task<ZipOpenOutcome> OpenZipAsync(byte[] bytes)
+      => Task.FromResult(new ZipOpenOutcome(ZipReadResult.NotSupported, []));
 
   /// <summary>
   /// Извлекает всё содержимое архива в указанную папку. Опциональный <paramref name="progress"/>

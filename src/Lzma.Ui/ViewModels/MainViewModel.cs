@@ -6,6 +6,7 @@ using System.Linq;
 using System.Threading;
 
 using Lzma.Core.SevenZip;
+using Lzma.Core.Zip;
 using Lzma.Ui.Models;
 using Lzma.Ui.Services;
 
@@ -33,6 +34,10 @@ public sealed class MainViewModel : ObservableObject
   // Байты и пароль успешно открытого архива — нужны для извлечения без повторного открытия.
   private byte[]? _archiveBytes;
   private string? _archivePassword;
+
+  // Распакованные элементы открытого ZIP-архива (in-memory); null — открыт не-ZIP либо архив не
+  // открыт. Если задан — источник для распаковки ZIP на диск.
+  private Lzma.Core.Zip.ZipEntry[]? _zipEntries;
 
   // Путь к открытому «большому» архиву (обзор без загрузки в память); null — открыт in-memory либо
   // архив не открыт. Если задан — извлечение идёт потоковым путём из файла.
@@ -425,12 +430,55 @@ public sealed class MainViewModel : ObservableObject
     }
   }
 
+  /// <summary>Формат архива, определяемый по сигнатуре первых байт.</summary>
+  internal enum ArchiveFormat
+  {
+    /// <summary>Неопознан (нет известной сигнатуры).</summary>
+    Unknown,
+
+    /// <summary>7z-контейнер (сигнатура <c>37 7A BC AF 27 1C</c>).</summary>
+    SevenZip,
+
+    /// <summary>ZIP-контейнер (сигнатура <c>PK\x03\x04</c> / <c>PK\x05\x06</c> / <c>PK\x07\x08</c>).</summary>
+    Zip,
+  }
+
+  /// <summary>Определяет формат архива по сигнатуре (чистая функция, покрыта тестами).</summary>
+  internal static ArchiveFormat DetectFormat(byte[] bytes)
+  {
+    if (bytes.Length >= 6 &&
+        bytes[0] == 0x37 && bytes[1] == 0x7A && bytes[2] == 0xBC &&
+        bytes[3] == 0xAF && bytes[4] == 0x27 && bytes[5] == 0x1C)
+    {
+      return ArchiveFormat.SevenZip;
+    }
+
+    // Все локальные варианты ZIP начинаются с "PK"; далее 03 04 (локальный заголовок),
+    // 05 06 (пустой архив — сразу EOCD) или 07 08 (spanned/split).
+    if (bytes.Length >= 4 && bytes[0] == 0x50 && bytes[1] == 0x4B &&
+        ((bytes[2] == 0x03 && bytes[3] == 0x04) ||
+         (bytes[2] == 0x05 && bytes[3] == 0x06) ||
+         (bytes[2] == 0x07 && bytes[3] == 0x08)))
+    {
+      return ArchiveFormat.Zip;
+    }
+
+    return ArchiveFormat.Unknown;
+  }
+
   private async Task OpenAsync()
   {
     PickedArchive? picked = await _picker.PickAsync();
 
     if (picked is null)
       return; // выбор отменён — состояние не трогаем
+
+    // ZIP-контейнер обрабатываем отдельным путём (свой ридер, без пароля/потока).
+    if (DetectFormat(picked.Bytes) == ArchiveFormat.Zip)
+    {
+      await OpenZipAsync(picked);
+      return;
+    }
 
     // Первая попытка — без пароля.
     (SevenZipArchiveDecodeResult result, SevenZipDecodedEntry[] entries) = await _archiveService.OpenAsync(picked.Bytes, password: null);
@@ -486,6 +534,34 @@ public sealed class MainViewModel : ObservableObject
     }
   }
 
+  // Открытие ZIP-архива в память (свой ридер: Store/Deflate, без пароля/потока).
+  private async Task OpenZipAsync(PickedArchive picked)
+  {
+    ZipOpenOutcome outcome = await _archiveService.OpenZipAsync(picked.Bytes);
+
+    if (outcome.Result == ZipReadResult.Ok)
+    {
+      _root = BuildTree(outcome.Entries);
+      _current = _root;
+      RefreshView();
+
+      HasArchive = true;
+      Title = $"{picked.Name} — LzmaSharp";
+      _archiveBytes = null;
+      _archivePassword = null;
+      _archivePath = null;
+      _zipEntries = outcome.Entries; // источник для распаковки ZIP на диск
+      StatusMessage = outcome.Entries.Length == 0 ? "Архив пуст." : null;
+      return;
+    }
+
+    ResetTree();
+    StatusMessage = outcome.Result == ZipReadResult.NotSupported
+        ? "ZIP использует неподдерживаемую возможность: ZIP64 (архивы больше 4 ГиБ), шифрование "
+          + "или метод сжатия, кроме Store/Deflate. Такой архив можно открыть в 7-Zip."
+        : "Не удалось открыть ZIP: файл повреждён или не является поддерживаемым ZIP-архивом.";
+  }
+
   // Обзор БОЛЬШОГО архива по пути: читаем только листинг (без распаковки и без загрузки в память).
   private async Task OpenArchiveFileAsync()
   {
@@ -507,6 +583,7 @@ public sealed class MainViewModel : ObservableObject
       _archiveBytes = null;
       _archivePassword = null;
       _archivePath = archivePath; // источник для потокового извлечения
+      _zipEntries = null;
       StatusMessage = outcome.Entries.Length == 0 ? "Архив пуст." : null;
       return;
     }
@@ -532,11 +609,19 @@ public sealed class MainViewModel : ObservableObject
     _archiveBytes = bytes;
     _archivePassword = password;
     _archivePath = null; // in-memory открытие — потоковый источник не используем
+    _zipEntries = null;  // открыт 7z — сбрасываем возможное состояние ZIP
   }
 
   // Извлечение содержимого открытого архива в выбранную папку.
   private async Task ExtractAllAsync()
   {
+    // Открыт ZIP — распаковка ZIP на диск подключается отдельным шагом.
+    if (_zipEntries is not null)
+    {
+      StatusMessage = "Распаковка ZIP на диск ещё не подключена (следующий шаг). Пока доступен обзор содержимого.";
+      return;
+    }
+
     if (_archivePath is null && _archiveBytes is null)
       return;
 
@@ -1120,6 +1205,10 @@ public sealed class MainViewModel : ObservableObject
   private static Node BuildTree(IEnumerable<SevenZipListedEntry> entries)
       => BuildTreeCore(entries.Select(e => (e.Name, e.IsDirectory, e.Size)));
 
+  // Строит виртуальное дерево из распакованных ZIP-элементов.
+  private static Node BuildTree(IEnumerable<ZipEntry> entries)
+      => BuildTreeCore(entries.Select(e => (e.Name, e.IsDirectory, e.Bytes.LongLength)));
+
   // Общее построение дерева из (имя, признак каталога, размер). Папки выводятся и из путей файлов.
   private static Node BuildTreeCore(IEnumerable<(string Name, bool IsDirectory, long Size)> items)
   {
@@ -1168,6 +1257,7 @@ public sealed class MainViewModel : ObservableObject
     _archiveBytes = null;
     _archivePassword = null;
     _archivePath = null;
+    _zipEntries = null;
   }
 
   // Пересобирает список текущей папки и навигационное состояние.

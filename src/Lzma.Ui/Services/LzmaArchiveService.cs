@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 
 using Lzma.Core.SevenZip;
+using Lzma.Core.Zip;
 
 namespace Lzma.Ui.Services;
 
@@ -21,6 +22,16 @@ public sealed class LzmaArchiveService : IArchiveService
 
       return new ArchiveOpenOutcome(result, entries);
     }));
+  }
+
+  /// <inheritdoc />
+  public Task<ZipOpenOutcome> OpenZipAsync(byte[] bytes)
+  {
+    return Task.Run(() =>
+    {
+      ZipReadResult result = ZipReader.Read(bytes, out ZipEntry[] entries);
+      return new ZipOpenOutcome(result, entries);
+    });
   }
 
   /// <inheritdoc />
