@@ -122,6 +122,42 @@ public static class DeflateDecoder
   }
 
   /// <summary>
+  /// Декодирует raw DEFLATE/Deflate64-поток, ПОТОКОВО записывая выход в <paramref name="output"/>.
+  /// </summary>
+  /// <remarks>
+  /// Вход целиком в памяти (≤2 ГиБ), но распакованные данные могут быть заметно больше: back-reference
+  /// разрешается по кольцевому окну истории (см. <see cref="WindowInflater"/>), а не по полному
+  /// выходному буферу. Это снимает лимит 2 ГиБ на РАСПАКОВАННЫЙ размер одного члена (типичный случай —
+  /// текст/логи: сжатый член &lt; 2 ГиБ, распакованный — много больше).
+  /// </remarks>
+  /// <param name="input">Сжатые данные (весь член целиком).</param>
+  /// <param name="output">Поток для потоковой записи распакованных данных.</param>
+  /// <param name="deflate64">Режим Deflate64 (окно до 64 КБ, коды дистанций 30/31).</param>
+  /// <param name="bytesWritten">Сколько байт записано в вывод.</param>
+  public static DeflateDecodeResult Decode(
+      ReadOnlySpan<byte> input,
+      Stream output,
+      bool deflate64,
+      out long bytesWritten)
+  {
+    var state = new WindowInflater(input, output, deflate64);
+
+    try
+    {
+      state.Inflate();
+      state.Flush();
+    }
+    catch (InvalidDeflateException)
+    {
+      bytesWritten = state.BytesWritten;
+      return DeflateDecodeResult.InvalidData;
+    }
+
+    bytesWritten = state.BytesWritten;
+    return DeflateDecodeResult.Ok;
+  }
+
+  /// <summary>
   /// Внутренний сигнал о повреждённом потоке (заменяет longjmp из puff.c).
   /// </summary>
   private sealed class InvalidDeflateException : Exception;
@@ -374,6 +410,280 @@ public static class DeflateDecoder
     /// Декодирует один символ по канонической таблице Хаффмана (биты читаются по одному,
     /// первый прочитанный — старший бит кода).
     /// </summary>
+    private int Decode(HuffmanTable table)
+    {
+      int code = 0;
+      int first = 0;
+      int index = 0;
+
+      for (int len = 1; len <= MaxBits; len++)
+      {
+        code |= ReadBits(1);
+
+        int count = table.Count[len];
+        if (code - first < count)
+          return table.Symbol[index + (code - first)];
+
+        index += count;
+        first += count;
+        first <<= 1;
+        code <<= 1;
+      }
+
+      throw new InvalidDeflateException();
+    }
+  }
+
+  /// <summary>
+  /// Потоковый инфлейтер: разбор идентичен <see cref="Inflater"/>, но выход не в один буфер, а
+  /// в <see cref="Stream"/> через кольцевое окно истории. Back-reference берётся из окна, поэтому
+  /// распакованный размер не ограничен памятью (окно &gt; максимальной дистанции DEFLATE/Deflate64).
+  /// </summary>
+  private ref struct WindowInflater
+  {
+    // Окно должно быть СТРОГО больше максимальной дистанции (Deflate — 32 КБ, Deflate64 — 64 КБ),
+    // иначе позиция «pos - distance» столкнётся с текущей. 128 КБ (степень двойки) с запасом.
+    private const int WindowSize = 1 << 17;
+    private const int WindowMask = WindowSize - 1;
+    private const int OutBufferSize = 1 << 16;
+
+    private readonly ReadOnlySpan<byte> _input;
+    private readonly Stream _output;
+    private readonly bool _deflate64;
+    private readonly int[] _distBase;
+    private readonly short[] _distExtra;
+    private readonly byte[] _window;
+    private readonly byte[] _outBuffer;
+
+    private int _inPos;
+    private int _bitBuffer;
+    private int _bitCount;
+    private int _windowPos;
+    private int _outBufPos;
+    private long _written;
+
+    public WindowInflater(ReadOnlySpan<byte> input, Stream output, bool deflate64)
+    {
+      _input = input;
+      _output = output;
+      _deflate64 = deflate64;
+      _distBase = deflate64 ? Dist64Base : DistBase;
+      _distExtra = deflate64 ? Dist64Extra : DistExtra;
+      _window = new byte[WindowSize];
+      _outBuffer = new byte[OutBufferSize];
+      _inPos = 0;
+      _bitBuffer = 0;
+      _bitCount = 0;
+      _windowPos = 0;
+      _outBufPos = 0;
+      _written = 0;
+    }
+
+    public readonly long BytesWritten => _written;
+
+    public void Inflate()
+    {
+      bool last;
+
+      do
+      {
+        last = ReadBits(1) == 1;
+        int type = ReadBits(2);
+
+        switch (type)
+        {
+          case 0:
+            DecodeStoredBlock();
+            break;
+          case 1:
+            DecodeBlock(BuildFixedLitLenTable(), BuildFixedDistTable());
+            break;
+          case 2:
+            DecodeDynamicBlock();
+            break;
+          default:
+            throw new InvalidDeflateException();
+        }
+      }
+      while (!last);
+    }
+
+    // Дописывает остаток выходного буфера в поток (вызывать после успешного Inflate).
+    public void Flush()
+    {
+      if (_outBufPos > 0)
+      {
+        _output.Write(_outBuffer, 0, _outBufPos);
+        _outBufPos = 0;
+      }
+    }
+
+    // Пишет один байт в окно истории и в выходной буфер (сбрасывая его в поток по заполнении).
+    private void Emit(byte value)
+    {
+      _window[_windowPos] = value;
+      _windowPos = (_windowPos + 1) & WindowMask;
+
+      _outBuffer[_outBufPos++] = value;
+      if (_outBufPos == OutBufferSize)
+      {
+        _output.Write(_outBuffer, 0, OutBufferSize);
+        _outBufPos = 0;
+      }
+
+      _written++;
+    }
+
+    private int ReadBits(int need)
+    {
+      long value = _bitBuffer;
+
+      while (_bitCount < need)
+      {
+        if (_inPos >= _input.Length)
+          throw new InvalidDeflateException();
+
+        value |= (long)_input[_inPos++] << _bitCount;
+        _bitCount += 8;
+      }
+
+      _bitBuffer = (int)(value >> need);
+      _bitCount -= need;
+
+      return (int)(value & ((1L << need) - 1));
+    }
+
+    private void DecodeStoredBlock()
+    {
+      _bitBuffer = 0;
+      _bitCount = 0;
+
+      if (_inPos + 4 > _input.Length)
+        throw new InvalidDeflateException();
+
+      int len = _input[_inPos] | (_input[_inPos + 1] << 8);
+      int nlen = _input[_inPos + 2] | (_input[_inPos + 3] << 8);
+      _inPos += 4;
+
+      if ((len ^ 0xFFFF) != nlen)
+        throw new InvalidDeflateException();
+
+      if (_inPos + len > _input.Length)
+        throw new InvalidDeflateException();
+
+      for (int i = 0; i < len; i++)
+        Emit(_input[_inPos++]);
+    }
+
+    private void DecodeDynamicBlock()
+    {
+      int hlit = ReadBits(5) + 257;
+      int hdist = ReadBits(5) + 1;
+      int hclen = ReadBits(4) + 4;
+
+      int maxDistCodes = _deflate64 ? 32 : MaxDistCodes;
+      if (hlit > MaxLitLenCodes || hdist > maxDistCodes)
+        throw new InvalidDeflateException();
+
+      short[] codeLengthLengths = new short[19];
+      for (int i = 0; i < hclen; i++)
+        codeLengthLengths[CodeLengthOrder[i]] = (short)ReadBits(3);
+
+      HuffmanTable codeLengthTable = BuildTable(codeLengthLengths, 19);
+
+      short[] lengths = new short[hlit + hdist];
+      int index = 0;
+
+      while (index < lengths.Length)
+      {
+        int symbol = Decode(codeLengthTable);
+
+        if (symbol < 16)
+        {
+          lengths[index++] = (short)symbol;
+          continue;
+        }
+
+        int repeatValue = 0;
+        int repeatCount;
+
+        switch (symbol)
+        {
+          case 16:
+            if (index == 0)
+              throw new InvalidDeflateException();
+
+            repeatValue = lengths[index - 1];
+            repeatCount = 3 + ReadBits(2);
+            break;
+          case 17:
+            repeatCount = 3 + ReadBits(3);
+            break;
+          case 18:
+            repeatCount = 11 + ReadBits(7);
+            break;
+          default:
+            throw new InvalidDeflateException();
+        }
+
+        if (index + repeatCount > lengths.Length)
+          throw new InvalidDeflateException();
+
+        for (int i = 0; i < repeatCount; i++)
+          lengths[index++] = (short)repeatValue;
+      }
+
+      if (lengths[256] == 0)
+        throw new InvalidDeflateException();
+
+      short[] litLenLengths = lengths[..hlit];
+      short[] distLengths = lengths[hlit..];
+
+      HuffmanTable litLenTable = BuildTable(litLenLengths, hlit);
+      HuffmanTable distTable = BuildTable(distLengths, hdist);
+
+      DecodeBlock(litLenTable, distTable);
+    }
+
+    private void DecodeBlock(HuffmanTable litLenTable, HuffmanTable distTable)
+    {
+      while (true)
+      {
+        int symbol = Decode(litLenTable);
+
+        if (symbol == 256)
+          return;
+
+        if (symbol < 256)
+        {
+          Emit((byte)symbol);
+          continue;
+        }
+
+        symbol -= 257;
+        if (symbol >= LengthBase.Length)
+          throw new InvalidDeflateException();
+
+        int length = _deflate64 && symbol == 28
+            ? 3 + ReadBits(16)
+            : LengthBase[symbol] + ReadBits(LengthExtra[symbol]);
+
+        int distSymbol = Decode(distTable);
+        if (distSymbol >= _distBase.Length)
+          throw new InvalidDeflateException();
+
+        int distance = _distBase[distSymbol] + ReadBits(_distExtra[distSymbol]);
+
+        if (distance > _written)
+          throw new InvalidDeflateException();
+
+        // Копирование из окна: _windowPos сдвигается внутри Emit, поэтому пересчитываем источник
+        // каждый байт — так корректно работают перекрывающиеся совпадения (distance < length).
+        for (int i = 0; i < length; i++)
+          Emit(_window[(_windowPos - distance) & WindowMask]);
+      }
+    }
+
     private int Decode(HuffmanTable table)
     {
       int code = 0;
