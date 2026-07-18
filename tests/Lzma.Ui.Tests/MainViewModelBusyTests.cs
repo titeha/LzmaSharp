@@ -19,9 +19,6 @@ public sealed class MainViewModelBusyTests
   {
     public TaskCompletionSource? ExtractGate { get; set; }
 
-    // Если true — извлечение репортит прогресс перед ожиданием шлюза (для проверки мгновенного индикатора).
-    public bool ReportsProgress { get; set; }
-
     public Task<ArchiveOpenOutcome> OpenAsync(byte[] bytes, string? password)
         => Task.FromResult(new ArchiveOpenOutcome(SevenZipArchiveDecodeResult.Ok, []));
 
@@ -31,9 +28,6 @@ public sealed class MainViewModelBusyTests
         System.Threading.CancellationToken token = default,
         System.IProgress<string>? currentFile = null)
     {
-      if (ReportsProgress)
-        progress?.Report(new SevenZipProgress(50, 100));
-
       if (ExtractGate is not null)
         await ExtractGate.Task;
 
@@ -105,29 +99,6 @@ public sealed class MainViewModelBusyTests
     await vm.ExtractAllCommand.ExecuteAsync();
 
     Assert.False(everBusy);          // индикатор ни разу не зажёгся
-    Assert.False(vm.IsBusy);
-    Assert.False(vm.IsOperating);
-  }
-
-  [Fact]
-  public async Task ЕстьПрогресс_ИндикаторПоявляетсяСразу_ДоПорога()
-  {
-    var gate = new TaskCompletionSource();
-    var service = new GatedArchiveService { ExtractGate = gate, ReportsProgress = true };
-    MainViewModel vm = BuildOpenedViewModel(service);
-    vm.BusyIndicatorDelay = TimeSpan.FromSeconds(30); // порог заведомо НЕ сработает
-
-    await vm.OpenCommand.ExecuteAsync();
-
-    Task extract = vm.ExtractAllCommand.ExecuteAsync(); // висит на шлюзе, но прогресс уже отрепортил
-
-    // Индикатор зажёгся из-за прогресса, а не по порогу занятости.
-    await WaitUntilAsync(() => vm.IsBusy, TimeSpan.FromSeconds(5));
-    Assert.True(vm.IsBusy);
-
-    gate.SetResult();
-    await extract;
-
     Assert.False(vm.IsBusy);
     Assert.False(vm.IsOperating);
   }

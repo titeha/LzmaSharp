@@ -1540,11 +1540,6 @@ public sealed class MainViewModel : ObservableObject
 
   internal void ReportProgress(SevenZipProgress progress, TimeSpan elapsed)
   {
-    // Пошли реальные проценты — показываем индикатор СРАЗУ, не дожидаясь порога BusyIndicatorDelay
-    // (иначе быстрые операции завершаются раньше 3 с и обратной связи не видно вовсе).
-    if (progress.TotalBytes > 0 && IsOperating)
-      IsBusy = true;
-
     ProgressPercent = ToPercent(progress);
     ProgressText = FormatProgressText(progress);
 
