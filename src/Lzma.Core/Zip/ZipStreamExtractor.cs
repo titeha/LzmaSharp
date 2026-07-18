@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 
 using Lzma.Core.Checksums;
 using Lzma.Core.Deflate;
+using Lzma.Core.SevenZip;
 
 namespace Lzma.Core.Zip;
 
@@ -35,16 +36,26 @@ public static class ZipStreamExtractor
       string destinationDirectory,
       bool overwrite = false,
       IProgress<string>? currentFile = null,
-      CancellationToken token = default)
+      CancellationToken token = default,
+      IProgress<SevenZipProgress>? progress = null)
   {
     if (archive is null || !archive.CanSeek || !archive.CanRead || entries is null)
       return ZipExtractResult.InvalidData;
+
+    // Итог для процентов — суммарный распакованный размер (папки нулевые).
+    long total = 0;
+    for (int i = 0; i < entries.Count; i++)
+      if (!entries[i].IsDirectory)
+        total += entries[i].UncompressedSize;
+
+    // Накопленный распакованный объём (в «коробке», чтобы делегат мог его наращивать).
+    long[] processed = [0];
 
     return ZipExtractor.ExtractCore(
         entries.Count,
         i => entries[i].Name,
         i => entries[i].IsDirectory,
-        (i, fullPath) => WriteEntry(archive, entries[i], fullPath, token),
+        (i, fullPath) => WriteEntry(archive, entries[i], fullPath, token, progress, total, processed),
         destinationDirectory,
         overwrite,
         currentFile,
@@ -52,7 +63,9 @@ public static class ZipStreamExtractor
   }
 
   // Пишет данные одного члена на диск: seek к данным по локальному заголовку → Store-копия/Deflate-декод.
-  private static ZipExtractResult WriteEntry(Stream archive, ZipStreamEntry entry, string fullPath, CancellationToken token)
+  private static ZipExtractResult WriteEntry(
+      Stream archive, ZipStreamEntry entry, string fullPath, CancellationToken token,
+      IProgress<SevenZipProgress>? progress, long total, long[] processed)
   {
     // Длины имени/extra берём из ЛОКАЛЬНОГО заголовка (могут отличаться от центрального).
     archive.Position = entry.LocalHeaderOffset;
@@ -86,17 +99,19 @@ public static class ZipStreamExtractor
       if (entry.CompressedSize != entry.UncompressedSize)
         return ZipExtractResult.InvalidData;
 
-      return CopyStore(archive, entry, file, token);
+      return CopyStore(archive, entry, file, token, progress, total, processed);
     }
 
     if (entry.Method == MethodDeflate)
-      return InflateToFile(archive, entry, file);
+      return InflateToFile(archive, entry, file, progress, total, processed);
 
     return ZipExtractResult.InvalidData; // прочие методы отсеяны на чтении каталога
   }
 
-  // Store: копирует CompressedSize байт архив→файл чанками, считая CRC.
-  private static ZipExtractResult CopyStore(Stream archive, ZipStreamEntry entry, Stream file, CancellationToken token)
+  // Store: копирует CompressedSize байт архив→файл чанками, считая CRC и репортя прогресс.
+  private static ZipExtractResult CopyStore(
+      Stream archive, ZipStreamEntry entry, Stream file, CancellationToken token,
+      IProgress<SevenZipProgress>? progress, long total, long[] processed)
   {
     byte[] buffer = new byte[CopyBufferSize];
     long remaining = entry.CompressedSize;
@@ -114,13 +129,18 @@ public static class ZipStreamExtractor
       crc = Crc32.Update(crc, buffer.AsSpan(0, read));
       file.Write(buffer, 0, read);
       remaining -= read;
+
+      processed[0] += read;
+      progress?.Report(new SevenZipProgress(processed[0], total));
     }
 
     return Crc32.Finalize(crc) == entry.Crc ? ZipExtractResult.Ok : ZipExtractResult.InvalidData;
   }
 
   // Deflate: читает сжатый член в память (≤2 ГиБ) и распаковывает потоково в файл через кольцевое окно.
-  private static ZipExtractResult InflateToFile(Stream archive, ZipStreamEntry entry, Stream file)
+  private static ZipExtractResult InflateToFile(
+      Stream archive, ZipStreamEntry entry, Stream file,
+      IProgress<SevenZipProgress>? progress, long total, long[] processed)
   {
     // Потоковый ВХОД (сжатый член >2 ГиБ) пока не поддержан — следующий шаг инкр. Deflate.
     if (entry.CompressedSize > int.MaxValue)
@@ -136,7 +156,7 @@ public static class ZipStreamExtractor
       return ZipExtractResult.InvalidData;
     }
 
-    var crcStream = new Crc32WriteStream(file);
+    var crcStream = new Crc32WriteStream(file, progress, total, processed);
     DeflateDecodeResult result = DeflateDecoder.Decode(compressed, crcStream, deflate64: false, out long written);
 
     if (result != DeflateDecodeResult.Ok || written != entry.UncompressedSize)
@@ -145,8 +165,9 @@ public static class ZipStreamExtractor
     return crcStream.CurrentCrc == entry.Crc ? ZipExtractResult.Ok : ZipExtractResult.InvalidData;
   }
 
-  // Write-through поток: считает CRC-32 записываемых байт и передаёт их дальше.
-  private sealed class Crc32WriteStream(Stream inner) : Stream
+  // Write-through поток: считает CRC-32 записываемых байт, репортит прогресс и передаёт их дальше.
+  private sealed class Crc32WriteStream(
+      Stream inner, IProgress<SevenZipProgress>? progress, long total, long[] processed) : Stream
   {
     private uint _state = Crc32.InitialState;
 
@@ -162,12 +183,20 @@ public static class ZipStreamExtractor
     {
       _state = Crc32.Update(_state, buffer.AsSpan(offset, count));
       inner.Write(buffer, offset, count);
+      Report(count);
     }
 
     public override void Write(ReadOnlySpan<byte> buffer)
     {
       _state = Crc32.Update(_state, buffer);
       inner.Write(buffer);
+      Report(buffer.Length);
+    }
+
+    private void Report(int count)
+    {
+      processed[0] += count;
+      progress?.Report(new SevenZipProgress(processed[0], total));
     }
 
     public override void Flush() => inner.Flush();

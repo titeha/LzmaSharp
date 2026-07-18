@@ -1113,13 +1113,14 @@ public sealed class MainViewModel : ObservableObject
     if (destination is null)
       return; // выбор папки отменён
 
+    IProgress<SevenZipProgress> progress = CreateProgress();
     var currentFile = new Progress<string>(name => CurrentFileStatus = FormatExtractingFileStatus(name));
 
     await RunOperationAsync(async token =>
     {
       try
       {
-        ZipExtractResult result = await _archiveService.ExtractZipFileAsync(archivePath, destination, token, currentFile);
+        ZipExtractResult result = await _archiveService.ExtractZipFileAsync(archivePath, destination, token, currentFile, progress);
         StatusMessage = ZipExtractStatus(result, destination);
       }
       finally { CurrentFileStatus = null; }

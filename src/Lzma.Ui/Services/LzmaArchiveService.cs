@@ -283,7 +283,8 @@ public sealed class LzmaArchiveService : IArchiveService
       string archivePath,
       string destination,
       System.Threading.CancellationToken token = default,
-      System.IProgress<string>? currentFile = null)
+      System.IProgress<string>? currentFile = null,
+      System.IProgress<SevenZipProgress>? progress = null)
   {
     return Task.Run(() =>
     {
@@ -296,7 +297,7 @@ public sealed class LzmaArchiveService : IArchiveService
         if (read != ZipReadResult.Ok)
           return ZipExtractResult.InvalidData; // повреждён / шифрование / неизвестный метод
 
-        return ZipStreamExtractor.ExtractToDirectory(archive, entries, destination, overwrite: false, currentFile, token);
+        return ZipStreamExtractor.ExtractToDirectory(archive, entries, destination, overwrite: false, currentFile, token, progress);
       }
       catch (System.IO.IOException)
       {

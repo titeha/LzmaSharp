@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Text;
 
+using Lzma.Core.SevenZip;
 using Lzma.Core.Zip;
 
 namespace Lzma.Core.Tests.Zip;
@@ -132,6 +133,55 @@ public sealed class ZipStreamExtractorTests
       if (Directory.Exists(dest))
         Directory.Delete(dest, recursive: true);
     }
+  }
+
+  [Fact]
+  public void Извлечение_РепортитПрогресс_МонотонноДоИтога()
+  {
+    byte[] a = Encoding.UTF8.GetBytes(string.Concat(Enumerable.Repeat("alpha ", 20_000)));   // Deflate
+    var rnd = new Random(7);
+    byte[] b = new byte[50_000];
+    rnd.NextBytes(b);                                                                          // Store
+
+    ZipWriter.Build(
+    [
+        new ZipWriterEntry("a.txt", a),
+        new ZipWriterEntry("b.bin", b),
+    ], out byte[] archive);
+
+    long total = a.LongLength + b.LongLength;
+    var reports = new List<SevenZipProgress>();
+    var progress = new SyncProgress(reports.Add);
+
+    string dest = NewTempDir();
+    try
+    {
+      using var ms = new MemoryStream(archive, writable: false);
+      Assert.Equal(ZipReadResult.Ok, ZipStreamReader.ReadCentralDirectory(ms, out ZipStreamEntry[] entries));
+
+      Assert.Equal(ZipExtractResult.Ok,
+          ZipStreamExtractor.ExtractToDirectory(ms, entries, dest, overwrite: false, currentFile: null, token: default, progress));
+
+      Assert.NotEmpty(reports);
+
+      // Монотонность обработанного и корректный итог.
+      for (int i = 1; i < reports.Count; i++)
+        Assert.True(reports[i].BytesProcessed >= reports[i - 1].BytesProcessed);
+
+      Assert.All(reports, r => Assert.Equal(total, r.TotalBytes));
+      Assert.Equal(total, reports[^1].BytesProcessed);
+    }
+    finally
+    {
+      if (Directory.Exists(dest))
+        Directory.Delete(dest, recursive: true);
+    }
+  }
+
+  // Синхронный IProgress (не System.Progress) — чтобы отчёты пришли до проверок в тесте.
+  private sealed class SyncProgress(Action<SevenZipProgress> onReport) : IProgress<SevenZipProgress>
+  {
+    public void Report(SevenZipProgress value) => onReport(value);
   }
 
   // Читает каталог + извлекает поток на диск, прогоняет проверки и чистит папку.

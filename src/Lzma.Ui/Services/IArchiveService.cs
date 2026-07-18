@@ -182,7 +182,8 @@ public interface IArchiveService
       string archivePath,
       string destination,
       System.Threading.CancellationToken token = default,
-      System.IProgress<string>? currentFile = null)
+      System.IProgress<string>? currentFile = null,
+      System.IProgress<SevenZipProgress>? progress = null)
       => Task.FromResult(ZipExtractResult.IOError);
 
   /// <summary>
