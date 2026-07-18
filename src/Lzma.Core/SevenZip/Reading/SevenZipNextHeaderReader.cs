@@ -55,10 +55,12 @@ public sealed class SevenZipNextHeaderReader
     Error,
   }
 
-  // На текущем этапе мы буферизуем все байты между SignatureHeader и NextHeader,
-  // чтобы позже можно было декодировать EncodedHeader и извлекать упакованные данные.
-  // Ограничиваем размер буфера, чтобы не упасть на очень больших архивах.
-  private const int _maxPackedStreamsBytes = 64 * 1024 * 1024;
+  // Буферизуем все байты между SignatureHeader и NextHeader (упакованные данные), чтобы позже
+  // декодировать EncodedHeader и извлекать содержимое. Буфер выделяется РОВНО под фактический размер
+  // packed-области, поэтому лимит нужен лишь чтобы не превысить границу int (in-memory путь и так
+  // ограничен 2 ГиБ). Раньше здесь стояло 64 МБ — из-за чего любой 7z с данными > 64 МБ не открывался
+  // in-memory (NotSupported), хотя формат валиден; для архивов больше 2 ГиБ есть потоковый путь.
+  private const int _maxPackedStreamsBytes = int.MaxValue;
 
   // SignatureHeader всегда 32 байта.
   private readonly byte[] _signatureHeaderBuffer = new byte[SevenZipSignatureHeader.Size];

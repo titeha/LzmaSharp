@@ -5,10 +5,12 @@ namespace Lzma.Core.Tests.SevenZip;
 public sealed class SevenZipArchiveReaderNextHeaderReaderNotSupportedTests
 {
   [Fact]
-  public void Read_NextHeaderOffsetExceedsInternalLimit_ReturnsNotSupported_AndBecomesTerminal()
+  public void Read_NextHeaderOffsetExceedsIntLimit_ReturnsNotSupported_AndBecomesTerminal()
   {
+    // Лимит буфера packed-области поднят до int.MaxValue (in-memory путь ≤ 2 ГиБ); только смещение
+    // больше int.MaxValue открыть in-memory нельзя (для таких архивов — потоковый путь).
     byte[] archive = BuildArchiveWithSignatureHeader(
-      nextHeaderOffset: 64UL * 1024 * 1024 + 1,
+      nextHeaderOffset: (ulong)int.MaxValue + 1,
       nextHeaderSize: 0,
       nextHeaderCrc: 0);
 

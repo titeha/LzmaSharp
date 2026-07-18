@@ -15,10 +15,12 @@ public sealed class SevenZipNextHeaderReaderLimitsAndResetTests
   }
 
   [Fact]
-  public void Read_ReturnsNotSupported_IfPackedStreamsSizeExceedsInternalLimit()
+  public void Read_ReturnsNotSupported_IfPackedStreamsSizeExceedsIntLimit()
   {
+    // Лимит буфера packed-области = int.MaxValue (in-memory путь ограничен 2 ГиБ; для больших —
+    // потоковый путь). Смещение next-header больше int.MaxValue открыть in-memory нельзя.
     byte[] data = BuildSignatureHeaderOnly(
-      nextHeaderOffset: (ulong)(64 * 1024 * 1024) + 1UL,
+      nextHeaderOffset: (ulong)int.MaxValue + 1UL,
       nextHeaderSize: 0,
       nextHeaderCrc: 0);
 
@@ -29,7 +31,7 @@ public sealed class SevenZipNextHeaderReaderLimitsAndResetTests
     Assert.Equal(SevenZipNextHeaderReadResult.NotSupported, res);
     Assert.Equal(data.Length, consumed);
     Assert.True(reader.HasSignatureHeader);
-    Assert.Equal((ulong)(64 * 1024 * 1024) + 1UL, reader.SignatureHeader.NextHeaderOffset);
+    Assert.Equal((ulong)int.MaxValue + 1UL, reader.SignatureHeader.NextHeaderOffset);
 
     var res2 = reader.Read(data, out int consumed2);
 
