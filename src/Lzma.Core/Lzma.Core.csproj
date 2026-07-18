@@ -15,9 +15,9 @@
     <Authors>Artemy Sobolev</Authors>
     <Company>Ti-Soft</Company>
     <Product>LzmaSharp</Product>
-    <Description>Чисто управляемая (100% managed, без нативных зависимостей и unsafe) реализация 7z/LZMA для .NET: чтение И запись .7z, кодеки LZMA, LZMA2, PPMd, фильтр BCJ2, шифрование 7zAES (AES-256), экспериментальный ГОСТ, многотомные архивы, потоковые API для файлов больше 2 ГиБ. Совместимо с настоящим 7-Zip. Не обёртка над 7z.dll.</Description>
+    <Description>Чисто управляемая (100% managed, без нативных зависимостей и unsafe) реализация 7z/LZMA/ZIP для .NET: чтение И запись .7z (кодеки LZMA, LZMA2, PPMd, фильтр BCJ2, шифрование 7zAES/AES-256, экспериментальный ГОСТ, solid-сжатие, многотомные архивы) и .zip (чтение и запись, Store/Deflate, ZIP64, потоково). Потоковые API для файлов и архивов больше 2 ГиБ. Совместимо с настоящим 7-Zip. Не обёртка над 7z.dll.</Description>
     <Copyright>Copyright (c) 2025-2026 Artemy Sobolev (Ti-Soft)</Copyright>
-    <PackageTags>7z;7zip;lzma;lzma2;ppmd;bcj2;aes;gost;compression;archive;managed;encoder;decoder</PackageTags>
+    <PackageTags>7z;7zip;lzma;lzma2;ppmd;bcj2;aes;gost;zip;zip64;deflate;compression;archive;managed;encoder;decoder</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageProjectUrl>https://github.com/titeha/LzmaSharp</PackageProjectUrl>
