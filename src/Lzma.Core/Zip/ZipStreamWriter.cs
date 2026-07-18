@@ -43,14 +43,17 @@ public static class ZipStreamWriter
   private const ushort Zip64Sentinel16 = 0xFFFF;
 
   /// <summary>
-  /// Пишет ZIP-архив из <paramref name="entries"/> в seekable-поток <paramref name="output"/>.
+  /// Пишет ZIP-архив из <paramref name="entries"/> в seekable-поток <paramref name="output"/>. Файлы
+  /// сжимаются ПАРАЛЛЕЛЬНО волнами (каждый Deflate на своё ядро), но пишутся строго по порядку —
+  /// выход байт-идентичен последовательному.
   /// </summary>
   public static ZipWriteResult Write(
       IReadOnlyList<ZipStreamingEntry> entries,
       Stream output,
       IProgress<SevenZipProgress>? progress = null,
       CancellationToken token = default,
-      IProgress<string>? currentFile = null)
+      IProgress<string>? currentFile = null,
+      int maxDegreeOfParallelism = 0)
   {
     if (entries is null || output is null || !output.CanWrite || !output.CanSeek)
       return ZipWriteResult.InvalidData;
@@ -69,75 +72,78 @@ public static class ZipStreamWriter
       if (!e.IsDirectory)
         total += e.Length;
 
+    int dop = maxDegreeOfParallelism > 0 ? maxDegreeOfParallelism : Environment.ProcessorCount;
+    var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = dop, CancellationToken = token };
+    const long WaveMemoryLimit = 128L * 1024 * 1024; // пик памяти на волну ≈ этот лимит
+
     var central = new List<CentralRecord>(entries.Count);
     long processed = 0;
 
-    foreach (ZipStreamingEntry e in entries)
+    progress?.Report(new SevenZipProgress(0, total));
+
+    int i = 0;
+    while (i < entries.Count)
     {
       token.ThrowIfCancellationRequested();
 
-      string name = e.Name.Replace('\\', '/');
-      bool isDir = e.IsDirectory;
-      if (isDir && !name.EndsWith('/'))
-        name += '/';
-
-      byte[] nameBytes = Encoding.UTF8.GetBytes(name);
-      long localOffset = output.Position;
-
-      currentFile?.Report(name);
-
-      ushort method;
-      uint crc;
-      byte[] data;
-      long uncompSize;
-
-      if (isDir)
+      // Директория — без данных, пишем сразу (сохраняя порядок).
+      if (entries[i].IsDirectory)
       {
-        method = MethodStore;
-        crc = 0;
-        data = [];
-        uncompSize = 0;
-      }
-      else
-      {
-        byte[] content;
-        try
-        {
-          content = ReadEntry(e);
-        }
-        catch (IOException)
-        {
-          return ZipWriteResult.InvalidData;
-        }
-
-        uncompSize = content.Length;
-        crc = Crc32.Compute(content);
-
-        byte[] deflated = content.Length == 0 ? [] : DeflateEncoder.Encode(content);
-        if (deflated.Length != 0 && deflated.Length < content.Length)
-        {
-          method = MethodDeflate;
-          data = deflated;
-        }
-        else
-        {
-          method = MethodStore;
-          data = content;
-        }
+        WriteEntryRecord(output, central, entries[i].Name, isDir: true, MethodStore, crc: 0, data: [], uncompSize: 0);
+        i++;
+        continue;
       }
 
-      long compSize = data.Length;
+      // Волна подряд идущих файлов: лимит по числу потоков и по памяти.
+      int waveStart = i;
+      long waveBytes = 0;
+      while (i < entries.Count && !entries[i].IsDirectory)
+      {
+        int waveCount = i - waveStart;
+        if (waveCount >= dop || (waveCount > 0 && waveBytes + entries[i].Length > WaveMemoryLimit))
+          break;
 
-      // Файлы ≤ 2 ГиБ → размеры в 32 бита помещаются; ZIP64 нужен лишь при большом смещении.
-      bool zip64Offset = localOffset >= Zip64Sentinel32;
+        waveBytes += entries[i].Length;
+        i++;
+      }
 
-      WriteLocalHeader(output, nameBytes, method, crc, compSize, uncompSize);
-      output.Write(data, 0, data.Length);
+      int n = i - waveStart;
+      var results = new FileResult[n];
 
-      central.Add(new CentralRecord(nameBytes, method, crc, compSize, uncompSize, localOffset, isDir, zip64Offset));
+      try
+      {
+        Parallel.For(0, n, parallelOptions, k =>
+        {
+          ZipStreamingEntry e = entries[waveStart + k];
+          byte[] content = ReadEntry(e);
+          uint crc = Crc32.Compute(content);
 
-      processed += uncompSize;
-      progress?.Report(new SevenZipProgress(processed, total));
+          byte[] deflated = content.Length == 0 ? [] : DeflateEncoder.Encode(content);
+          results[k] = deflated.Length != 0 && deflated.Length < content.Length
+              ? new FileResult(MethodDeflate, crc, deflated)
+              : new FileResult(MethodStore, crc, content);
+        });
+      }
+      catch (AggregateException ex)
+      {
+        foreach (Exception inner in ex.Flatten().InnerExceptions)
+          if (inner is OperationCanceledException)
+            throw new OperationCanceledException(token);
+
+        return ZipWriteResult.InvalidData; // ошибка чтения файла в одной из задач
+      }
+
+      // Пишем сжатые буферы СТРОГО по порядку волны.
+      for (int k = 0; k < n; k++)
+      {
+        ZipStreamingEntry e = entries[waveStart + k];
+        currentFile?.Report(e.Name.Replace('\\', '/'));
+
+        WriteEntryRecord(output, central, e.Name, isDir: false, results[k].Method, results[k].Crc, results[k].Data, e.Length);
+
+        processed += e.Length;
+        progress?.Report(new SevenZipProgress(processed, total));
+      }
     }
 
     long centralStart = output.Position;
@@ -151,6 +157,27 @@ public static class ZipStreamWriter
 
     return ZipWriteResult.Ok;
   }
+
+  // Пишет local header + данные одного элемента и добавляет запись в центральный каталог.
+  // uncompSize — исходный размер (для Deflate не равен длине сжатых данных).
+  private static void WriteEntryRecord(Stream output, List<CentralRecord> central, string rawName, bool isDir, ushort method, uint crc, byte[] data, long uncompSize)
+  {
+    string name = rawName.Replace('\\', '/');
+    if (isDir && !name.EndsWith('/'))
+      name += '/';
+
+    byte[] nameBytes = Encoding.UTF8.GetBytes(name);
+    long localOffset = output.Position;
+    long compSize = data.Length;
+    bool zip64Offset = localOffset >= Zip64Sentinel32;
+
+    WriteLocalHeader(output, nameBytes, method, crc, compSize, uncompSize);
+    output.Write(data, 0, data.Length);
+
+    central.Add(new CentralRecord(nameBytes, method, crc, compSize, uncompSize, localOffset, isDir, zip64Offset));
+  }
+
+  private readonly record struct FileResult(ushort Method, uint Crc, byte[] Data);
 
   // Читает ровно Length байт элемента (файл ≤ 2 ГиБ, проверено выше).
   private static byte[] ReadEntry(ZipStreamingEntry e)

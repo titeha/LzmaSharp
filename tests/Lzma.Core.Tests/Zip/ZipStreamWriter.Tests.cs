@@ -121,6 +121,48 @@ public sealed class ZipStreamWriterTests
   }
 
   [Fact]
+  public void Запись_МногоФайлов_ПараллельноДетерминированно_RoundTrip()
+  {
+    // Много файлов → несколько параллельных волн. Выход должен быть детерминирован (без гонок).
+    var rnd = new Random(2026);
+    var entries = new ZipStreamingEntry[200];
+    var payloads = new byte[200][];
+    for (int i = 0; i < entries.Length; i++)
+    {
+      byte[] p = i % 2 == 0
+          ? Encoding.UTF8.GetBytes(string.Concat(Enumerable.Repeat($"file{i} ", 300))) // Deflate
+          : new byte[500];
+      if (i % 2 == 1) rnd.NextBytes(p);                                                 // Store
+      payloads[i] = p;
+      entries[i] = File($"dir{i % 7}/f{i}.dat", p);
+    }
+
+    using var ms1 = new MemoryStream();
+    using var ms2 = new MemoryStream();
+    Assert.Equal(ZipWriteResult.Ok, ZipStreamWriter.Write(entries, ms1));
+    Assert.Equal(ZipWriteResult.Ok, ZipStreamWriter.Write(entries, ms2));
+
+    Assert.Equal(ms1.ToArray(), ms2.ToArray()); // детерминизм
+
+    // И round-trip нашим извлекателем.
+    string dest = NewTempDir();
+    try
+    {
+      using var read = new MemoryStream(ms1.ToArray(), writable: false);
+      Assert.Equal(ZipReadResult.Ok, ZipStreamReader.ReadCentralDirectory(read, out ZipStreamEntry[] listed));
+      Assert.Equal(entries.Length, listed.Length);
+      Assert.Equal(ZipExtractResult.Ok, ZipStreamExtractor.ExtractToDirectory(read, listed, dest));
+
+      for (int i = 0; i < entries.Length; i++)
+        Assert.Equal(payloads[i], System.IO.File.ReadAllBytes(Path.Combine(dest, $"dir{i % 7}", $"f{i}.dat")));
+    }
+    finally
+    {
+      if (Directory.Exists(dest)) Directory.Delete(dest, recursive: true);
+    }
+  }
+
+  [Fact]
   public void Запись_НеSeekableВыход_InvalidData()
   {
     using var forward = new ForwardOnlyWriteStream();
