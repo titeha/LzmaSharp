@@ -161,6 +161,13 @@ public interface IArchiveService
       => Task.FromResult(false);
 
   /// <summary>
+  /// Читает файл целиком в память (для in-memory открытия архивов ≤ 2 ГиБ). <see langword="null"/> —
+  /// файл больше 2 ГиБ либо ошибка чтения. По умолчанию — <see langword="null"/>.
+  /// </summary>
+  Task<byte[]?> ReadFileBytesAsync(string path)
+      => Task.FromResult<byte[]?>(null);
+
+  /// <summary>
   /// ПОТОКОВЫЙ обзор ZIP по пути: читает центральный каталог (имена/каталоги/размеры) БЕЗ загрузки
   /// архива в память (для ZIP &gt; 2 ГиБ и/или ZIP64). По умолчанию — <see cref="ZipReadResult.NotSupported"/>.
   /// </summary>

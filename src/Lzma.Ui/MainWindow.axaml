@@ -20,9 +20,8 @@
                 Background="{DynamicResource AppSurface}"
                 BorderBrush="{DynamicResource AppHairline}">
             <StackPanel Orientation="Horizontal" Spacing="8">
-                <Button Content="Открыть…" Command="{Binding OpenCommand}" />
-                <Button Content="Открыть большой архив…" Command="{Binding OpenArchiveFileCommand}"
-                        ToolTip.Tip="Обзор .7z по пути без загрузки в память (для архивов больше 2 ГиБ)" />
+                <Button Content="Открыть…" Command="{Binding OpenCommand}"
+                        ToolTip.Tip="Открыть архив 7z/ZIP: небольшой — целиком, большой (&gt;2 ГиБ / ZIP64) — потоково" />
                 <Button Content="Создать архив…" Click="OnOpenCreateWindow" Classes="accent"
                         IsVisible="{Binding CanCreate}"
                         ToolTip.Tip="Настройки сжатия и создание архива в отдельном окне" />

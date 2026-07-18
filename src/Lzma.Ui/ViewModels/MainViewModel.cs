@@ -768,12 +768,62 @@ public sealed class MainViewModel : ObservableObject
 
   private async Task OpenAsync()
   {
+    // Объединённое открытие: одна кнопка «Открыть…» сама решает по размеру, читать в память или
+    // открывать потоково. Пикеры без поддержки (фейки в тестах) идут прежним байтовым путём.
+    if (_picker.SupportsUnifiedOpen)
+    {
+      PickedOpenTarget? target = await _picker.PickForOpenAsync();
+
+      if (target is null)
+        return; // выбор отменён
+
+      await RunOpenAsync(() => OpenTargetAsync(target));
+      return;
+    }
+
     PickedArchive? picked = await _picker.PickAsync();
 
     if (picked is null)
       return; // выбор отменён — состояние не трогаем
 
     await RunOpenAsync(() => ProcessOpenedArchiveAsync(picked));
+  }
+
+  // Открывает выбранную цель: нелокальный источник (байты) — in-memory; ZIP по пути — всегда потоково
+  // (Store/Deflate + ZIP64, любой размер); 7z ≤ 2 ГиБ — in-memory (пароль/шифрование/все формы),
+  // больше — потоково.
+  private async Task OpenTargetAsync(PickedOpenTarget target)
+  {
+    if (target.Bytes is { } inlineBytes)
+    {
+      await ProcessOpenedArchiveAsync(new PickedArchive(target.Name, inlineBytes));
+      return;
+    }
+
+    if (target.LocalPath is not { } path)
+    {
+      ResetTree();
+      StatusMessage = "Не удалось открыть файл архива.";
+      return;
+    }
+
+    // 7z ≤ 2 ГиБ — полный in-memory путь. ZIP и всё, что больше 2 ГиБ, — потоковый обзор.
+    if (target.Length <= int.MaxValue && !await _archiveService.IsZipFileAsync(path))
+    {
+      byte[]? bytes = await _archiveService.ReadFileBytesAsync(path);
+
+      if (bytes is null)
+      {
+        ResetTree();
+        StatusMessage = "Не удалось прочитать файл архива.";
+        return;
+      }
+
+      await ProcessOpenedArchiveAsync(new PickedArchive(target.Name, bytes));
+      return;
+    }
+
+    await OpenArchiveStreamingAsync(path);
   }
 
   // Обрабатывает уже прочитанный в память архив (формат → zip/7z → при необходимости пароль).
@@ -865,8 +915,7 @@ public sealed class MainViewModel : ObservableObject
 
     ResetTree();
     StatusMessage = outcome.Result == ZipReadResult.NotSupported
-        ? "ZIP использует шифрование или метод сжатия, кроме Store/Deflate. Для ZIP64 (архивы больше "
-          + "4 ГиБ / много файлов) попробуйте «Открыть большой архив…»."
+        ? "ZIP использует шифрование или метод сжатия, кроме Store/Deflate — такой архив можно открыть в 7-Zip."
         : "Не удалось открыть ZIP: файл повреждён или не является поддерживаемым ZIP-архивом.";
   }
 
@@ -878,40 +927,43 @@ public sealed class MainViewModel : ObservableObject
     if (archivePath is null)
       return; // выбор отменён / нет локального пути
 
-    await RunOpenAsync(async () =>
+    await RunOpenAsync(() => OpenArchiveStreamingAsync(archivePath));
+  }
+
+  // Потоковый обзор архива по пути (ZIP → каталог ZIP64; иначе 7z-листинг). Без загрузки в память.
+  private async Task OpenArchiveStreamingAsync(string archivePath)
+  {
+    // ZIP → потоковый обзор каталога (поддержка ZIP >4 ГиБ / ZIP64).
+    if (await _archiveService.IsZipFileAsync(archivePath))
     {
-      // ZIP → потоковый обзор каталога (поддержка ZIP >4 ГиБ / ZIP64).
-      if (await _archiveService.IsZipFileAsync(archivePath))
-      {
-        await OpenZipStreamingAsync(archivePath);
-        return;
-      }
+      await OpenZipStreamingAsync(archivePath);
+      return;
+    }
 
-      ArchiveListOutcome outcome = await _archiveService.OpenFromFileAsync(archivePath);
+    ArchiveListOutcome outcome = await _archiveService.OpenFromFileAsync(archivePath);
 
-      if (outcome.Result == SevenZipArchiveDecodeResult.Ok)
-      {
-        _root = BuildTree(outcome.Entries);
-        _current = _root;
-        RefreshView();
+    if (outcome.Result == SevenZipArchiveDecodeResult.Ok)
+    {
+      _root = BuildTree(outcome.Entries);
+      _current = _root;
+      RefreshView();
 
-        HasArchive = true;
-        Title = $"{System.IO.Path.GetFileName(archivePath)} — LzmaSharp";
-        _archiveBytes = null;
-        _archivePassword = null;
-        _archivePath = archivePath; // источник для потокового извлечения
-        _zipEntries = null;
-        _zipArchivePath = null;
-        StatusMessage = outcome.Entries.Length == 0 ? "Архив пуст." : null;
-        return;
-      }
+      HasArchive = true;
+      Title = $"{System.IO.Path.GetFileName(archivePath)} — LzmaSharp";
+      _archiveBytes = null;
+      _archivePassword = null;
+      _archivePath = archivePath; // источник для потокового извлечения
+      _zipEntries = null;
+      _zipArchivePath = null;
+      StatusMessage = outcome.Entries.Length == 0 ? "Архив пуст." : null;
+      return;
+    }
 
-      ResetTree();
-      StatusMessage = outcome.Result == SevenZipArchiveDecodeResult.NotSupported
-          ? "Этот архив нельзя открыть потоково (например, шифрование, закодированный заголовок или "
-            + "сложные фильтры). Небольшой архив попробуйте через «Открыть…»."
-          : "Не удалось открыть архив: файл повреждён или не является поддерживаемым 7z-архивом.";
-    });
+    ResetTree();
+    StatusMessage = outcome.Result == SevenZipArchiveDecodeResult.NotSupported
+        ? "Этот архив нельзя открыть потоково (например, шифрование, закодированный заголовок или "
+          + "сложные фильтры). Небольшой архив попробуйте открыть без потока."
+        : "Не удалось открыть архив: файл повреждён или не является поддерживаемым 7z-архивом.";
   }
 
   // Потоковый обзор БОЛЬШОГО ZIP по пути: читаем только каталог (без распаковки и без загрузки в память).

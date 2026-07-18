@@ -232,6 +232,30 @@ public sealed class LzmaArchiveService : IArchiveService
   }
 
   /// <inheritdoc />
+  public Task<byte[]?> ReadFileBytesAsync(string path)
+  {
+    return Task.Run<byte[]?>(() =>
+    {
+      try
+      {
+        // Файл > 2 ГиБ в один byte[] не поместится — сигнализируем null (открывать надо потоково).
+        if (new System.IO.FileInfo(path).Length > int.MaxValue)
+          return null;
+
+        return System.IO.File.ReadAllBytes(path);
+      }
+      catch (System.IO.IOException)
+      {
+        return null;
+      }
+      catch (System.UnauthorizedAccessException)
+      {
+        return null;
+      }
+    });
+  }
+
+  /// <inheritdoc />
   public Task<ZipListOutcome> OpenZipFromFileAsync(string archivePath)
   {
     return Task.Run(() =>
