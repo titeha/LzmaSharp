@@ -77,6 +77,7 @@ public sealed class MainViewModel : ObservableObject
   private bool _isScanning;
   private string? _scanStatus;
   private string? _currentFileStatus;
+  private bool _isOperationWindowActive;
 
   // Источник токена отмены текущей длительной операции; null — операция не идёт.
   private CancellationTokenSource? _operationCts;
@@ -286,10 +287,26 @@ public sealed class MainViewModel : ObservableObject
   public bool IsCancelVisible => IsBusy || IsScanning;
 
   /// <summary>
-  /// Видима ли нижняя панель: во время операции/сканирования (строка прогресса) либо когда есть
-  /// статусное сообщение. Пусто — панель скрыта, чтобы не занимать место.
+  /// Активно ли модальное окно операции (создание/извлечение). Пока оно открыто, прогресс
+  /// показывается в НЁМ, а нижняя панель главного окна скрывается, чтобы не дублировать полосу.
   /// </summary>
-  public bool IsBottomBarVisible => IsCancelVisible || !string.IsNullOrEmpty(StatusMessage);
+  public bool IsOperationWindowActive
+  {
+    get => _isOperationWindowActive;
+    set
+    {
+      if (Set(ref _isOperationWindowActive, value))
+        OnPropertyChanged(nameof(IsBottomBarVisible));
+    }
+  }
+
+  /// <summary>
+  /// Видима ли нижняя панель главного окна: во время операции/сканирования (строка прогресса) либо
+  /// когда есть статусное сообщение — но НЕ когда открыто модальное окно операции (там свой прогресс).
+  /// Пусто — панель скрыта, чтобы не занимать место.
+  /// </summary>
+  public bool IsBottomBarVisible =>
+      !IsOperationWindowActive && (IsCancelVisible || !string.IsNullOrEmpty(StatusMessage));
 
   /// <summary>
   /// Живой текст счётчика сканирования («Сканирование: N файлов, X МБ»);

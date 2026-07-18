@@ -18,15 +18,22 @@ public partial class MainWindow : Window
     // Открыть отдельное окно «Создать архив»: настройки сжатия + источник + прогресс.
     // DataContext общий с главным окном (тот же MainViewModel) — вся логика создания уже в VM.
     private void OnOpenCreateWindow(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
-    {
-        var window = new CreateArchiveWindow { DataContext = DataContext };
-        _ = window.ShowDialog(this);
-    }
+        => ShowOperationDialog(new CreateArchiveWindow { DataContext = DataContext });
 
     // Открыть отдельное окно «Извлечь архив»: источник + прогресс. DataContext общий с главным окном.
     private void OnOpenExtractWindow(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        => ShowOperationDialog(new ExtractArchiveWindow { DataContext = DataContext });
+
+    // Показать модальное окно операции. Пока оно открыто, прогресс идёт в нём, а нижняя панель
+    // главного окна скрыта (флаг IsOperationWindowActive) — чтобы не дублировать полосу прогресса.
+    private void ShowOperationDialog(Window window)
     {
-        var window = new ExtractArchiveWindow { DataContext = DataContext };
+        if (DataContext is MainViewModel viewModel)
+        {
+            viewModel.IsOperationWindowActive = true;
+            window.Closed += (_, _) => viewModel.IsOperationWindowActive = false;
+        }
+
         _ = window.ShowDialog(this);
     }
 

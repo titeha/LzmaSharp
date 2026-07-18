@@ -176,6 +176,26 @@ public sealed class MainViewModelCompressionSettingsTests
   }
 
   [Fact]
+  public void НижняяПанель_СкрытаПокаОткрытоОкноОперации_НеДублируетПрогресс()
+  {
+    var vm = new MainViewModel(new StubArchivePicker(), new NullPasswordPrompt(), new StubFolderPicker());
+    vm.StatusMessage = "Готово";
+    Assert.True(vm.IsBottomBarVisible);
+
+    bool raised = false;
+    vm.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(vm.IsBottomBarVisible)) raised = true; };
+
+    // Открыто модальное окно операции — прогресс показывается в нём, нижняя панель главного окна скрыта.
+    vm.IsOperationWindowActive = true;
+    Assert.False(vm.IsBottomBarVisible);
+    Assert.True(raised);
+
+    // Окно закрыли — финальный статус снова виден в главном окне.
+    vm.IsOperationWindowActive = false;
+    Assert.True(vm.IsBottomBarVisible);
+  }
+
+  [Fact]
   public async Task Настройки_ПрокидываютсяВСервис()
   {
     var svc = new CapturingService();
