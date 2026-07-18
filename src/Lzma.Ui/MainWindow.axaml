@@ -33,9 +33,41 @@
                 <Button Content="Вверх" Command="{Binding NavigateUpCommand}" />
                 <Button Content="◐" Click="OnToggleTheme" VerticalAlignment="Center"
                         ToolTip.Tip="Переключить тему (тёмная/светлая)" />
-                <TextBlock Text="{Binding CurrentPath}" VerticalAlignment="Center"
-                           Foreground="{DynamicResource AppInkSecondary}" TextTrimming="CharacterEllipsis"
-                           IsVisible="{Binding !IsBusy}" />
+                <!-- Хлебные крошки текущего пути: каждый сегмент кликабелен для перехода на его уровень.
+                     Последний сегмент (IsCurrent) подсвечен медью, разделитель после него скрыт. -->
+                <ItemsControl ItemsSource="{Binding Breadcrumbs}" VerticalAlignment="Center"
+                              IsVisible="{Binding !IsBusy}">
+                    <ItemsControl.Styles>
+                        <Style Selector="Button.crumb">
+                            <Setter Property="Background" Value="Transparent" />
+                            <Setter Property="BorderThickness" Value="0" />
+                            <Setter Property="Padding" Value="4,2" />
+                            <Setter Property="Foreground" Value="{DynamicResource AppInkSecondary}" />
+                        </Style>
+                        <Style Selector="Button.crumb.current">
+                            <Setter Property="Foreground" Value="{DynamicResource AppCopper}" />
+                            <Setter Property="FontWeight" Value="SemiBold" />
+                        </Style>
+                    </ItemsControl.Styles>
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Orientation="Horizontal" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate DataType="models:PathCrumb">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <Button Content="{Binding Name}" Classes="crumb"
+                                        Classes.current="{Binding IsCurrent}"
+                                        Command="{Binding $parent[ItemsControl].((vm:MainViewModel)DataContext).NavigateToCrumbCommand}"
+                                        CommandParameter="{Binding}" />
+                                <TextBlock Text="›" VerticalAlignment="Center" Margin="1,0"
+                                           Foreground="{DynamicResource AppHairline}"
+                                           IsVisible="{Binding !IsCurrent}" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
                 <TextBlock Text="{Binding SelectedCount, StringFormat='• Выбрано: {0}'}" VerticalAlignment="Center"
                            Foreground="{DynamicResource AppCopper}" FontFamily="{DynamicResource AppMonoFont}"
                            IsVisible="{Binding HasSelection}" />

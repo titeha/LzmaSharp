@@ -133,6 +133,7 @@ public sealed class MainViewModel : ObservableObject
     OpenCommand = new AsyncRelayCommand(OpenAsync);
     OpenArchiveFileCommand = new AsyncRelayCommand(OpenArchiveFileAsync, () => !IsOperating, this);
     NavigateUpCommand = new RelayCommand(NavigateUp, () => CanGoUp, this);
+    NavigateToCrumbCommand = new RelayCommand<PathCrumb>(NavigateToCrumb);
     ExtractAllCommand = new AsyncRelayCommand(ExtractAllAsync, () => HasArchive && !IsOperating, this);
     ExtractArchiveFileCommand = new AsyncRelayCommand(ExtractArchiveFileAsync, () => !IsOperating, this);
     CreateCommand = new AsyncRelayCommand(CreateFromFilesAsync, () => CanCreate && !IsOperating, this);
@@ -149,7 +150,13 @@ public sealed class MainViewModel : ObservableObject
   public string Title
   {
     get => _title;
-    set => Set(ref _title, value);
+    set
+    {
+      // Пути открытия задают Title ПОСЛЕ RefreshView, поэтому корневая крошка архива
+      // (имя архива) выводится из заголовка — пересобираем её при смене Title.
+      if (Set(ref _title, value) && HasArchive)
+        SetBreadcrumbs(BuildArchiveCrumbs());
+    }
   }
 
   /// <summary>Статусное сообщение (ошибка/пустое состояние); <see langword="null"/> — скрыто.</summary>
@@ -313,11 +320,17 @@ public sealed class MainViewModel : ObservableObject
   /// <summary>Содержимое текущей папки архива.</summary>
   public ObservableCollection<ArchiveItem> Items { get; } = [];
 
+  /// <summary>«Хлебные крошки» текущего пути (корень → текущая папка). Каждая крошка кликабельна.</summary>
+  public ObservableCollection<PathCrumb> Breadcrumbs { get; } = [];
+
   /// <summary>Команда «Открыть архив…».</summary>
   public AsyncRelayCommand OpenCommand { get; }
 
   /// <summary>Команда «Вверх» (на уровень выше по дереву архива).</summary>
   public RelayCommand NavigateUpCommand { get; }
+
+  /// <summary>Команда перехода к сегменту «хлебных крошек» (клик по крошке пути).</summary>
+  public RelayCommand<PathCrumb> NavigateToCrumbCommand { get; }
 
   /// <summary>
   /// Команда «Открыть большой архив…» — обзор содержимого .7z по пути БЕЗ загрузки в память
@@ -577,6 +590,108 @@ public sealed class MainViewModel : ObservableObject
 
     CurrentPath = directory ?? "Этот компьютер";
     CanGoUp = directory is not null;
+    SetBreadcrumbs(BuildFileSystemCrumbs(directory));
+  }
+
+  /// <summary>Переход к сегменту «хлебных крошек» (в ФС — по пути, в архиве — по глубине узла).</summary>
+  public void NavigateToCrumb(PathCrumb? crumb)
+  {
+    if (crumb is null || crumb.IsCurrent)
+      return;
+
+    if (IsFileSystemMode)
+    {
+      ShowFileSystem(crumb.FullPath); // null → к списку корней
+      return;
+    }
+
+    // Режим архива: спускаемся от корня к узлу нужной глубины по текущей цепочке предков.
+    var chain = new List<Node>();
+    for (Node? n = _current; n is not null; n = n.Parent)
+      chain.Add(n);
+    chain.Reverse(); // chain[0] — корень, chain[^1] — текущий узел
+
+    if (crumb.Depth < 0 || crumb.Depth >= chain.Count)
+      return;
+
+    _current = chain[crumb.Depth];
+    RefreshView();
+  }
+
+  // Пересобирает коллекцию крошек (ссылка на коллекцию стабильна — важно для привязки XAML).
+  private void SetBreadcrumbs(IReadOnlyList<PathCrumb> crumbs)
+  {
+    Breadcrumbs.Clear();
+    foreach (PathCrumb crumb in crumbs)
+      Breadcrumbs.Add(crumb);
+  }
+
+  // Крошки пути каталога ФС: «Этот компьютер» → диск → папки. Чистая (тестируется без I/O).
+  internal static IReadOnlyList<PathCrumb> BuildFileSystemCrumbs(string? directory)
+  {
+    if (directory is null)
+      return [new PathCrumb { Name = "Этот компьютер", FullPath = null, IsCurrent = true }];
+
+    var crumbs = new List<PathCrumb> { new() { Name = "Этот компьютер", FullPath = null } };
+
+    string root = Path.GetPathRoot(directory) ?? string.Empty;
+    if (root.Length > 0)
+    {
+      string acc = root;
+      crumbs.Add(new PathCrumb { Name = TrimTrailingSeparators(root), FullPath = acc });
+
+      string remainder = directory.Length > root.Length ? directory[root.Length..] : string.Empty;
+      foreach (string part in remainder.Split(
+                   [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                   StringSplitOptions.RemoveEmptyEntries))
+      {
+        acc = Path.Combine(acc, part);
+        crumbs.Add(new PathCrumb { Name = part, FullPath = acc });
+      }
+    }
+    else
+    {
+      // Нет корня (относительный/необычный путь) — показываем путь одним сегментом.
+      crumbs.Add(new PathCrumb { Name = directory, FullPath = directory });
+    }
+
+    // Последняя крошка — текущая (не кликается).
+    PathCrumb last = crumbs[^1];
+    crumbs[^1] = new PathCrumb { Name = last.Name, FullPath = last.FullPath, IsCurrent = true };
+    return crumbs;
+  }
+
+  private static string TrimTrailingSeparators(string path)
+  {
+    string trimmed = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+    return trimmed.Length == 0 ? path : trimmed;
+  }
+
+  // Крошки пути внутри открытого архива: имя архива (корень) → вложенные папки.
+  private IReadOnlyList<PathCrumb> BuildArchiveCrumbs()
+  {
+    var chain = new List<Node>();
+    for (Node? n = _current; n is not null; n = n.Parent)
+      chain.Add(n);
+    chain.Reverse(); // chain[0] — корень архива
+
+    const string suffix = " — LzmaSharp";
+    string rootName = Title.EndsWith(suffix) && Title.Length > suffix.Length
+        ? Title[..^suffix.Length]
+        : "Архив";
+
+    var crumbs = new List<PathCrumb>(chain.Count);
+    for (int i = 0; i < chain.Count; i++)
+    {
+      crumbs.Add(new PathCrumb
+      {
+        Name = i == 0 ? rootName : chain[i].Name,
+        Depth = i,
+        IsCurrent = i == chain.Count - 1,
+      });
+    }
+
+    return crumbs;
   }
 
   /// <summary>Формат архива, определяемый по сигнатуре первых байт.</summary>
@@ -1500,6 +1615,7 @@ public sealed class MainViewModel : ObservableObject
     CurrentPath = BuildCurrentPath();
     // На корне архива «Вверх» доступен, если есть браузер ФС — чтобы можно было выйти из архива.
     CanGoUp = _current.Parent is not null || _fileSystemBrowser is not null;
+    SetBreadcrumbs(BuildArchiveCrumbs());
   }
 
   /// <summary>Число отмеченных галочкой элементов текущего списка.</summary>

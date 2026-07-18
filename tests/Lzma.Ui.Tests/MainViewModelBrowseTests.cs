@@ -258,4 +258,144 @@ public sealed class MainViewModelBrowseTests
     stale.IsSelected = true;
     Assert.Equal(0, vm.SelectedCount);
   }
+
+  // ---- D4: хлебные крошки пути ----
+
+  private static PathCrumb Crumb(MainViewModel vm, string name)
+      => vm.Breadcrumbs.Single(c => c.Name == name);
+
+  [Fact]
+  public void Крошки_НаКорнях_ОдинСегментЭтотКомпьютер()
+  {
+    MainViewModel vm = CreateWithBrowser();
+
+    Assert.Single(vm.Breadcrumbs);
+    Assert.Equal("Этот компьютер", vm.Breadcrumbs[0].Name);
+    Assert.Null(vm.Breadcrumbs[0].FullPath);
+    Assert.True(vm.Breadcrumbs[0].IsCurrent);
+  }
+
+  [Fact]
+  public void Крошки_ВложеннаяПапка_СтроятПутьОтКорня()
+  {
+    MainViewModel vm = CreateWithBrowser();
+    vm.NavigateInto(Find(vm, "C:\\"));   // C:\
+    vm.NavigateInto(Find(vm, "docs"));    // C:\docs
+
+    Assert.Equal(["Этот компьютер", "C:", "docs"], vm.Breadcrumbs.Select(c => c.Name));
+    Assert.Null(vm.Breadcrumbs[0].FullPath);
+    Assert.Equal("C:\\", vm.Breadcrumbs[1].FullPath);
+    Assert.Equal("C:\\docs", vm.Breadcrumbs[2].FullPath);
+
+    // Текущий сегмент — только последний.
+    Assert.False(vm.Breadcrumbs[0].IsCurrent);
+    Assert.False(vm.Breadcrumbs[1].IsCurrent);
+    Assert.True(vm.Breadcrumbs[2].IsCurrent);
+  }
+
+  [Fact]
+  public void NavigateToCrumb_ПромежуточныйСегмент_ПереходитТуда()
+  {
+    MainViewModel vm = CreateWithBrowser();
+    vm.NavigateInto(Find(vm, "C:\\"));
+    vm.NavigateInto(Find(vm, "docs"));    // C:\docs
+
+    vm.NavigateToCrumb(Crumb(vm, "C:"));  // назад на диск
+
+    Assert.Equal("C:\\", vm.CurrentPath);
+    Assert.Contains(vm.Items, i => i.Name == "docs");
+  }
+
+  [Fact]
+  public void NavigateToCrumb_КореньЭтотКомпьютер_ВозвращаетККорням()
+  {
+    MainViewModel vm = CreateWithBrowser();
+    vm.NavigateInto(Find(vm, "C:\\"));
+    vm.NavigateInto(Find(vm, "docs"));
+
+    vm.NavigateToCrumb(Crumb(vm, "Этот компьютер"));
+
+    Assert.Equal("Этот компьютер", vm.CurrentPath);
+    Assert.False(vm.CanGoUp);
+    Assert.Single(vm.Items);
+  }
+
+  [Fact]
+  public void NavigateToCrumb_ТекущийСегмент_НичегоНеМеняет()
+  {
+    MainViewModel vm = CreateWithBrowser();
+    vm.NavigateInto(Find(vm, "C:\\"));   // C:\ — текущая крошка «C:»
+
+    vm.NavigateToCrumb(Crumb(vm, "C:")); // клик по текущей крошке — no-op
+
+    Assert.Equal("C:\\", vm.CurrentPath);
+  }
+
+  [Fact]
+  public async Task Крошки_ВАрхиве_КореньИмяАрхива_ГлубинаНавигации()
+  {
+    // Архив с вложенной папкой: folder/inner.txt.
+    byte[] content = System.Text.Encoding.UTF8.GetBytes("nested archive entry");
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, SevenZipArchiveWriter.BuildArchive(
+        [new SevenZipArchiveWriterEntry("folder/inner.txt", content)], out byte[] archive));
+
+    MainViewModel vm = CreateWithBrowser(archive);
+    vm.NavigateInto(Find(vm, "C:\\"));
+    await vm.ActivateItemAsync(Find(vm, "a.7z")); // открыли архив, корень
+
+    // На корне архива крошка одна — имя архива.
+    Assert.Single(vm.Breadcrumbs);
+    Assert.Contains("a.7z", vm.Breadcrumbs[0].Name);
+    Assert.True(vm.Breadcrumbs[0].IsCurrent);
+    Assert.Equal(0, vm.Breadcrumbs[0].Depth);
+
+    vm.NavigateInto(Find(vm, "folder"));           // вошли в folder
+
+    Assert.Equal(2, vm.Breadcrumbs.Count);
+    Assert.Equal("folder", vm.Breadcrumbs[1].Name);
+    Assert.True(vm.Breadcrumbs[1].IsCurrent);
+    Assert.Equal(1, vm.Breadcrumbs[1].Depth);
+
+    vm.NavigateToCrumb(vm.Breadcrumbs[0]);          // клик по корню архива
+
+    Assert.Contains(vm.Items, i => i.Name == "folder");
+    Assert.Single(vm.Breadcrumbs);
+  }
+
+  // ---- D4: чистый построитель крошек ФС ----
+
+  [Fact]
+  public void BuildFileSystemCrumbs_Корни_Null_ОдинТекущийСегмент()
+  {
+    var crumbs = MainViewModel.BuildFileSystemCrumbs(null);
+
+    Assert.Single(crumbs);
+    Assert.Equal("Этот компьютер", crumbs[0].Name);
+    Assert.Null(crumbs[0].FullPath);
+    Assert.True(crumbs[0].IsCurrent);
+  }
+
+  [Fact]
+  public void BuildFileSystemCrumbs_КореньДиска_ДваСегмента()
+  {
+    var crumbs = MainViewModel.BuildFileSystemCrumbs("C:\\");
+
+    Assert.Equal(["Этот компьютер", "C:"], crumbs.Select(c => c.Name));
+    Assert.Null(crumbs[0].FullPath);
+    Assert.Equal("C:\\", crumbs[1].FullPath);
+    Assert.True(crumbs[1].IsCurrent);
+  }
+
+  [Fact]
+  public void BuildFileSystemCrumbs_ВложенныйПуть_НакапливаетПолныеПути()
+  {
+    var crumbs = MainViewModel.BuildFileSystemCrumbs("C:\\Users\\Артемий\\docs");
+
+    Assert.Equal(["Этот компьютер", "C:", "Users", "Артемий", "docs"], crumbs.Select(c => c.Name));
+    Assert.Equal("C:\\", crumbs[1].FullPath);
+    Assert.Equal("C:\\Users", crumbs[2].FullPath);
+    Assert.Equal("C:\\Users\\Артемий", crumbs[3].FullPath);
+    Assert.Equal("C:\\Users\\Артемий\\docs", crumbs[4].FullPath);
+    Assert.True(crumbs[^1].IsCurrent);
+  }
 }
