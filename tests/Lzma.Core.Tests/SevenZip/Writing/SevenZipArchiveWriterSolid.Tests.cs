@@ -73,6 +73,60 @@ public sealed class SevenZipArchiveWriterSolidTests
   }
 
   [Fact]
+  public void AutoSolid_СмешанныйНабор_ГруппируетПоКодекамИRoundTrip()
+  {
+    var rnd = new Random(11);
+    var entries = new List<SevenZipStreamingEntry>();
+    var expected = new Dictionary<string, byte[]>();
+
+    // Текстовые (→ PPMd) и несжимаемые случайные (→ Copy) — разные кодек-группы.
+    for (int i = 0; i < 8; i++)
+    {
+      byte[] text = Encoding.UTF8.GetBytes($"текстовый документ {i} " + string.Concat(Enumerable.Repeat("слова слова слова ", 50)));
+      entries.Add(File($"text/doc{i}.txt", text));
+      expected[$"text/doc{i}.txt"] = text;
+
+      byte[] noise = new byte[2000];
+      rnd.NextBytes(noise);
+      entries.Add(File($"bin/blob{i}.dat", noise));
+      expected[$"bin/blob{i}.dat"] = noise;
+    }
+
+    using var ms = new MemoryStream();
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, SevenZipArchiveWriter.BuildAutoSolidArchiveToStream(entries, ms, Dict));
+
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok,
+        SevenZipArchiveDecoder.DecodeToEntries(ms.ToArray(), out SevenZipDecodedEntry[] decoded));
+
+    Assert.Equal(expected.Count, decoded.Length);
+    foreach (SevenZipDecodedEntry d in decoded)
+      Assert.Equal(expected[d.Name], d.Bytes);
+  }
+
+  [Fact]
+  public void AutoSolid_ПлотнееПофайловогоAuto()
+  {
+    var entries = new List<SevenZipStreamingEntry>();
+    for (int i = 0; i < 60; i++)
+    {
+      byte[] content = Encoding.UTF8.GetBytes($"документ №{i}. " + string.Concat(Enumerable.Repeat("повторяющийся текст для PPMd ", 40)));
+      entries.Add(File($"f{i}.txt", content));
+    }
+
+    using var perFile = new MemoryStream();
+    using var solid = new MemoryStream();
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, SevenZipArchiveWriter.BuildAutoArchiveToStream(entries, perFile, Dict));
+    Assert.Equal(SevenZipArchiveWriteResult.Ok, SevenZipArchiveWriter.BuildAutoSolidArchiveToStream(entries, solid, Dict));
+
+    Assert.True(solid.Length < perFile.Length,
+        $"auto-solid={solid.Length} должен быть меньше auto-per-file={perFile.Length}");
+
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok,
+        SevenZipArchiveDecoder.DecodeToEntries(solid.ToArray(), out SevenZipDecodedEntry[] decoded));
+    Assert.Equal(60, decoded.Length);
+  }
+
+  [Fact]
   public void Solid_МногоПохожихФайлов_ПлотнееПофайлового()
   {
     // 50 похожих небольших текстовых файлов: пофайлово каждый стартует «холодным», solid — плотнее.

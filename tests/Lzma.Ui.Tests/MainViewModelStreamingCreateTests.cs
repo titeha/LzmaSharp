@@ -114,6 +114,54 @@ public sealed class MainViewModelStreamingCreateTests
   }
 
   [Fact]
+  public async Task ПотоковоеСоздание_AutoSolid_ГруппируетИРаспаковывается()
+  {
+    // Текст (→ PPMd) + несжимаемое (→ Copy) — Auto группирует по кодекам в solid-блоки.
+    byte[] text = Encoding.UTF8.GetBytes(string.Concat(System.Linq.Enumerable.Repeat("текстовый документ для PPMd ", 300)));
+    var rnd = new Random(5);
+    byte[] noise = new byte[4000];
+    rnd.NextBytes(noise);
+
+    string dir = Path.Combine(Path.GetTempPath(), "LzmaUiAutoSolid", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(dir);
+    string outPath = Path.Combine(dir, "out.7z");
+
+    try
+    {
+      var refs = new List<PickedFileRef>
+      {
+        new("doc.txt", text.LongLength, () => new MemoryStream(text)),
+        new("blob.bin", noise.LongLength, () => new MemoryStream(noise)),
+      };
+
+      var vm = new MainViewModel(
+          new StubArchivePicker(), new NullPasswordPrompt(), new StubFolderPicker(),
+          new LzmaArchiveService(), new RefsSourceFilesPicker(refs), new StubSaveFilePicker(outPath))
+      {
+        SelectedCompressionMethod = SevenZipWriterCompressionMethod.Auto,
+      };
+
+      await vm.CreateCommand.ExecuteAsync();
+
+      Assert.True(File.Exists(outPath));
+      byte[] archive = File.ReadAllBytes(outPath);
+      Assert.Equal(SevenZipArchiveDecodeResult.Ok,
+          SevenZipArchiveDecoder.DecodeToEntries(archive, out SevenZipDecodedEntry[] entries));
+
+      Assert.Equal(2, entries.Length);
+      var byName = new Dictionary<string, byte[]>();
+      foreach (SevenZipDecodedEntry e in entries)
+        byName[e.Name] = e.Bytes;
+      Assert.Equal(text, byName["doc.txt"]);
+      Assert.Equal(noise, byName["blob.bin"]);
+    }
+    finally
+    {
+      try { Directory.Delete(dir, recursive: true); } catch { }
+    }
+  }
+
+  [Fact]
   public async Task ПотоковоеСоздание_Zip_ПишетНаДискИРаспаковывается()
   {
     byte[] a = Encoding.UTF8.GetBytes("zip из UI");

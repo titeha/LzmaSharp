@@ -126,7 +126,7 @@ public sealed class LzmaArchiveService : IArchiveService
               SevenZipArchiveWriter.BuildLzma2ArchiveToStream(
                   entries, output, dictionarySize, maxDegreeOfParallelism, progress, token, currentFile),
           SevenZipWriterCompressionMethod.Auto =>
-              SevenZipArchiveWriter.BuildAutoArchiveToStream(entries, output, dictionarySize, progress, token, currentFile),
+              SevenZipArchiveWriter.BuildAutoSolidArchiveToStream(entries, output, dictionarySize, maxDegreeOfParallelism, progress, token, currentFile),
           SevenZipWriterCompressionMethod.Bcj2 =>
               SevenZipArchiveWriter.BuildBcj2ArchiveToStream(entries, output, progress, token, currentFile),
           SevenZipWriterCompressionMethod.Aes =>
