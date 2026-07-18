@@ -111,6 +111,14 @@
                             VerticalAlignment="Center" IsVisible="{Binding IsCancelVisible}" />
                 </WrapPanel>
 
+                <!-- Открытие/обзор архива: индикатор занятости сразу (открытие не выглядит зависанием). -->
+                <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding IsOpening}">
+                    <ProgressBar IsIndeterminate="True" Width="180" Height="16" VerticalAlignment="Center"
+                                 Foreground="{DynamicResource AppCopper}" />
+                    <TextBlock Text="Открываю архив…" VerticalAlignment="Center"
+                               Foreground="{DynamicResource AppInkSecondary}" />
+                </StackPanel>
+
                 <!-- Статус (итоги/диагностика). -->
                 <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" MaxHeight="120"
                               IsVisible="{Binding StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">

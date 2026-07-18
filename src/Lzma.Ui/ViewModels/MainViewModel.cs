@@ -82,6 +82,7 @@ public sealed class MainViewModel : ObservableObject
   private string? _scanStatus;
   private string? _currentFileStatus;
   private bool _isOperationWindowActive;
+  private bool _isOpening;
 
   // Источник токена отмены текущей длительной операции; null — операция не идёт.
   private CancellationTokenSource? _operationCts;
@@ -305,12 +306,26 @@ public sealed class MainViewModel : ObservableObject
   }
 
   /// <summary>
-  /// Видима ли нижняя панель главного окна: во время операции/сканирования (строка прогресса) либо
-  /// когда есть статусное сообщение — но НЕ когда открыто модальное окно операции (там свой прогресс).
+  /// Идёт ли открытие/обзор архива. Показывает индикатор занятости сразу (в отличие от отложенного
+  /// <see cref="IsBusy"/>), чтобы открытие не выглядело «зависанием».
+  /// </summary>
+  public bool IsOpening
+  {
+    get => _isOpening;
+    private set
+    {
+      if (Set(ref _isOpening, value))
+        OnPropertyChanged(nameof(IsBottomBarVisible));
+    }
+  }
+
+  /// <summary>
+  /// Видима ли нижняя панель главного окна: во время операции/сканирования/открытия (строка прогресса)
+  /// либо когда есть статусное сообщение — но НЕ когда открыто модальное окно операции (там свой прогресс).
   /// Пусто — панель скрыта, чтобы не занимать место.
   /// </summary>
   public bool IsBottomBarVisible =>
-      !IsOperationWindowActive && (IsCancelVisible || !string.IsNullOrEmpty(StatusMessage));
+      !IsOperationWindowActive && (IsCancelVisible || IsOpening || !string.IsNullOrEmpty(StatusMessage));
 
   /// <summary>
   /// Живой текст счётчика сканирования («Сканирование: N файлов, X МБ»);
@@ -530,7 +545,7 @@ public sealed class MainViewModel : ObservableObject
       return;
     }
 
-    await ProcessOpenedArchiveAsync(new PickedArchive(item.Name, bytes));
+    await RunOpenAsync(() => ProcessOpenedArchiveAsync(new PickedArchive(item.Name, bytes)));
   }
 
   /// <summary>Войти в элемент: для папки — перейти внутрь; файлы пока игнорируются.</summary>
@@ -758,7 +773,7 @@ public sealed class MainViewModel : ObservableObject
     if (picked is null)
       return; // выбор отменён — состояние не трогаем
 
-    await ProcessOpenedArchiveAsync(picked);
+    await RunOpenAsync(() => ProcessOpenedArchiveAsync(picked));
   }
 
   // Обрабатывает уже прочитанный в память архив (формат → zip/7z → при необходимости пароль).
@@ -863,37 +878,40 @@ public sealed class MainViewModel : ObservableObject
     if (archivePath is null)
       return; // выбор отменён / нет локального пути
 
-    // ZIP → потоковый обзор каталога (поддержка ZIP >4 ГиБ / ZIP64).
-    if (await _archiveService.IsZipFileAsync(archivePath))
+    await RunOpenAsync(async () =>
     {
-      await OpenZipStreamingAsync(archivePath);
-      return;
-    }
+      // ZIP → потоковый обзор каталога (поддержка ZIP >4 ГиБ / ZIP64).
+      if (await _archiveService.IsZipFileAsync(archivePath))
+      {
+        await OpenZipStreamingAsync(archivePath);
+        return;
+      }
 
-    ArchiveListOutcome outcome = await _archiveService.OpenFromFileAsync(archivePath);
+      ArchiveListOutcome outcome = await _archiveService.OpenFromFileAsync(archivePath);
 
-    if (outcome.Result == SevenZipArchiveDecodeResult.Ok)
-    {
-      _root = BuildTree(outcome.Entries);
-      _current = _root;
-      RefreshView();
+      if (outcome.Result == SevenZipArchiveDecodeResult.Ok)
+      {
+        _root = BuildTree(outcome.Entries);
+        _current = _root;
+        RefreshView();
 
-      HasArchive = true;
-      Title = $"{System.IO.Path.GetFileName(archivePath)} — LzmaSharp";
-      _archiveBytes = null;
-      _archivePassword = null;
-      _archivePath = archivePath; // источник для потокового извлечения
-      _zipEntries = null;
-      _zipArchivePath = null;
-      StatusMessage = outcome.Entries.Length == 0 ? "Архив пуст." : null;
-      return;
-    }
+        HasArchive = true;
+        Title = $"{System.IO.Path.GetFileName(archivePath)} — LzmaSharp";
+        _archiveBytes = null;
+        _archivePassword = null;
+        _archivePath = archivePath; // источник для потокового извлечения
+        _zipEntries = null;
+        _zipArchivePath = null;
+        StatusMessage = outcome.Entries.Length == 0 ? "Архив пуст." : null;
+        return;
+      }
 
-    ResetTree();
-    StatusMessage = outcome.Result == SevenZipArchiveDecodeResult.NotSupported
-        ? "Этот архив нельзя открыть потоково (например, шифрование, закодированный заголовок или "
-          + "сложные фильтры). Небольшой архив попробуйте через «Открыть…»."
-        : "Не удалось открыть архив: файл повреждён или не является поддерживаемым 7z-архивом.";
+      ResetTree();
+      StatusMessage = outcome.Result == SevenZipArchiveDecodeResult.NotSupported
+          ? "Этот архив нельзя открыть потоково (например, шифрование, закодированный заголовок или "
+            + "сложные фильтры). Небольшой архив попробуйте через «Открыть…»."
+          : "Не удалось открыть архив: файл повреждён или не является поддерживаемым 7z-архивом.";
+    });
   }
 
   // Потоковый обзор БОЛЬШОГО ZIP по пути: читаем только каталог (без распаковки и без загрузки в память).
@@ -1585,6 +1603,23 @@ public sealed class MainViewModel : ObservableObject
       ProgressPercent = 0;
       ProgressText = null;
       ProgressEta = null;
+    }
+  }
+
+  // Обёртка открытия/обзора архива: сразу показывает индикатор занятости (открытие не отменяемо,
+  // отдельный от RunOperationAsync путь) и гасит его в finally. Само сообщение о результате ставит body.
+  private async Task RunOpenAsync(Func<Task> open)
+  {
+    IsOpening = true;
+    StatusMessage = null; // прошлый статус убираем; текст «Открываю архив…» показывает XAML по IsOpening
+
+    try
+    {
+      await open();
+    }
+    finally
+    {
+      IsOpening = false;
     }
   }
 
