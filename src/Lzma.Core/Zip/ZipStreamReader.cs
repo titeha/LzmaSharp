@@ -12,14 +12,18 @@ namespace Lzma.Core.Zip;
 /// метаданные (<see cref="ZipStreamEntry"/>); распаковка отдельных членов — отдельный потоковый путь.
 /// </para>
 /// <para>
-/// Поддержаны обычные (не-ZIP64) архивы. ZIP64, шифрование и методы кроме Store(0)/Deflate(8)
-/// пока возвращают <see cref="ZipReadResult.NotSupported"/> (ZIP64-чтение — следующий шаг).
+/// Поддержаны обычные архивы и ZIP64 (архивы &gt;4 ГиБ и/или &gt;65535 записей). Шифрование и методы
+/// кроме Store(0)/Deflate(8) возвращают <see cref="ZipReadResult.NotSupported"/>.
 /// </para>
 /// </summary>
 public static class ZipStreamReader
 {
   private const uint EocdSignature = 0x06054b50;
   private const uint CentralFileSignature = 0x02014b50;
+  private const uint Zip64EocdLocatorSignature = 0x07064b50;
+  private const uint Zip64EocdSignature = 0x06064b50;
+
+  private const ushort Zip64ExtraId = 0x0001;
 
   private const int MethodStore = 0;
   private const int MethodDeflate = 8;
@@ -31,6 +35,8 @@ public static class ZipStreamReader
   private const ushort Zip64Sentinel16 = 0xFFFF;
 
   private const int EocdSize = 22;
+  private const int Zip64LocatorSize = 20;
+  private const int Zip64EocdMinSize = 56;
   private const int MaxCommentSize = 0xFFFF;
 
   /// <summary>
@@ -47,17 +53,18 @@ public static class ZipStreamReader
     if (length < EocdSize)
       return ZipReadResult.InvalidData;
 
-    if (!TryReadEocd(archive, length, out ushort totalEntries, out uint cdSize, out uint cdOffset))
+    ZipReadResult eocd = TryReadEocd(archive, length, out long totalEntries, out long cdSize, out long cdOffset);
+    if (eocd != ZipReadResult.Ok)
+      return eocd;
+
+    if (cdOffset < 0 || cdSize < 0 || cdOffset > length || cdOffset + cdSize > length)
       return ZipReadResult.InvalidData;
 
-    // ZIP64 (сентинелы) — следующий шаг.
-    if (totalEntries == Zip64Sentinel16 || cdOffset == Zip64Sentinel32 || cdSize == Zip64Sentinel32)
+    // Центральный каталог — метаданные (много меньше данных архива), читаем его целиком в память.
+    // Каталог >2 ГиБ (сотни миллионов записей) в один буфер не помещается — пока не поддержан.
+    if (cdSize > int.MaxValue)
       return ZipReadResult.NotSupported;
 
-    if (cdOffset > length || (long)cdOffset + cdSize > length)
-      return ZipReadResult.InvalidData;
-
-    // Центральный каталог — метаданные, читаем его целиком в память (много меньше данных архива).
     byte[] central = new byte[cdSize];
     archive.Position = cdOffset;
     try
@@ -69,10 +76,10 @@ public static class ZipStreamReader
       return ZipReadResult.InvalidData;
     }
 
-    var list = new List<ZipStreamEntry>(totalEntries);
+    var list = new List<ZipStreamEntry>();
     int pos = 0;
 
-    for (int i = 0; i < totalEntries; i++)
+    for (long i = 0; i < totalEntries; i++)
     {
       if (pos + 46 > central.Length || BinaryPrimitives.ReadUInt32LittleEndian(central.AsSpan(pos, 4)) != CentralFileSignature)
         return ZipReadResult.InvalidData;
@@ -80,22 +87,33 @@ public static class ZipStreamReader
       ushort flags = BinaryPrimitives.ReadUInt16LittleEndian(central.AsSpan(pos + 8, 2));
       ushort method = BinaryPrimitives.ReadUInt16LittleEndian(central.AsSpan(pos + 10, 2));
       uint crc = BinaryPrimitives.ReadUInt32LittleEndian(central.AsSpan(pos + 16, 4));
-      uint compSize = BinaryPrimitives.ReadUInt32LittleEndian(central.AsSpan(pos + 20, 4));
-      uint uncompSize = BinaryPrimitives.ReadUInt32LittleEndian(central.AsSpan(pos + 24, 4));
+      uint compSize32 = BinaryPrimitives.ReadUInt32LittleEndian(central.AsSpan(pos + 20, 4));
+      uint uncompSize32 = BinaryPrimitives.ReadUInt32LittleEndian(central.AsSpan(pos + 24, 4));
       int nameLen = BinaryPrimitives.ReadUInt16LittleEndian(central.AsSpan(pos + 28, 2));
       int extraLen = BinaryPrimitives.ReadUInt16LittleEndian(central.AsSpan(pos + 30, 2));
       int commentLen = BinaryPrimitives.ReadUInt16LittleEndian(central.AsSpan(pos + 32, 2));
-      uint localOffset = BinaryPrimitives.ReadUInt32LittleEndian(central.AsSpan(pos + 42, 4));
+      uint localOffset32 = BinaryPrimitives.ReadUInt32LittleEndian(central.AsSpan(pos + 42, 4));
 
       if ((flags & FlagEncrypted) != 0)
         return ZipReadResult.NotSupported;
 
-      // ZIP64-сентинелы в размерах/смещении — следующий шаг.
-      if (compSize == Zip64Sentinel32 || uncompSize == Zip64Sentinel32 || localOffset == Zip64Sentinel32)
-        return ZipReadResult.NotSupported;
-
-      if (pos + 46 + nameLen > central.Length)
+      if (pos + 46 + nameLen + extraLen > central.Length)
         return ZipReadResult.InvalidData;
+
+      long compSize = compSize32;
+      long uncompSize = uncompSize32;
+      long localOffset = localOffset32;
+
+      bool needUncomp = uncompSize32 == Zip64Sentinel32;
+      bool needComp = compSize32 == Zip64Sentinel32;
+      bool needOffset = localOffset32 == Zip64Sentinel32;
+
+      if (needUncomp || needComp || needOffset)
+      {
+        ReadOnlySpan<byte> extra = central.AsSpan(pos + 46 + nameLen, extraLen);
+        if (!TryApplyZip64Extra(extra, ref compSize, ref uncompSize, ref localOffset, needUncomp, needComp, needOffset))
+          return ZipReadResult.InvalidData;
+      }
 
       string name = DecodeName(central.AsSpan(pos + 46, nameLen), flags);
       bool isDirectory = name.EndsWith('/');
@@ -103,15 +121,7 @@ public static class ZipStreamReader
       if (!isDirectory && method != MethodStore && method != MethodDeflate)
         return ZipReadResult.NotSupported;
 
-      list.Add(new ZipStreamEntry(
-          name,
-          method,
-          crc,
-          compSize,
-          uncompSize,
-          localOffset,
-          isDirectory,
-          flags));
+      list.Add(new ZipStreamEntry(name, method, crc, compSize, uncompSize, localOffset, isDirectory, flags));
 
       pos += 46 + nameLen + extraLen + commentLen;
     }
@@ -121,26 +131,27 @@ public static class ZipStreamReader
   }
 
   /// <summary>
-  /// Находит End Of Central Directory, читая хвост файла (комментарий до 64 КБ), и извлекает поля.
+  /// Находит EOCD (комментарий до 64 КБ) и извлекает 64-битные величины каталога, при необходимости
+  /// разбирая ZIP64 EOCD-локатор и ZIP64 EOCD-запись.
   /// </summary>
-  private static bool TryReadEocd(Stream archive, long length, out ushort totalEntries, out uint cdSize, out uint cdOffset)
+  private static ZipReadResult TryReadEocd(Stream archive, long length, out long totalEntries, out long cdSize, out long cdOffset)
   {
     totalEntries = 0;
     cdSize = 0;
     cdOffset = 0;
 
     int tailLen = (int)Math.Min(length, EocdSize + MaxCommentSize);
-    long start = length - tailLen;
+    long tailStart = length - tailLen;
 
     byte[] tail = new byte[tailLen];
-    archive.Position = start;
+    archive.Position = tailStart;
     try
     {
       archive.ReadExactly(tail, 0, tailLen);
     }
     catch (EndOfStreamException)
     {
-      return false;
+      return ZipReadResult.InvalidData;
     }
 
     for (int p = tailLen - EocdSize; p >= 0; p--)
@@ -149,18 +160,137 @@ public static class ZipStreamReader
         continue;
 
       int commentLen = BinaryPrimitives.ReadUInt16LittleEndian(tail.AsSpan(p + 20, 2));
-
-      // Длина комментария должна совпадать с остатком до конца файла.
-      if (start + p + EocdSize + commentLen != length)
+      if (tailStart + p + EocdSize + commentLen != length)
         continue;
 
-      totalEntries = BinaryPrimitives.ReadUInt16LittleEndian(tail.AsSpan(p + 10, 2));
-      cdSize = BinaryPrimitives.ReadUInt32LittleEndian(tail.AsSpan(p + 12, 4));
-      cdOffset = BinaryPrimitives.ReadUInt32LittleEndian(tail.AsSpan(p + 16, 4));
-      return true;
+      ushort entries16 = BinaryPrimitives.ReadUInt16LittleEndian(tail.AsSpan(p + 10, 2));
+      uint cdSize32 = BinaryPrimitives.ReadUInt32LittleEndian(tail.AsSpan(p + 12, 4));
+      uint cdOffset32 = BinaryPrimitives.ReadUInt32LittleEndian(tail.AsSpan(p + 16, 4));
+
+      // Обычный ZIP: все величины помещаются в 16/32 бита.
+      if (entries16 != Zip64Sentinel16 && cdSize32 != Zip64Sentinel32 && cdOffset32 != Zip64Sentinel32)
+      {
+        totalEntries = entries16;
+        cdSize = cdSize32;
+        cdOffset = cdOffset32;
+        return ZipReadResult.Ok;
+      }
+
+      // ZIP64: истинные величины — в ZIP64 EOCD-записи, найденной через локатор перед EOCD.
+      return TryReadZip64Eocd(archive, tailStart + p, out totalEntries, out cdSize, out cdOffset);
     }
 
-    return false;
+    return ZipReadResult.InvalidData;
+  }
+
+  // Читает ZIP64 EOCD-локатор (20 б перед EOCD) и по нему — ZIP64 EOCD-запись с 64-битными величинами.
+  private static ZipReadResult TryReadZip64Eocd(Stream archive, long eocdOffset, out long totalEntries, out long cdSize, out long cdOffset)
+  {
+    totalEntries = 0;
+    cdSize = 0;
+    cdOffset = 0;
+
+    long locatorOffset = eocdOffset - Zip64LocatorSize;
+    if (locatorOffset < 0)
+      return ZipReadResult.InvalidData;
+
+    Span<byte> locator = stackalloc byte[Zip64LocatorSize];
+    archive.Position = locatorOffset;
+    try
+    {
+      archive.ReadExactly(locator);
+    }
+    catch (EndOfStreamException)
+    {
+      return ZipReadResult.InvalidData;
+    }
+
+    if (BinaryPrimitives.ReadUInt32LittleEndian(locator[..4]) != Zip64EocdLocatorSignature)
+      return ZipReadResult.InvalidData;
+
+    long zip64EocdOffset = (long)BinaryPrimitives.ReadUInt64LittleEndian(locator.Slice(8, 8));
+    if (zip64EocdOffset < 0 || zip64EocdOffset + Zip64EocdMinSize > archive.Length)
+      return ZipReadResult.InvalidData;
+
+    Span<byte> record = stackalloc byte[Zip64EocdMinSize];
+    archive.Position = zip64EocdOffset;
+    try
+    {
+      archive.ReadExactly(record);
+    }
+    catch (EndOfStreamException)
+    {
+      return ZipReadResult.InvalidData;
+    }
+
+    if (BinaryPrimitives.ReadUInt32LittleEndian(record[..4]) != Zip64EocdSignature)
+      return ZipReadResult.InvalidData;
+
+    totalEntries = (long)BinaryPrimitives.ReadUInt64LittleEndian(record.Slice(32, 8));
+    cdSize = (long)BinaryPrimitives.ReadUInt64LittleEndian(record.Slice(40, 8));
+    cdOffset = (long)BinaryPrimitives.ReadUInt64LittleEndian(record.Slice(48, 8));
+
+    if (totalEntries < 0 || cdSize < 0 || cdOffset < 0)
+      return ZipReadResult.InvalidData;
+
+    return ZipReadResult.Ok;
+  }
+
+  /// <summary>
+  /// Разбирает ZIP64 extra-field (<c>0x0001</c>) записи каталога, подставляя 64-битные размеры/смещение
+  /// для тех полей, что помечены сентинелом (порядок по APPNOTE: uncompressed, compressed, offset).
+  /// </summary>
+  private static bool TryApplyZip64Extra(
+      ReadOnlySpan<byte> extra,
+      ref long compSize,
+      ref long uncompSize,
+      ref long localOffset,
+      bool needUncomp,
+      bool needComp,
+      bool needOffset)
+  {
+    int p = 0;
+    while (p + 4 <= extra.Length)
+    {
+      ushort id = BinaryPrimitives.ReadUInt16LittleEndian(extra.Slice(p, 2));
+      int size = BinaryPrimitives.ReadUInt16LittleEndian(extra.Slice(p + 2, 2));
+      int dataStart = p + 4;
+
+      if (dataStart + size > extra.Length)
+        return false;
+
+      if (id == Zip64ExtraId)
+      {
+        int q = dataStart;
+        int end = dataStart + size;
+
+        if (needUncomp)
+        {
+          if (q + 8 > end) return false;
+          uncompSize = (long)BinaryPrimitives.ReadUInt64LittleEndian(extra.Slice(q, 8));
+          q += 8;
+        }
+
+        if (needComp)
+        {
+          if (q + 8 > end) return false;
+          compSize = (long)BinaryPrimitives.ReadUInt64LittleEndian(extra.Slice(q, 8));
+          q += 8;
+        }
+
+        if (needOffset)
+        {
+          if (q + 8 > end) return false;
+          localOffset = (long)BinaryPrimitives.ReadUInt64LittleEndian(extra.Slice(q, 8));
+        }
+
+        return true;
+      }
+
+      p = dataStart + size;
+    }
+
+    return false; // ожидали ZIP64 extra, но не нашли
   }
 
   private static string DecodeName(ReadOnlySpan<byte> raw, ushort flags)

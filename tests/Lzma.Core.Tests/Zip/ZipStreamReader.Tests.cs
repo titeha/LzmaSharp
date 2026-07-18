@@ -86,6 +86,149 @@ public sealed class ZipStreamReaderTests
     Assert.Equal(ZipReadResult.InvalidData, ZipStreamReader.ReadCentralDirectory(ms, out _));
   }
 
+  [Fact]
+  public void ZIP64_МногоЗаписей_ЧитаетВесьКаталог()
+  {
+    // BCL пишет ZIP64, когда записей > 65535 (16-битный счётчик EOCD переполняется).
+    const int count = 70_000;
+
+    using var ms = new MemoryStream();
+    using (var zip = new ZipArchive(ms, ZipArchiveMode.Create, leaveOpen: true))
+    {
+      for (int i = 0; i < count; i++)
+        zip.CreateEntry($"f{i}.txt"); // пустые записи — архив компактный
+    }
+
+    ms.Position = 0;
+    Assert.Equal(ZipReadResult.Ok, ZipStreamReader.ReadCentralDirectory(ms, out ZipStreamEntry[] entries));
+
+    Assert.Equal(count, entries.Length);
+    Assert.Equal("f0.txt", entries[0].Name);
+    Assert.Equal($"f{count - 1}.txt", entries[count - 1].Name);
+  }
+
+  [Fact]
+  public void ZIP64_ПоэлементныйExtra_РазмерыИСмещениеИзExtra()
+  {
+    byte[] content = Encoding.UTF8.GetBytes("zip64 per-entry extra field payload");
+    uint crc = Crc32.Compute(content);
+    byte[] name = Encoding.ASCII.GetBytes("z64.txt");
+
+    var buf = new List<byte>();
+
+    long localOffset = buf.Count; // 0
+    WriteU32(buf, 0x04034b50);                 // local file header
+    WriteU16(buf, 45);                         // version needed (ZIP64)
+    WriteU16(buf, 0);                          // flags
+    WriteU16(buf, 0);                          // method = store
+    WriteU16(buf, 0);                          // mod time
+    WriteU16(buf, 0x21);                       // mod date
+    WriteU32(buf, crc);
+    WriteU32(buf, (uint)content.Length);       // comp size (в локальном — реальные)
+    WriteU32(buf, (uint)content.Length);       // uncomp size
+    WriteU16(buf, (ushort)name.Length);
+    WriteU16(buf, 0);                          // extra len
+    buf.AddRange(name);
+    buf.AddRange(content);
+
+    long cdStart = buf.Count;
+    WriteU32(buf, 0x02014b50);                 // central header
+    WriteU16(buf, 45);                         // version made by
+    WriteU16(buf, 45);                         // version needed
+    WriteU16(buf, 0);                          // flags
+    WriteU16(buf, 0);                          // method
+    WriteU16(buf, 0);                          // mod time
+    WriteU16(buf, 0x21);                       // mod date
+    WriteU32(buf, crc);
+    WriteU32(buf, 0xFFFFFFFF);                 // comp size = сентинел → в extra
+    WriteU32(buf, 0xFFFFFFFF);                 // uncomp size = сентинел → в extra
+    WriteU16(buf, (ushort)name.Length);
+    WriteU16(buf, 28);                         // extra len (4 + 3×8)
+    WriteU16(buf, 0);                          // comment len
+    WriteU16(buf, 0);                          // disk start
+    WriteU16(buf, 0);                          // internal attrs
+    WriteU32(buf, 0);                          // external attrs
+    WriteU32(buf, 0xFFFFFFFF);                 // local offset = сентинел → в extra
+    buf.AddRange(name);
+    WriteU16(buf, 0x0001);                     // ZIP64 extra id
+    WriteU16(buf, 24);                         // размер данных extra
+    WriteU64(buf, (ulong)content.Length);      // uncompressed (порядок по APPNOTE)
+    WriteU64(buf, (ulong)content.Length);      // compressed
+    WriteU64(buf, (ulong)localOffset);         // offset
+    long cdSize = buf.Count - cdStart;
+
+    long zip64EocdOffset = buf.Count;
+    WriteU32(buf, 0x06064b50);                 // ZIP64 EOCD record
+    WriteU64(buf, 44);                         // размер записи (56 - 12)
+    WriteU16(buf, 45);
+    WriteU16(buf, 45);
+    WriteU32(buf, 0);                          // disk number
+    WriteU32(buf, 0);                          // disk with CD
+    WriteU64(buf, 1);                          // entries this disk
+    WriteU64(buf, 1);                          // total entries
+    WriteU64(buf, (ulong)cdSize);
+    WriteU64(buf, (ulong)cdStart);
+
+    WriteU32(buf, 0x07064b50);                 // ZIP64 EOCD locator
+    WriteU32(buf, 0);                          // disk with ZIP64 EOCD
+    WriteU64(buf, (ulong)zip64EocdOffset);
+    WriteU32(buf, 1);                          // total disks
+
+    WriteU32(buf, 0x06054b50);                 // EOCD
+    WriteU16(buf, 0);
+    WriteU16(buf, 0);
+    WriteU16(buf, 0xFFFF);                     // entries this disk = сентинел
+    WriteU16(buf, 0xFFFF);                     // total entries = сентинел
+    WriteU32(buf, 0xFFFFFFFF);                 // CD size = сентинел
+    WriteU32(buf, 0xFFFFFFFF);                 // CD offset = сентинел
+    WriteU16(buf, 0);                          // comment len
+
+    byte[] fixture = buf.ToArray();
+
+    // Фикстура валидна, если её читает независимый BCL-ридер.
+    using (var za = new ZipArchive(new MemoryStream(fixture, writable: false), ZipArchiveMode.Read))
+    {
+      ZipArchiveEntry e = Assert.Single(za.Entries);
+      Assert.Equal("z64.txt", e.FullName);
+      Assert.Equal(content.Length, e.Length);
+
+      using Stream s = e.Open();
+      using var read = new MemoryStream();
+      s.CopyTo(read);
+      Assert.Equal(content, read.ToArray());
+    }
+
+    // Наш потоковый ридер берёт размеры/смещение из ZIP64 extra.
+    using var ms = new MemoryStream(fixture, writable: false);
+    Assert.Equal(ZipReadResult.Ok, ZipStreamReader.ReadCentralDirectory(ms, out ZipStreamEntry[] entries));
+
+    ZipStreamEntry entry = Assert.Single(entries);
+    Assert.Equal("z64.txt", entry.Name);
+    Assert.Equal(content.Length, entry.UncompressedSize);
+    Assert.Equal(content.Length, entry.CompressedSize);
+    Assert.Equal(0, entry.LocalHeaderOffset);
+    Assert.Equal(crc, entry.Crc);
+    Assert.Equal(0, entry.Method);
+  }
+
+  private static void WriteU16(List<byte> buf, ushort v)
+  {
+    buf.Add((byte)v);
+    buf.Add((byte)(v >> 8));
+  }
+
+  private static void WriteU32(List<byte> buf, uint v)
+  {
+    for (int i = 0; i < 4; i++)
+      buf.Add((byte)(v >> (i * 8)));
+  }
+
+  private static void WriteU64(List<byte> buf, ulong v)
+  {
+    for (int i = 0; i < 8; i++)
+      buf.Add((byte)(v >> (i * 8)));
+  }
+
   private static byte[] BuildBclZip(params (string Name, byte[] Content)[] files)
   {
     using var ms = new MemoryStream();
