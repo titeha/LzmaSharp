@@ -3,20 +3,20 @@ using Lzma.Core.SevenZip;
 namespace Lzma.Core.Zip;
 
 /// <summary>
-/// <para>Пишет уже распакованные элементы ZIP-архива на диск в указанную папку.</para>
+/// <para>Пишет элементы ZIP-архива на диск в указанную папку.</para>
 /// <para>
 /// Переиспользует безопасную запись 7z-декодера: валидацию путей (запрет <c>..</c>, абсолютных
 /// путей, выхода за пределы папки, device-имён Windows), проверку конфликтов с существующей ФС и
-/// ОТКАТ всего созданного при сбое. Данные берутся из <see cref="ZipEntry.Bytes"/> (уже в памяти),
-/// поэтому запись не потоковая.
+/// ОТКАТ всего созданного при сбое. Само содержимое пишется через делегат — для in-memory элементов
+/// (<see cref="ExtractToDirectory(IReadOnlyList{ZipEntry}, string, bool, IProgress{string}, CancellationToken)"/>)
+/// из уже распакованных байт, для потокового пути (<see cref="ZipStreamExtractor"/>) — прямо из файла.
 /// </para>
 /// </summary>
 public static class ZipExtractor
 {
   /// <summary>
-  /// Записывает элементы <paramref name="entries"/> в <paramref name="destinationDirectory"/>.
-  /// При сбое (небезопасный путь/конфликт/ошибка I/O) откатывает всё созданное — на диске
-  /// «ничего не остаётся».
+  /// Записывает уже распакованные элементы <paramref name="entries"/> в
+  /// <paramref name="destinationDirectory"/>. При сбое откатывает всё созданное.
   /// </summary>
   /// <param name="entries">Распакованные элементы (см. <see cref="ZipReader.Read"/>).</param>
   /// <param name="destinationDirectory">Целевая папка (создаётся при отсутствии).</param>
@@ -30,7 +30,39 @@ public static class ZipExtractor
       IProgress<string>? currentFile = null,
       CancellationToken token = default)
   {
-    if (entries is null || destinationDirectory is null)
+    if (entries is null)
+      return ZipExtractResult.InvalidData;
+
+    return ExtractCore(
+        entries.Count,
+        i => entries[i].Name,
+        i => entries[i].IsDirectory,
+        (i, fullPath) =>
+        {
+          File.WriteAllBytes(fullPath, entries[i].Bytes);
+          return ZipExtractResult.Ok;
+        },
+        destinationDirectory,
+        overwrite,
+        currentFile,
+        token);
+  }
+
+  /// <summary>
+  /// Общее ядро извлечения: валидация путей, создание каталогов, откат при сбое. Данные каждого
+  /// элемента пишет делегат <paramref name="writeAt"/> (index, полный путь) → результат.
+  /// </summary>
+  internal static ZipExtractResult ExtractCore(
+      int count,
+      Func<int, string> nameAt,
+      Func<int, bool> isDirAt,
+      Func<int, string, ZipExtractResult> writeAt,
+      string destinationDirectory,
+      bool overwrite,
+      IProgress<string>? currentFile,
+      CancellationToken token)
+  {
+    if (destinationDirectory is null)
       return ZipExtractResult.InvalidData;
 
     try
@@ -44,7 +76,6 @@ public static class ZipExtractor
           ? StringComparer.OrdinalIgnoreCase
           : StringComparer.Ordinal;
 
-      // Целевой путь должен быть каталогом, а не существующим файлом (или файлом-родителем).
       if (File.Exists(root))
         return ZipExtractResult.InvalidData;
       if (SevenZipArchiveDecoder.HasFileOnDirectoryPath(root, cmp))
@@ -56,11 +87,11 @@ public static class ZipExtractor
 
       // Заранее считаем и валидируем ВСЕ пути (защита от zip-slip + дубли, схлопывающиеся
       // в один путь на текущей ОС), чтобы не получить частичную распаковку.
-      string[] fullPaths = new string[entries.Count];
+      string[] fullPaths = new string[count];
       var seen = new HashSet<string>(pathComparer);
-      for (int i = 0; i < entries.Count; i++)
+      for (int i = 0; i < count; i++)
       {
-        if (!SevenZipArchiveDecoder.TryBuildSafePath(rootWithSep, entries[i].Name, cmp, out string fp))
+        if (!SevenZipArchiveDecoder.TryBuildSafePath(rootWithSep, nameAt(i), cmp, out string fp))
           return ZipExtractResult.InvalidData;
         if (!seen.Add(fp))
           return ZipExtractResult.InvalidData;
@@ -97,13 +128,13 @@ public static class ZipExtractor
 
       try
       {
-        for (int i = 0; i < entries.Count; i++)
+        for (int i = 0; i < count; i++)
         {
           token.ThrowIfCancellationRequested();
 
           string fullPath = fullPaths[i];
 
-          if (entries[i].IsDirectory)
+          if (isDirAt(i))
           {
             if (SevenZipArchiveDecoder.HasFileOnPath(root, fullPath, includeSelf: true, cmp))
               return ZipExtractResult.InvalidData;
@@ -135,10 +166,13 @@ public static class ZipExtractor
 
           CreateDirsTracked(dir);
 
-          currentFile?.Report(entries[i].Name);
+          currentFile?.Report(nameAt(i));
 
+          // Файл добавляется в откат ДО записи — при частичной потоковой записи он тоже удалится.
           createdFiles.Add(fullPath);
-          File.WriteAllBytes(fullPath, entries[i].Bytes);
+          ZipExtractResult written = writeAt(i, fullPath);
+          if (written != ZipExtractResult.Ok)
+            return written;
         }
 
         committed = true;
