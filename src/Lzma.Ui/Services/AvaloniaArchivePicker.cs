@@ -43,11 +43,13 @@ public sealed class AvaloniaArchivePicker(TopLevel topLevel) : IArchivePicker
     IReadOnlyList<IStorageFile> files = await _topLevel.StorageProvider.OpenFilePickerAsync(
         new FilePickerOpenOptions
         {
-          Title = "Извлечь архив с диска",
+          Title = "Архив с диска (7z / ZIP)",
           AllowMultiple = false,
           FileTypeFilter =
           [
+            new FilePickerFileType("Архивы") { Patterns = ["*.7z", "*.zip"] },
             new FilePickerFileType("Архивы 7z") { Patterns = ["*.7z"] },
+            new FilePickerFileType("ZIP-архивы") { Patterns = ["*.zip"] },
             FilePickerFileTypes.All,
           ],
         });

@@ -51,6 +51,10 @@ public sealed class MainViewModel : ObservableObject
   // архив не открыт. Если задан — извлечение идёт потоковым путём из файла.
   private string? _archivePath;
 
+  // Путь к открытому «большому» ZIP (обзор без загрузки в память); null — открыт не потоковый ZIP.
+  // Если задан — извлечение идёт потоковым ZIP-путём из файла.
+  private string? _zipArchivePath;
+
   // Узел виртуального дерева содержимого архива.
   private sealed class Node(string name, bool isDirectory, Node? parent)
   {
@@ -839,14 +843,15 @@ public sealed class MainViewModel : ObservableObject
       _archivePassword = null;
       _archivePath = null;
       _zipEntries = outcome.Entries; // источник для распаковки ZIP на диск
+      _zipArchivePath = null;
       StatusMessage = outcome.Entries.Length == 0 ? "Архив пуст." : null;
       return;
     }
 
     ResetTree();
     StatusMessage = outcome.Result == ZipReadResult.NotSupported
-        ? "ZIP использует неподдерживаемую возможность: ZIP64 (архивы больше 4 ГиБ), шифрование "
-          + "или метод сжатия, кроме Store/Deflate. Такой архив можно открыть в 7-Zip."
+        ? "ZIP использует шифрование или метод сжатия, кроме Store/Deflate. Для ZIP64 (архивы больше "
+          + "4 ГиБ / много файлов) попробуйте «Открыть большой архив…»."
         : "Не удалось открыть ZIP: файл повреждён или не является поддерживаемым ZIP-архивом.";
   }
 
@@ -857,6 +862,13 @@ public sealed class MainViewModel : ObservableObject
 
     if (archivePath is null)
       return; // выбор отменён / нет локального пути
+
+    // ZIP → потоковый обзор каталога (поддержка ZIP >4 ГиБ / ZIP64).
+    if (await _archiveService.IsZipFileAsync(archivePath))
+    {
+      await OpenZipStreamingAsync(archivePath);
+      return;
+    }
 
     ArchiveListOutcome outcome = await _archiveService.OpenFromFileAsync(archivePath);
 
@@ -872,6 +884,7 @@ public sealed class MainViewModel : ObservableObject
       _archivePassword = null;
       _archivePath = archivePath; // источник для потокового извлечения
       _zipEntries = null;
+      _zipArchivePath = null;
       StatusMessage = outcome.Entries.Length == 0 ? "Архив пуст." : null;
       return;
     }
@@ -881,6 +894,34 @@ public sealed class MainViewModel : ObservableObject
         ? "Этот архив нельзя открыть потоково (например, шифрование, закодированный заголовок или "
           + "сложные фильтры). Небольшой архив попробуйте через «Открыть…»."
         : "Не удалось открыть архив: файл повреждён или не является поддерживаемым 7z-архивом.";
+  }
+
+  // Потоковый обзор БОЛЬШОГО ZIP по пути: читаем только каталог (без распаковки и без загрузки в память).
+  private async Task OpenZipStreamingAsync(string archivePath)
+  {
+    ZipListOutcome outcome = await _archiveService.OpenZipFromFileAsync(archivePath);
+
+    if (outcome.Result == ZipReadResult.Ok)
+    {
+      _root = BuildTree(outcome.Entries);
+      _current = _root;
+      RefreshView();
+
+      HasArchive = true;
+      Title = $"{System.IO.Path.GetFileName(archivePath)} — LzmaSharp";
+      _archiveBytes = null;
+      _archivePassword = null;
+      _archivePath = null;
+      _zipEntries = null;
+      _zipArchivePath = archivePath; // источник для потокового ZIP-извлечения
+      StatusMessage = outcome.Entries.Length == 0 ? "Архив пуст." : null;
+      return;
+    }
+
+    ResetTree();
+    StatusMessage = outcome.Result == ZipReadResult.NotSupported
+        ? "Этот ZIP нельзя открыть потоково (шифрование или метод сжатия, кроме Store/Deflate)."
+        : "Не удалось открыть ZIP: файл повреждён или не является поддерживаемым ZIP-архивом.";
   }
 
   // Дополняет сообщение об ошибке списком методов архива (что именно не поддержано).
@@ -898,11 +939,19 @@ public sealed class MainViewModel : ObservableObject
     _archivePassword = password;
     _archivePath = null; // in-memory открытие — потоковый источник не используем
     _zipEntries = null;  // открыт 7z — сбрасываем возможное состояние ZIP
+    _zipArchivePath = null;
   }
 
   // Извлечение содержимого открытого архива в выбранную папку.
   private async Task ExtractAllAsync()
   {
+    // Открыт «большой» ZIP по пути — потоковая распаковка прямо из файла.
+    if (_zipArchivePath is { } zipArchivePath)
+    {
+      await ExtractZipStreamingAsync(zipArchivePath);
+      return;
+    }
+
     // Открыт ZIP — своя in-memory распаковка (Store/Deflate).
     if (_zipEntries is { } zipEntries)
     {
@@ -985,6 +1034,28 @@ public sealed class MainViewModel : ObservableObject
     });
   }
 
+  // Потоковое извлечение «большого» ZIP по пути в папку (без загрузки в память). Если папка не задана —
+  // спрашиваем её (вызов из «Извлечь всё»); из «Извлечь архив с диска…» папка уже выбрана.
+  private async Task ExtractZipStreamingAsync(string archivePath, string? destination = null)
+  {
+    destination ??= await _folderPicker.PickFolderAsync();
+
+    if (destination is null)
+      return; // выбор папки отменён
+
+    var currentFile = new Progress<string>(name => CurrentFileStatus = FormatExtractingFileStatus(name));
+
+    await RunOperationAsync(async token =>
+    {
+      try
+      {
+        ZipExtractResult result = await _archiveService.ExtractZipFileAsync(archivePath, destination, token, currentFile);
+        StatusMessage = ZipExtractStatus(result, destination);
+      }
+      finally { CurrentFileStatus = null; }
+    });
+  }
+
   internal static string ZipExtractStatus(ZipExtractResult result, string destination) => result switch
   {
     ZipExtractResult.Ok => $"Извлечено в: {destination}",
@@ -1029,6 +1100,13 @@ public sealed class MainViewModel : ObservableObject
 
     if (destination is null)
       return; // выбор папки отменён
+
+    // ZIP → потоковое ZIP-извлечение по пути (без пароля/шифрования — ZIP-шифрование не поддержано).
+    if (await _archiveService.IsZipFileAsync(archivePath))
+    {
+      await ExtractZipStreamingAsync(archivePath, destination);
+      return;
+    }
 
     (bool proceed, string? password, bool encrypted) = await ResolveStreamingExtractPasswordAsync(archivePath);
     if (!proceed)
@@ -1557,6 +1635,9 @@ public sealed class MainViewModel : ObservableObject
   private static Node BuildTree(IEnumerable<ZipEntry> entries)
       => BuildTreeCore(entries.Select(e => (e.Name, e.IsDirectory, e.Bytes.LongLength)));
 
+  private static Node BuildTree(IEnumerable<ZipStreamEntry> entries)
+      => BuildTreeCore(entries.Select(e => (e.Name, e.IsDirectory, e.UncompressedSize)));
+
   // Общее построение дерева из (имя, признак каталога, размер). Папки выводятся и из путей файлов.
   private static Node BuildTreeCore(IEnumerable<(string Name, bool IsDirectory, long Size)> items)
   {
@@ -1606,6 +1687,7 @@ public sealed class MainViewModel : ObservableObject
     _archivePassword = null;
     _archivePath = null;
     _zipEntries = null;
+    _zipArchivePath = null;
 
     // Если доступен браузер ФС — возвращаемся к нему (на тот же каталог), а не к пустому состоянию.
     if (_fileSystemBrowser is not null)

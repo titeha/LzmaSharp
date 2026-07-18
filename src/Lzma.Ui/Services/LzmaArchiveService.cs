@@ -206,6 +206,86 @@ public sealed class LzmaArchiveService : IArchiveService
   }
 
   /// <inheritdoc />
+  public Task<bool> IsZipFileAsync(string archivePath)
+  {
+    return Task.Run(() =>
+    {
+      try
+      {
+        using System.IO.Stream archive = OpenArchiveReadStream(archivePath);
+
+        System.Span<byte> head = stackalloc byte[4];
+        int read = archive.Read(head);
+        // Локальный заголовок 'PK\x03\x04', либо пустой архив 'PK\x05\x06'.
+        return read == 4 && head[0] == 0x50 && head[1] == 0x4B
+            && (head[2] == 0x03 || head[2] == 0x05 || head[2] == 0x07);
+      }
+      catch (System.IO.IOException)
+      {
+        return false;
+      }
+      catch (System.UnauthorizedAccessException)
+      {
+        return false;
+      }
+    });
+  }
+
+  /// <inheritdoc />
+  public Task<ZipListOutcome> OpenZipFromFileAsync(string archivePath)
+  {
+    return Task.Run(() =>
+    {
+      try
+      {
+        using System.IO.Stream archive = OpenArchiveReadStream(archivePath);
+
+        ZipReadResult result = ZipStreamReader.ReadCentralDirectory(archive, out ZipStreamEntry[] entries);
+        return new ZipListOutcome(result, entries);
+      }
+      catch (System.IO.IOException)
+      {
+        return new ZipListOutcome(ZipReadResult.InvalidData, []);
+      }
+      catch (System.UnauthorizedAccessException)
+      {
+        return new ZipListOutcome(ZipReadResult.InvalidData, []);
+      }
+    });
+  }
+
+  /// <inheritdoc />
+  public Task<ZipExtractResult> ExtractZipFileAsync(
+      string archivePath,
+      string destination,
+      System.Threading.CancellationToken token = default,
+      System.IProgress<string>? currentFile = null)
+  {
+    return Task.Run(() =>
+    {
+      try
+      {
+        // Читаем архив прямо из файла потоком — в память его не грузим (поддержка > 2 ГиБ / ZIP64).
+        using System.IO.Stream archive = OpenArchiveReadStream(archivePath);
+
+        ZipReadResult read = ZipStreamReader.ReadCentralDirectory(archive, out ZipStreamEntry[] entries);
+        if (read != ZipReadResult.Ok)
+          return ZipExtractResult.InvalidData; // повреждён / шифрование / неизвестный метод
+
+        return ZipStreamExtractor.ExtractToDirectory(archive, entries, destination, overwrite: false, currentFile, token);
+      }
+      catch (System.IO.IOException)
+      {
+        return ZipExtractResult.IOError;
+      }
+      catch (System.UnauthorizedAccessException)
+      {
+        return ZipExtractResult.IOError;
+      }
+    }, token);
+  }
+
+  /// <inheritdoc />
   public Task<string> DescribeMethodsAsync(byte[] bytes, string? password)
   {
     return Task.Run(() =>

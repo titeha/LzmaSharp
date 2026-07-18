@@ -37,6 +37,13 @@ public readonly record struct ZipOpenOutcome(
     ZipEntry[] Entries);
 
 /// <summary>
+/// Результат ПОТОКОВОГО обзора ZIP по пути: код результата и метаданные элементов (без данных).
+/// </summary>
+public readonly record struct ZipListOutcome(
+    ZipReadResult Result,
+    ZipStreamEntry[] Entries);
+
+/// <summary>
 /// Единый шов операций над 7z-архивом для UI: открытие, извлечение, диагностика
 /// (а в дальнейшем — создание, прогресс и т.д.).
 /// </summary>
@@ -145,6 +152,31 @@ public interface IArchiveService
   /// </summary>
   Task<ArchiveListOutcome> OpenFromFileAsync(string archivePath)
       => Task.FromResult(new ArchiveListOutcome(SevenZipArchiveDecodeResult.NotSupported, []));
+
+  /// <summary>
+  /// Определяет по сигнатуре, является ли файл ZIP-архивом (для маршрутизации потокового открытия
+  /// 7z/ZIP). Реализация по умолчанию — <see langword="false"/>.
+  /// </summary>
+  Task<bool> IsZipFileAsync(string archivePath)
+      => Task.FromResult(false);
+
+  /// <summary>
+  /// ПОТОКОВЫЙ обзор ZIP по пути: читает центральный каталог (имена/каталоги/размеры) БЕЗ загрузки
+  /// архива в память (для ZIP &gt; 2 ГиБ и/или ZIP64). По умолчанию — <see cref="ZipReadResult.NotSupported"/>.
+  /// </summary>
+  Task<ZipListOutcome> OpenZipFromFileAsync(string archivePath)
+      => Task.FromResult(new ZipListOutcome(ZipReadResult.NotSupported, []));
+
+  /// <summary>
+  /// ПОТОКОВОЕ извлечение ZIP по пути в <paramref name="destination"/> БЕЗ загрузки архива в память
+  /// (Store любой размер, Deflate потоком). По умолчанию — <see cref="ZipExtractResult.IOError"/>.
+  /// </summary>
+  Task<ZipExtractResult> ExtractZipFileAsync(
+      string archivePath,
+      string destination,
+      System.Threading.CancellationToken token = default,
+      System.IProgress<string>? currentFile = null)
+      => Task.FromResult(ZipExtractResult.IOError);
 
   /// <summary>
   /// Возвращает человекочитаемое описание методов архива (для диагностики при ошибке
