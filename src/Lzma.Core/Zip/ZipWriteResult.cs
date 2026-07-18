@@ -10,4 +10,7 @@ public enum ZipWriteResult
 
   /// <summary>Некорректные входные данные.</summary>
   InvalidData = 1,
+
+  /// <summary>Сценарий пока не поддержан (например, отдельный файл больше 2 ГиБ или не-seekable выход).</summary>
+  NotSupported = 2,
 }
