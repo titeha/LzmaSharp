@@ -256,6 +256,33 @@ public sealed class LzmaArchiveService : IArchiveService
   }
 
   /// <inheritdoc />
+  public Task<ZipWriteResult> CreateZipToFileAsync(
+      IReadOnlyList<ZipStreamingEntry> entries,
+      string destinationPath,
+      System.IProgress<SevenZipProgress>? progress = null,
+      System.Threading.CancellationToken token = default,
+      System.IProgress<string>? currentFile = null)
+  {
+    return Task.Run(() =>
+    {
+      try
+      {
+        // Пишем ZIP прямо в целевой файл потоком — ни файлы, ни архив в памяти не держим.
+        using var output = new System.IO.FileStream(destinationPath, System.IO.FileMode.Create, System.IO.FileAccess.ReadWrite);
+        return ZipStreamWriter.Write(entries, output, progress, token, currentFile);
+      }
+      catch (System.IO.IOException)
+      {
+        return ZipWriteResult.InvalidData;
+      }
+      catch (System.UnauthorizedAccessException)
+      {
+        return ZipWriteResult.InvalidData;
+      }
+    }, token);
+  }
+
+  /// <inheritdoc />
   public Task<ZipListOutcome> OpenZipFromFileAsync(string archivePath)
   {
     return Task.Run(() =>

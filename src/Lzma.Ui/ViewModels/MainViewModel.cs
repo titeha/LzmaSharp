@@ -415,6 +415,18 @@ public sealed class MainViewModel : ObservableObject
     set => Set(ref _selectedCompressionMethod, value);
   }
 
+  private bool _useZipFormat;
+
+  /// <summary>
+  /// Создавать ZIP (Store/Deflate) вместо 7z. Настройки 7z (метод/потоки/словарь/тома/AES) при этом
+  /// не применяются — ZIP выбирает Store/Deflate пофайлово сам.
+  /// </summary>
+  public bool UseZipFormat
+  {
+    get => _useZipFormat;
+    set => Set(ref _useZipFormat, value);
+  }
+
   /// <summary>Доступное число потоков сжатия (Авто + степени двойки до числа ядер).</summary>
   public IReadOnlyList<ThreadCountOption> ThreadCountOptions { get; } = BuildThreadCountOptions();
 
@@ -1376,10 +1388,17 @@ public sealed class MainViewModel : ObservableObject
     if (files is null || files.Count == 0)
       return;
 
-    string? path = await _saveFilePicker.PickSavePathAsync("archive.7z");
+    string? path = await _saveFilePicker.PickSavePathAsync(UseZipFormat ? "archive.zip" : "archive.7z");
 
     if (path is null)
       return;
+
+    // ZIP-формат: свой потоковый writer (Store/Deflate), настройки 7z не применяются.
+    if (UseZipFormat)
+    {
+      await CreateZipStreamingAsync(files, path);
+      return;
+    }
 
     // Для AES спрашиваем пароль (с подтверждением) ДО начала операции; отмена — не создаём.
     string? password = null;
@@ -1462,6 +1481,49 @@ public sealed class MainViewModel : ObservableObject
         if (breakdown.Length != 0)
           StatusMessage += "\n" + breakdown;
       }
+    });
+  }
+
+  // Потоковое создание ZIP из отсканированных ссылок на файлы (Store/Deflate, ZIP64 при переполнении).
+  private async Task CreateZipStreamingAsync(IReadOnlyList<PickedFileRef> files, string path)
+  {
+    IProgress<SevenZipProgress> progress = CreateProgress();
+    var currentFile = new Progress<string>(name => CurrentFileStatus = $"Сжатие: {name}");
+
+    await RunOperationAsync(async token =>
+    {
+      var entries = new List<ZipStreamingEntry>(files.Count);
+      long originalBytes = 0;
+
+      foreach (PickedFileRef file in files)
+      {
+        entries.Add(new ZipStreamingEntry(file.Name, file.Length, file.OpenRead));
+        originalBytes += file.Length;
+      }
+
+      ZipWriteResult result;
+      try
+      {
+        result = await _archiveService.CreateZipToFileAsync(entries, path, progress, token, currentFile);
+      }
+      finally
+      {
+        CurrentFileStatus = null;
+      }
+
+      if (result != ZipWriteResult.Ok)
+      {
+        StatusMessage = result == ZipWriteResult.NotSupported
+            ? "ZIP: отдельный файл больше 2 ГиБ пока не поддержан — используйте 7z."
+            : "Не удалось создать ZIP: ошибка ввода-вывода или некорректный набор файлов.";
+        return;
+      }
+
+      long compressedBytes = 0;
+      try { compressedBytes = new FileInfo(path).Length; }
+      catch (IOException) { }
+
+      StatusMessage = FormatCreateSummary(path, originalBytes, compressedBytes);
     });
   }
 

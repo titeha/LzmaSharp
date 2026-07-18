@@ -168,6 +168,18 @@ public interface IArchiveService
       => Task.FromResult<byte[]?>(null);
 
   /// <summary>
+  /// ПОТОКОВОЕ создание ZIP по пути (Store/Deflate + ZIP64), без удержания архива в памяти.
+  /// По умолчанию — <see cref="ZipWriteResult.InvalidData"/> (шов подключается только в боевой службе).
+  /// </summary>
+  Task<ZipWriteResult> CreateZipToFileAsync(
+      IReadOnlyList<ZipStreamingEntry> entries,
+      string destinationPath,
+      System.IProgress<SevenZipProgress>? progress = null,
+      System.Threading.CancellationToken token = default,
+      System.IProgress<string>? currentFile = null)
+      => Task.FromResult(ZipWriteResult.InvalidData);
+
+  /// <summary>
   /// ПОТОКОВЫЙ обзор ZIP по пути: читает центральный каталог (имена/каталоги/размеры) БЕЗ загрузки
   /// архива в память (для ZIP &gt; 2 ГиБ и/или ZIP64). По умолчанию — <see cref="ZipReadResult.NotSupported"/>.
   /// </summary>

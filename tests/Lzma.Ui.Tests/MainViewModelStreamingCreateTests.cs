@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Lzma.Core.SevenZip;
+using Lzma.Core.Zip;
 using Lzma.Ui.Services;
 using Lzma.Ui.ViewModels;
 
@@ -105,6 +106,53 @@ public sealed class MainViewModelStreamingCreateTests
       Assert.Equal(a, entries[0].Bytes);
       Assert.Equal("big.bin", entries[1].Name);
       Assert.Equal(big, entries[1].Bytes);
+    }
+    finally
+    {
+      try { Directory.Delete(dir, recursive: true); } catch { }
+    }
+  }
+
+  [Fact]
+  public async Task ПотоковоеСоздание_Zip_ПишетНаДискИРаспаковывается()
+  {
+    byte[] a = Encoding.UTF8.GetBytes("zip из UI");
+    byte[] big = Encoding.UTF8.GetBytes(string.Concat(System.Linq.Enumerable.Repeat("zip поток 0123456789 ", 5000)));
+
+    string dir = Path.Combine(Path.GetTempPath(), "LzmaUiZipCreate", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(dir);
+    string outPath = Path.Combine(dir, "out.zip");
+
+    try
+    {
+      var refs = new List<PickedFileRef>
+      {
+        new("a.txt", a.LongLength, () => new MemoryStream(a)),
+        new("sub/big.txt", big.LongLength, () => new MemoryStream(big)),
+      };
+
+      var vm = new MainViewModel(
+          new StubArchivePicker(), new NullPasswordPrompt(), new StubFolderPicker(),
+          new LzmaArchiveService(), new RefsSourceFilesPicker(refs), new StubSaveFilePicker(outPath))
+      {
+        UseZipFormat = true, // формат ZIP вместо 7z
+      };
+
+      await vm.CreateCommand.ExecuteAsync();
+
+      Assert.True(File.Exists(outPath));
+      Assert.Contains("стало", vm.StatusMessage);
+
+      // Читается и распаковывается нашим потоковым ZIP-путём.
+      string ext = Path.Combine(dir, "x");
+      using (var read = new FileStream(outPath, FileMode.Open, FileAccess.Read))
+      {
+        Assert.Equal(ZipReadResult.Ok, ZipStreamReader.ReadCentralDirectory(read, out ZipStreamEntry[] listed));
+        Assert.Equal(ZipExtractResult.Ok, ZipStreamExtractor.ExtractToDirectory(read, listed, ext));
+      }
+
+      Assert.Equal(a, File.ReadAllBytes(Path.Combine(ext, "a.txt")));
+      Assert.Equal(big, File.ReadAllBytes(Path.Combine(ext, "sub", "big.txt")));
     }
     finally
     {
