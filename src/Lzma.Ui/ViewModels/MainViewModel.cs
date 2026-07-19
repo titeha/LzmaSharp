@@ -73,6 +73,8 @@ public sealed class MainViewModel : ObservableObject
   private bool _hasArchive;
   private string _currentPath = string.Empty;
   private bool _canGoUp;
+  private bool _isEditingPath;
+  private string _editablePath = string.Empty;
   private bool _isBusy;
   private bool _isOperating;
   private double _progressPercent;
@@ -140,6 +142,8 @@ public sealed class MainViewModel : ObservableObject
     OpenArchiveFileCommand = new AsyncRelayCommand(OpenArchiveFileAsync, () => !IsOperating, this);
     NavigateUpCommand = new RelayCommand(NavigateUp, () => CanGoUp, this);
     NavigateToCrumbCommand = new RelayCommand<PathCrumb>(NavigateToCrumb);
+    CommitPathCommand = new RelayCommand(CommitPath);
+    CancelEditPathCommand = new RelayCommand(CancelEditPath);
     ExtractAllCommand = new AsyncRelayCommand(ExtractAllAsync, () => HasArchive && !IsOperating, this);
     ExtractSelectedCommand = new AsyncRelayCommand(ExtractSelectedAsync, () => CanExtractSelected && !IsOperating, this);
     ExtractArchiveFileCommand = new AsyncRelayCommand(ExtractArchiveFileAsync, () => !IsOperating, this);
@@ -188,6 +192,8 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(IsFileSystemMode));
         OnPropertyChanged(nameof(HasContent));
         OnPropertyChanged(nameof(CanExtractSelected));
+        OnPropertyChanged(nameof(CanEditPath));
+        IsEditingPath = false; // смена режима гасит ввод пути
       }
     }
   }
@@ -211,6 +217,23 @@ public sealed class MainViewModel : ObservableObject
     get => _canGoUp;
     set => Set(ref _canGoUp, value);
   }
+
+  /// <summary>Активен ли режим ввода пути в адресной строке (текстовое поле вместо крошек).</summary>
+  public bool IsEditingPath
+  {
+    get => _isEditingPath;
+    private set => Set(ref _isEditingPath, value);
+  }
+
+  /// <summary>Редактируемый текст адресной строки (полный путь для ввода).</summary>
+  public string EditablePath
+  {
+    get => _editablePath;
+    set => Set(ref _editablePath, value);
+  }
+
+  /// <summary>Можно ли редактировать адрес (ввод пути доступен только в режиме браузера ФС).</summary>
+  public bool CanEditPath => IsFileSystemMode;
 
   /// <summary>
   /// Визуальный индикатор «занято»: включается только если операция длится дольше
@@ -369,6 +392,12 @@ public sealed class MainViewModel : ObservableObject
 
   /// <summary>Команда перехода к сегменту «хлебных крошек» (клик по крошке пути).</summary>
   public RelayCommand<PathCrumb> NavigateToCrumbCommand { get; }
+
+  /// <summary>Команда применить введённый путь адресной строки (Enter).</summary>
+  public RelayCommand CommitPathCommand { get; }
+
+  /// <summary>Команда отменить ввод пути адресной строки (Esc / потеря фокуса).</summary>
+  public RelayCommand CancelEditPathCommand { get; }
 
   /// <summary>
   /// Команда «Открыть большой архив…» — обзор содержимого .7z по пути БЕЗ загрузки в память
@@ -681,6 +710,52 @@ public sealed class MainViewModel : ObservableObject
 
     _current = chain[crumb.Depth];
     RefreshView();
+  }
+
+  /// <summary>Включает режим ввода пути (адресная строка → текстовое поле). Только в режиме ФС.</summary>
+  public void BeginEditPath()
+  {
+    if (!CanEditPath)
+      return;
+
+    EditablePath = _currentDirectory ?? string.Empty;
+    IsEditingPath = true;
+  }
+
+  /// <summary>Отменяет ввод пути (вернуться к крошкам без перехода).</summary>
+  public void CancelEditPath() => IsEditingPath = false;
+
+  /// <summary>Применяет введённый путь (Enter): переходит по нему, если это существующая папка.</summary>
+  public void CommitPath() => NavigateToPath(EditablePath);
+
+  /// <summary>
+  /// Переход по введённому пути в режиме браузера ФС (как адресная строка проводника): пустой ввод —
+  /// к списку корней; существующая папка — переход в неё (ввод-режим гаснет); иначе — статус-сообщение,
+  /// поле остаётся открытым для правки.
+  /// </summary>
+  public void NavigateToPath(string? raw)
+  {
+    if (_fileSystemBrowser is null || !IsFileSystemMode)
+      return;
+
+    string input = (raw ?? string.Empty).Trim().Trim('"');
+
+    if (input.Length == 0)
+    {
+      ShowFileSystem(null); // к корням
+      IsEditingPath = false;
+      return;
+    }
+
+    string? resolved = _fileSystemBrowser.ResolveDirectory(input);
+    if (resolved is not null)
+    {
+      ShowFileSystem(resolved);
+      IsEditingPath = false;
+      return;
+    }
+
+    StatusMessage = $"Путь не найден или это не папка: {input}";
   }
 
   // Пересобирает коллекцию крошек (ссылка на коллекцию стабильна — важно для привязки XAML).

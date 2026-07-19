@@ -57,6 +57,13 @@ public sealed class MainViewModelBrowseTests
         : throw new System.IO.FileNotFoundException(fullPath);
 
     public IReadOnlyList<ArchiveSourceFile> EnumerateForArchive(IReadOnlyList<string> paths) => [];
+
+    // Адресная строка: нормализуем и признаём папками только C:\ и C:\docs.
+    public string? ResolveDirectory(string path)
+    {
+      string p = path.Trim().TrimEnd('\\', '/');
+      return p switch { "C:" => "C:\\", "C:\\docs" => "C:\\docs", _ => null };
+    }
   }
 
   private static MainViewModel CreateWithBrowser(byte[]? archiveBytes = null)
@@ -66,6 +73,84 @@ public sealed class MainViewModelBrowseTests
 
   private static ArchiveItem Find(MainViewModel vm, string name)
       => vm.Items.Single(i => i.Name == name);
+
+  // --- Адресная строка (ручной ввод пути, как в проводнике) ---
+
+  [Fact]
+  public void АдреснаяСтрока_ВводСуществующейПапки_Переходит()
+  {
+    MainViewModel vm = CreateWithBrowser();
+    vm.BeginEditPath();
+    Assert.True(vm.IsEditingPath);
+
+    vm.EditablePath = "C:\\docs";
+    vm.CommitPath();
+
+    Assert.False(vm.IsEditingPath);
+    Assert.Equal("C:\\docs", vm.CurrentPath);
+    Assert.Single(vm.Items);
+    Assert.Equal("readme.txt", vm.Items[0].Name);
+  }
+
+  [Fact]
+  public void АдреснаяСтрока_НеверныйПуть_Статус_ОстаётсяВвод()
+  {
+    MainViewModel vm = CreateWithBrowser();
+    vm.BeginEditPath();
+    vm.EditablePath = "C:\\nope";
+    vm.CommitPath();
+
+    Assert.True(vm.IsEditingPath); // поле остаётся для правки
+    Assert.Contains("не папка", vm.StatusMessage);
+    Assert.Equal("Этот компьютер", vm.CurrentPath); // не перешли
+  }
+
+  [Fact]
+  public void АдреснаяСтрока_ПустойВвод_КорниФС()
+  {
+    MainViewModel vm = CreateWithBrowser();
+    vm.NavigateInto(Find(vm, "C:\\")); // в C:\
+    vm.BeginEditPath();
+    vm.EditablePath = "   ";
+    vm.CommitPath();
+
+    Assert.False(vm.IsEditingPath);
+    Assert.Equal("Этот компьютер", vm.CurrentPath);
+  }
+
+  [Fact]
+  public void АдреснаяСтрока_BeginEdit_ЗаполняетТекущийПуть()
+  {
+    MainViewModel vm = CreateWithBrowser();
+    vm.NavigateInto(Find(vm, "C:\\")); // текущий каталог C:\
+
+    vm.BeginEditPath();
+
+    Assert.True(vm.IsEditingPath);
+    Assert.Equal("C:\\", vm.EditablePath);
+  }
+
+  [Fact]
+  public void АдреснаяСтрока_Отмена_ГаситВвод_БезПерехода()
+  {
+    MainViewModel vm = CreateWithBrowser();
+    vm.BeginEditPath();
+    vm.EditablePath = "C:\\docs";
+    vm.CancelEditPath();
+
+    Assert.False(vm.IsEditingPath);
+    Assert.Equal("Этот компьютер", vm.CurrentPath); // Cancel не переходит
+  }
+
+  [Fact]
+  public void АдреснаяСтрока_РедактированиеТолькоВФС()
+  {
+    MainViewModel vm = CreateWithBrowser();
+    Assert.True(vm.CanEditPath); // режим ФС
+
+    MainViewModel noBrowser = new(new StubArchivePicker(), new CancellingPasswordPrompt(), new CancellingFolderPicker());
+    Assert.False(noBrowser.CanEditPath); // без браузера — нет режима ФС
+  }
 
   [Fact]
   public void СБраузером_НаСтарте_ПоказываетКорниВРежимеФС()

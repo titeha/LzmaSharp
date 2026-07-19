@@ -55,10 +55,12 @@
                         ToolTip.Tip="Переключить тему (тёмная/светлая)">
                     <PathIcon Data="{StaticResource IconTheme}" />
                 </Button>
-                <!-- Хлебные крошки текущего пути: каждый сегмент кликабелен для перехода на его уровень.
-                     Последний сегмент (IsCurrent) подсвечен медью, разделитель после него скрыт. -->
-                <ItemsControl ItemsSource="{Binding Breadcrumbs}" VerticalAlignment="Center"
-                              IsVisible="{Binding !IsBusy}">
+                <!-- Адресная строка: крошки + карандаш (браузер ФС) ↔ поле ввода пути (как в проводнике).
+                     Весь блок скрыт во время операции (IsBusy). -->
+                <Panel VerticalAlignment="Center" IsVisible="{Binding !IsBusy}">
+                  <!-- Режим просмотра: кликабельные крошки + кнопка перехода к ручному вводу пути. -->
+                  <StackPanel Orientation="Horizontal" VerticalAlignment="Center" IsVisible="{Binding !IsEditingPath}">
+                <ItemsControl ItemsSource="{Binding Breadcrumbs}" VerticalAlignment="Center">
                     <ItemsControl.Styles>
                         <Style Selector="Button.crumb">
                             <Setter Property="Background" Value="Transparent" />
@@ -90,6 +92,23 @@
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
+                    <!-- Карандаш: перейти в режим ручного ввода пути (только браузер ФС). -->
+                    <Button Classes="tool" Click="OnEditPath" Padding="6" Margin="4,0,0,0"
+                            IsVisible="{Binding CanEditPath}"
+                            ToolTip.Tip="Ввести путь вручную и перейти (как в проводнике)">
+                        <PathIcon Data="{StaticResource IconEdit}" Width="14" Height="14" />
+                    </Button>
+                  </StackPanel>
+                  <!-- Режим ввода пути: Enter — перейти, Esc/уход фокуса — отмена. -->
+                  <TextBox x:Name="PathBox" IsVisible="{Binding IsEditingPath}" MinWidth="380"
+                           Text="{Binding EditablePath}" Watermark="Введите путь и нажмите Enter…"
+                           VerticalAlignment="Center" LostFocus="OnPathBoxLostFocus">
+                      <TextBox.KeyBindings>
+                          <KeyBinding Gesture="Enter" Command="{Binding CommitPathCommand}" />
+                          <KeyBinding Gesture="Escape" Command="{Binding CancelEditPathCommand}" />
+                      </TextBox.KeyBindings>
+                  </TextBox>
+                </Panel>
                 <TextBlock Text="{Binding SelectedCount, StringFormat='• Выбрано: {0}'}" VerticalAlignment="Center"
                            Foreground="{DynamicResource AppCopper}" FontFamily="{DynamicResource AppMonoFont}"
                            IsVisible="{Binding HasSelection}" />

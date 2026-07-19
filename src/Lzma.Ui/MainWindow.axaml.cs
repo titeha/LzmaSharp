@@ -56,4 +56,25 @@ public partial class MainWindow : Window
             await viewModel.ActivateItemAsync(item);
         }
     }
+
+    // Карандаш адресной строки: включить ручной ввод пути, сфокусировать поле и выделить текст.
+    private void OnEditPath(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (DataContext is not MainViewModel viewModel || !viewModel.CanEditPath)
+            return;
+
+        viewModel.BeginEditPath();
+        if (this.FindControl<TextBox>("PathBox") is { } box)
+        {
+            box.Focus();
+            box.SelectAll();
+        }
+    }
+
+    // Уход фокуса из поля пути — отменяем ввод (возврат к крошкам), если он ещё активен.
+    private void OnPathBoxLostFocus(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (DataContext is MainViewModel viewModel)
+            viewModel.CancelEditPath();
+    }
 }

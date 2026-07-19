@@ -92,6 +92,24 @@ public sealed class DesktopFileSystemBrowser : IFileSystemBrowser
   public Stream OpenRead(string fullPath) => File.OpenRead(fullPath);
 
   /// <inheritdoc />
+  public string? ResolveDirectory(string path)
+  {
+    if (string.IsNullOrWhiteSpace(path))
+      return null;
+
+    try
+    {
+      // DirectoryInfo.FullName нормализует ('C:\Foo\' → 'C:\Foo', сохраняя корень 'C:\').
+      string full = new DirectoryInfo(path).FullName;
+      return Directory.Exists(full) ? full : null;
+    }
+    catch (System.ArgumentException) { return null; }
+    catch (IOException) { return null; }
+    catch (System.UnauthorizedAccessException) { return null; }
+    catch (System.Security.SecurityException) { return null; }
+  }
+
+  /// <inheritdoc />
   public IReadOnlyList<ArchiveSourceFile> EnumerateForArchive(IReadOnlyList<string> paths)
   {
     var result = new List<ArchiveSourceFile>();
