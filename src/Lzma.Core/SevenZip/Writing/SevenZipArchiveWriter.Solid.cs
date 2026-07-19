@@ -1,6 +1,7 @@
 using Lzma.Core.Checksums;
 using Lzma.Core.Lzma1;
 using Lzma.Core.Lzma2;
+using Lzma.Core.Ppmd;
 
 namespace Lzma.Core.SevenZip;
 
@@ -23,6 +24,9 @@ public static partial class SevenZipArchiveWriter
   /// содержимому (PPMd/LZMA2/Copy), файлы одного кодека склеиваются в solid-блоки (≤ ~32 МиБ) —
   /// модель копит статистику по группе (плотнее пофайлового), а блоки жмутся ПАРАЛЛЕЛЬНО между собой.
   /// </summary>
+  /// <param name="largeFileThreshold">Файл больше этого порога не солидится (солид одиночному файлу не
+  /// нужен) — кодируется СВОИМ потоковым folder-ом по своему кодеку, без загрузки в память (по умолчанию
+  /// 2 ГиБ; тесты понижают, чтобы прогнать потоковый путь на маленьких файлах).</param>
   public static SevenZipArchiveWriteResult BuildAutoSolidArchiveToStream(
       IReadOnlyList<SevenZipStreamingEntry> entries,
       Stream output,
@@ -30,7 +34,8 @@ public static partial class SevenZipArchiveWriter
       int maxDegreeOfParallelism = 0,
       IProgress<SevenZipProgress>? progress = null,
       System.Threading.CancellationToken token = default,
-      IProgress<SevenZipCompressionFileProgress>? currentFile = null)
+      IProgress<SevenZipCompressionFileProgress>? currentFile = null,
+      long largeFileThreshold = int.MaxValue)
   {
     ArgumentNullException.ThrowIfNull(entries);
     ArgumentNullException.ThrowIfNull(output);
@@ -76,15 +81,12 @@ public static partial class SevenZipArchiveWriter
       _ => "LZMA2",
     };
 
-    // Индексы файлов с данными + предвалидация размера (файл держим в памяти при solid-склейке).
+    // Индексы файлов с данными. Файлы ≤ порога держим в памяти при solid-склейке; файлы > порога
+    // кодируются потоково своим folder-ом (см. блочную разбивку ниже), в память не читаются.
     var dataOrder = new List<int>();
     for (int i = 0; i < entries.Count; i++)
       if (IsStreamingDataEntry(entries[i]))
-      {
-        if (entries[i].Length > int.MaxValue)
-          return SevenZipArchiveWriteResult.NotSupported;
         dataOrder.Add(i);
-      }
 
     // Классификация по сэмплу (≤1 МиБ) — одно дешёвое чтение начала файла.
     var byCodec = new Dictionary<SevenZipWriterCompressionMethod, List<int>>
@@ -105,8 +107,9 @@ public static partial class SevenZipArchiveWriter
       list.Add(idx);
     }
 
-    // Блоки в фиксированном порядке кодеков; внутри кодека режем по лимиту размера.
-    var blocks = new List<(SevenZipWriterCompressionMethod Codec, int[] Indices, long Bytes)>();
+    // Блоки в фиксированном порядке кодеков; внутри кодека режем по лимиту размера. Файл > порога
+    // выделяется в отдельный one-file блок с флагом IsLarge → кодируется потоково (не в память).
+    var blocks = new List<(SevenZipWriterCompressionMethod Codec, int[] Indices, long Bytes, bool IsLarge)>();
     foreach (SevenZipWriterCompressionMethod codec in (ReadOnlySpan<SevenZipWriterCompressionMethod>)
              [SevenZipWriterCompressionMethod.Ppmd, SevenZipWriterCompressionMethod.Lzma2, SevenZipWriterCompressionMethod.Copy])
     {
@@ -114,15 +117,23 @@ public static partial class SevenZipArchiveWriter
       int j = 0;
       while (j < list.Count)
       {
+        if (entries[list[j]].Length > largeFileThreshold)
+        {
+          blocks.Add((codec, [list[j]], entries[list[j]].Length, true));
+          j++;
+          continue;
+        }
+
         var block = new List<int>();
         long bytes = 0;
-        while (j < list.Count && (block.Count == 0 || bytes + entries[list[j]].Length <= DefaultSolidBlockSize))
+        while (j < list.Count && entries[list[j]].Length <= largeFileThreshold
+               && (block.Count == 0 || bytes + entries[list[j]].Length <= DefaultSolidBlockSize))
         {
           bytes += entries[list[j]].Length;
           block.Add(list[j]);
           j++;
         }
-        blocks.Add((codec, [.. block], bytes));
+        blocks.Add((codec, [.. block], bytes, false));
       }
     }
 
@@ -152,10 +163,37 @@ public static partial class SevenZipArchiveWriter
     {
       token.ThrowIfCancellationRequested();
 
-      // Волна блоков: лимит по числу потоков и по бюджету памяти.
+      // Большой файл (> порога) — свой folder, кодируется ПОТОКОВО прямо в output (в память не читаем),
+      // вне параллельной волны (пишет в output по месту). Один под-поток на folder.
+      if (blocks[bi].IsLarge)
+      {
+        int f = bi;
+        var (codec, indices, _, _) = blocks[f];
+        SevenZipStreamingEntry big = entries[indices[0]];
+        currentFile?.Report(new SevenZipCompressionFileProgress(big.Name, CodecName(codec)));
+
+        LargeSolidFileResult large = EncodeLargeSolidFileToStream(
+            big, codec, ResolveCoder(codec), lzmaProperties, effectiveDictionarySize, maxDegreeOfParallelism, output, token);
+        if (large.Result != SevenZipArchiveWriteResult.Ok)
+          return large.Result;
+
+        folderBodies[f] = large.FolderBody;
+        packSizes[f] = large.PackSize;
+        coderUnpackSizes[f] = [large.UnpackSize];
+        numStreams[f] = 1;
+        fileSizes[f] = [large.FileSize];
+        fileCrcs[f] = [large.FileCrc];
+
+        processed += large.FileSize;
+        progress?.Report(new SevenZipProgress(processed, totalContent));
+        bi++;
+        continue;
+      }
+
+      // Волна НЕ-больших блоков: лимит по числу потоков и по бюджету памяти.
       int waveStart = bi;
       long waveBytes = 0;
-      while (bi < nb)
+      while (bi < nb && !blocks[bi].IsLarge)
       {
         int waveCount = bi - waveStart;
         if (waveCount >= dop || (waveCount > 0 && waveBytes + blocks[bi].Bytes > SolidWaveMemoryBudget))
@@ -171,7 +209,7 @@ public static partial class SevenZipArchiveWriter
       {
         Parallel.For(0, n, parallelOptions, k =>
         {
-          var (codec, indices, _) = blocks[waveStart + k];
+          var (codec, indices, _, _) = blocks[waveStart + k];
           results[k] = EncodeSolidBlock(entries, indices, ResolveEncode(codec), ResolveCoder(codec));
         });
       }
@@ -188,7 +226,7 @@ public static partial class SevenZipArchiveWriter
       for (int k = 0; k < n; k++)
       {
         int f = waveStart + k;
-        var (codec, indices, _) = blocks[f];
+        var (codec, indices, _, _) = blocks[f];
         SolidBlockResult res = results[k];
 
         foreach (int idx in indices)
@@ -249,6 +287,83 @@ public static partial class SevenZipArchiveWriter
   }
 
   private readonly record struct SolidBlockResult(byte[] FolderBody, byte[] Packed, long TotalUnpack, long[] FileSizes, uint[] FileCrcs);
+
+  private readonly record struct LargeSolidFileResult(
+      SevenZipArchiveWriteResult Result, byte[] FolderBody, ulong PackSize, ulong UnpackSize, long FileSize, uint FileCrc);
+
+  // Кодирует ОДИН большой файл (> порога) потоково прямо в output своим кодеком (PPMd/LZMA2/Copy),
+  // не читая его в память: PPMd — потоковый Encode; LZMA2 — блочно-параллельный EncodeParallelToStream;
+  // Copy — прямое копирование. CRC несжатого считается на лету; packSize — по позиции.
+  private static LargeSolidFileResult EncodeLargeSolidFileToStream(
+      SevenZipStreamingEntry e, SevenZipWriterCompressionMethod codec, byte[] coderBytes,
+      LzmaProperties lzmaProperties, int dictionarySize, int maxDegreeOfParallelism, Stream output,
+      System.Threading.CancellationToken token)
+  {
+    byte[] folderBody = WrapSingleCoderFolderBody(coderBytes);
+    long len = e.Length;
+    long before = output.Position;
+    uint crc;
+
+    try
+    {
+      using Stream source = e.OpenRead();
+
+      switch (codec)
+      {
+        case SevenZipWriterCompressionMethod.Ppmd:
+        {
+          var crcSource = new CrcReadThroughStream(source);
+          Ppmd7Encoder.Encode(crcSource, len, PpmdOrder, PpmdMemSize, output, out _);
+          if (crcSource.BytesRead != len)
+            return new(SevenZipArchiveWriteResult.InternalError, folderBody, 0, 0, 0, 0);
+          crc = crcSource.Crc;
+          break;
+        }
+
+        case SevenZipWriterCompressionMethod.Copy:
+        {
+          var crcSource = new CrcReadThroughStream(source);
+          CopyStreamExact(crcSource, len, output);
+          if (crcSource.BytesRead != len)
+            return new(SevenZipArchiveWriteResult.InternalError, folderBody, 0, 0, 0, 0);
+          crc = crcSource.Crc;
+          break;
+        }
+
+        default: // LZMA2 — считает CRC сам.
+          Lzma2LzmaEncoder.EncodeParallelToStream(
+              source, len, lzmaProperties, dictionarySize, output, out crc, 0, maxDegreeOfParallelism, null, token);
+          break;
+      }
+    }
+    catch (OperationCanceledException)
+    {
+      throw;
+    }
+    catch (Exception)
+    {
+      return new(SevenZipArchiveWriteResult.InternalError, folderBody, 0, 0, 0, 0);
+    }
+
+    ulong packSize = (ulong)(output.Position - before);
+    return new(SevenZipArchiveWriteResult.Ok, folderBody, packSize, (ulong)len, len, crc);
+  }
+
+  // Копирует ровно length байт из source в output (для Copy-кодека большого файла).
+  private static void CopyStreamExact(Stream source, long length, Stream output)
+  {
+    byte[] buffer = new byte[1 << 16];
+    long remaining = length;
+    while (remaining > 0)
+    {
+      int want = (int)Math.Min(buffer.Length, remaining);
+      int read = source.Read(buffer, 0, want);
+      if (read <= 0)
+        throw new EndOfStreamException("Источник короче заявленной длины при потоковом Copy.");
+      output.Write(buffer, 0, read);
+      remaining -= read;
+    }
+  }
 
   // Читает первые sampleLength байт файла (для классификации), закрывая поток.
   private static byte[] ReadSample(SevenZipStreamingEntry e, int sampleLength)
