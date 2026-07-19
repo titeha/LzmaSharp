@@ -48,6 +48,7 @@
                     <PathIcon Data="{StaticResource IconExtract}" />
                 </Button>
                 <Button Classes="tool" Command="{Binding NavigateUpCommand}"
+                        IsVisible="{Binding HasArchive}"
                         ToolTip.Tip="Вверх — на уровень выше (или выход из архива)">
                     <PathIcon Data="{StaticResource IconUp}" />
                 </Button>
@@ -62,9 +63,10 @@
                 <!-- Адресная строка: крошки + карандаш (браузер ФС) ↔ поле ввода пути (как в проводнике).
                      Весь блок скрыт во время операции (IsBusy). -->
                 <Panel VerticalAlignment="Center" IsVisible="{Binding !IsBusy}">
-                  <!-- Режим просмотра: кликабельные крошки + кнопка перехода к ручному вводу пути. -->
+                  <!-- Режим просмотра: крошки (только в архиве) + карандаш ручного ввода пути (только ФС). -->
                   <StackPanel Orientation="Horizontal" VerticalAlignment="Center" IsVisible="{Binding !IsEditingPath}">
-                <ItemsControl ItemsSource="{Binding Breadcrumbs}" VerticalAlignment="Center">
+                <ItemsControl ItemsSource="{Binding Breadcrumbs}" VerticalAlignment="Center"
+                              IsVisible="{Binding HasArchive}">
                     <ItemsControl.Styles>
                         <Style Selector="Button.crumb">
                             <Setter Property="Background" Value="Transparent" />
@@ -189,8 +191,9 @@
                     BorderBrush="{DynamicResource AppCopper}" BorderThickness="1">
                 <Grid RowDefinitions="Auto,*">
 
-                    <!-- Заголовок таблицы -->
+                    <!-- Заголовок таблицы (колонки) — только в режиме архива (плоский список). -->
                     <Border Grid.Row="0" Padding="14,7" BorderThickness="0,0,0,1"
+                            IsVisible="{Binding HasArchive}"
                             BorderBrush="{DynamicResource AppHairline}"
                             Background="{DynamicResource AppSurfaceRaised}">
                         <Grid ColumnDefinitions="28,24,*,120,90">
@@ -203,8 +206,10 @@
                         </Grid>
                     </Border>
 
+                    <!-- Режим архива: плоский список текущей папки. -->
                     <ListBox Grid.Row="1" ItemsSource="{Binding Items}"
                              SelectionMode="Single" Background="Transparent" BorderThickness="0"
+                             IsVisible="{Binding HasArchive}"
                              DoubleTapped="OnItemDoubleTapped">
                         <!-- Плотные строки: убираем крупные Fluent-отступы ListBoxItem, ведём свой ритм. -->
                         <ListBox.Styles>
@@ -235,6 +240,44 @@
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>
+
+                    <!-- Режим браузера ФС: раскрываемое дерево от дисков (ленивая догрузка при раскрытии). -->
+                    <TreeView Grid.Row="1" ItemsSource="{Binding FileSystemTree}"
+                              SelectedItem="{Binding SelectedTreeNode, Mode=TwoWay}"
+                              Background="Transparent" BorderThickness="0"
+                              IsVisible="{Binding IsFileSystemMode}"
+                              DoubleTapped="OnTreeNodeDoubleTapped">
+                        <TreeView.Styles>
+                            <Style Selector="TreeViewItem">
+                                <!-- DataContext контейнера — TreeNodeItem; в стиле компилируемая привязка
+                                     резолвится против VM, поэтому здесь рефлексивная. -->
+                                <Setter Property="IsExpanded" Value="{ReflectionBinding IsExpanded, Mode=TwoWay}" />
+                                <Setter Property="Padding" Value="2,3" />
+                            </Style>
+                        </TreeView.Styles>
+                        <TreeView.ItemTemplate>
+                            <TreeDataTemplate ItemsSource="{Binding Children}" DataType="models:TreeNodeItem">
+                                <Grid ColumnDefinitions="24,22,*,Auto" VerticalAlignment="Center">
+                                    <CheckBox Grid.Column="0" IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                              VerticalAlignment="Center" Padding="0" MinWidth="0"
+                                              ToolTip.Tip="Отметить для создания архива" />
+                                    <Panel Grid.Column="1" VerticalAlignment="Center">
+                                        <PathIcon Data="{StaticResource IconFolder}" Width="15" Height="15"
+                                                  Foreground="{DynamicResource AppSteel}" IsVisible="{Binding IsDirectory}" />
+                                        <PathIcon Data="{StaticResource IconArchive}" Width="15" Height="15"
+                                                  Foreground="{DynamicResource AppCopper}" IsVisible="{Binding IsArchiveFile}" />
+                                        <PathIcon Data="{StaticResource IconFile}" Width="15" Height="15"
+                                                  Foreground="{DynamicResource AppInkSecondary}" IsVisible="{Binding IsPlainFile}" />
+                                    </Panel>
+                                    <TextBlock Grid.Column="2" Text="{Binding Name}" VerticalAlignment="Center"
+                                               TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Grid.Column="3" Text="{Binding DisplaySize}" Margin="8,0,4,0"
+                                               Foreground="{DynamicResource AppInkSecondary}"
+                                               FontFamily="{DynamicResource AppMonoFont}" VerticalAlignment="Center" />
+                                </Grid>
+                            </TreeDataTemplate>
+                        </TreeView.ItemTemplate>
+                    </TreeView>
                 </Grid>
             </Border>
         </Panel>

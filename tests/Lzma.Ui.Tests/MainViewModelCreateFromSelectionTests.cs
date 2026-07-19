@@ -63,12 +63,13 @@ public sealed class MainViewModelCreateFromSelectionTests
           new LzmaArchiveService(), sourceFilesPicker: null, saveFilePicker: new StubSaveFilePicker(archivePath),
           sourceFolderPicker: null, createPasswordPrompt: null, fileSystemBrowser: new RootedBrowser(src));
 
-      // На старте показан список корней (единственный — src); заходим внутрь.
-      vm.NavigateInto(vm.Items[0]);
+      // На старте — дерево с корнем src; раскрываем его.
+      TreeNodeItem root = vm.FileSystemTree.Single();
+      root.IsExpanded = true;
 
       // Отмечаем файл report.txt и папку photos.
-      Find(vm, "report.txt").IsSelected = true;
-      Find(vm, "photos").IsSelected = true;
+      root.Children.Single(c => c.Name == "report.txt").IsSelected = true;
+      root.Children.Single(c => c.Name == "photos").IsSelected = true;
       Assert.Equal(2, vm.SelectedCount);
       Assert.True(vm.CanCreateFromSelection);
 
@@ -92,7 +93,4 @@ public sealed class MainViewModelCreateFromSelectionTests
         Directory.Delete(work, recursive: true);
     }
   }
-
-  private static ArchiveItem Find(MainViewModel vm, string name)
-      => vm.Items.Single(i => i.Name == name);
 }

@@ -61,6 +61,16 @@ public partial class MainWindow : Window
         }
     }
 
+    // Двойной клик по узлу дерева ФС: файл-архив — открыть (папку раскрывает сам TreeView).
+    private async void OnTreeNodeDoubleTapped(object? sender, TappedEventArgs e)
+    {
+        if (DataContext is MainViewModel viewModel
+            && sender is TreeView { SelectedItem: TreeNodeItem node })
+        {
+            await viewModel.ActivateTreeNodeAsync(node);
+        }
+    }
+
     // Карандаш адресной строки: включить ручной ввод пути, сфокусировать поле и выделить текст.
     private void OnEditPath(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {

@@ -36,6 +36,11 @@ public sealed class MainViewModel : ObservableObject
   // Текущий каталог браузера ФС; null — показываем корни (диски / «Этот компьютер»).
   private string? _currentDirectory;
 
+  // Узлы дерева ФС, на изменение выбора которых мы подписаны (для подсчёта выбора); отписываемся при
+  // пересборке дерева, чтобы не текло.
+  private readonly List<TreeNodeItem> _trackedTreeNodes = [];
+  private TreeNodeItem? _selectedTreeNode;
+
   // Число отмеченных галочкой элементов текущего списка (мультивыбор в браузере ФС).
   private int _selectedCount;
 
@@ -152,9 +157,9 @@ public sealed class MainViewModel : ObservableObject
     CreateFromSelectionCommand = new AsyncRelayCommand(CreateFromSelectionAsync, () => CanCreateFromSelection && !IsOperating, this);
     CancelCommand = new RelayCommand(Cancel, () => IsOperating || IsScanning, this);
 
-    // На старте (если шов ФС внедрён) показываем браузер файловой системы с корней.
+    // На старте (если шов ФС внедрён) показываем дерево файловой системы от корней-дисков.
     if (_fileSystemBrowser is not null)
-      ShowFileSystem(null);
+      ShowFileSystemTree();
   }
 
   /// <summary>Заголовок окна: базовый либо «имя_архива — LzmaSharp» при открытом архиве.</summary>
@@ -378,8 +383,18 @@ public sealed class MainViewModel : ObservableObject
   /// </summary>
   internal TimeSpan BusyIndicatorDelay { get; set; } = TimeSpan.FromSeconds(3);
 
-  /// <summary>Содержимое текущей папки архива.</summary>
+  /// <summary>Содержимое текущей папки архива (плоский список, режим архива).</summary>
   public ObservableCollection<ArchiveItem> Items { get; } = [];
+
+  /// <summary>Дерево файловой системы (корни-диски → лениво вглубь), режим браузера ФС.</summary>
+  public ObservableCollection<TreeNodeItem> FileSystemTree { get; } = [];
+
+  /// <summary>Выделенный узел дерева ФС (для подсветки/скролла при переходе по адресу).</summary>
+  public TreeNodeItem? SelectedTreeNode
+  {
+    get => _selectedTreeNode;
+    set => Set(ref _selectedTreeNode, value);
+  }
 
   /// <summary>«Хлебные крошки» текущего пути (корень → текущая папка). Каждая крошка кликабельна.</summary>
   public ObservableCollection<PathCrumb> Breadcrumbs { get; } = [];
@@ -561,7 +576,7 @@ public sealed class MainViewModel : ObservableObject
     if (IsFileSystemMode && !item.IsDirectory)
     {
       if (item.IsArchiveFile && item.FullPath is not null)
-        await OpenArchiveFromBrowserAsync(item);
+        await OpenArchiveFromBrowserAsync(item.Name, item.FullPath, item.Size);
 
       return; // прочие файлы двойным кликом пока не открываем
     }
@@ -569,13 +584,23 @@ public sealed class MainViewModel : ObservableObject
     NavigateInto(item);
   }
 
-  // Открывает архив по пути из браузера ФС (читает в память ≤2 ГиБ, дальше общий путь обработки).
-  private async Task OpenArchiveFromBrowserAsync(ArchiveItem item)
+  /// <summary>Двойной клик по узлу дерева ФС: файл-архив — открыть; папку раскрывает сам TreeView.</summary>
+  public async Task ActivateTreeNodeAsync(TreeNodeItem? node)
   {
-    if (_fileSystemBrowser is null || item.FullPath is not { } path)
+    if (node is null || node.IsDirectory)
       return;
 
-    if (item.Size > int.MaxValue)
+    if (node.IsArchiveFile && node.FullPath is not null)
+      await OpenArchiveFromBrowserAsync(node.Name, node.FullPath, node.Size);
+  }
+
+  // Открывает архив по пути из браузера ФС (читает в память ≤2 ГиБ, дальше общий путь обработки).
+  private async Task OpenArchiveFromBrowserAsync(string name, string path, long size)
+  {
+    if (_fileSystemBrowser is null)
+      return;
+
+    if (size > int.MaxValue)
     {
       StatusMessage = "Архив больше 2 ГиБ — откройте его кнопкой «Открыть большой архив…».";
       return;
@@ -603,7 +628,7 @@ public sealed class MainViewModel : ObservableObject
       return;
     }
 
-    await RunOpenAsync(() => ProcessOpenedArchiveAsync(new PickedArchive(item.Name, bytes)));
+    await RunOpenAsync(() => ProcessOpenedArchiveAsync(new PickedArchive(name, bytes)));
   }
 
   /// <summary>Войти в элемент: для папки — перейти внутрь; файлы пока игнорируются.</summary>
@@ -612,14 +637,9 @@ public sealed class MainViewModel : ObservableObject
     if (item is null)
       return;
 
-    // Режим браузера ФС: заходим в папку/диск по полному пути.
+    // В режиме браузера ФС «захода внутрь» нет — там дерево (раскрытие узлов). Метод — только для архива.
     if (IsFileSystemMode)
-    {
-      if (item.IsDirectory && item.FullPath is { } path)
-        ShowFileSystem(path);
-      // Файлы (в т.ч. архивы) — открытие/заход подключим отдельным шагом.
       return;
-    }
 
     // Режим архива: навигация по виртуальному дереву.
     if (!item.IsDirectory)
@@ -636,11 +656,7 @@ public sealed class MainViewModel : ObservableObject
   public void NavigateUp()
   {
     if (IsFileSystemMode)
-    {
-      if (_currentDirectory is { } dir)
-        ShowFileSystem(_fileSystemBrowser!.GetParent(dir)); // null → к списку корней
-      return;
-    }
+      return; // в ФС-дереве «Вверх» не нужен (одно дерево от дисков)
 
     // Режим архива: вверх по дереву; с корня архива (Parent == null) — закрываем архив и
     // возвращаемся в браузер ФС (как в 7-Zip: «вверх» из корня архива ведёт наружу).
@@ -655,36 +671,125 @@ public sealed class MainViewModel : ObservableObject
     }
   }
 
-  // Показывает содержимое каталога ФС (или список корней при directory=null) в общей таблице.
-  private void ShowFileSystem(string? directory)
+  // Строит дерево ФС от корней-дисков (вглубь — лениво при раскрытии). Одно дерево, без «текущей папки»:
+  // навигация «заход/крошки/Вверх» в ФС не нужна (раскрываем узлы). Режим архива остаётся плоским (Items).
+  private void ShowFileSystemTree()
   {
     if (_fileSystemBrowser is null)
       return;
 
-    _currentDirectory = directory;
+    // Отписываемся от старых узлов и очищаем дерево/список.
+    foreach (TreeNodeItem node in _trackedTreeNodes)
+      node.PropertyChanged -= OnTreeNodeChanged;
+    _trackedTreeNodes.Clear();
+    FileSystemTree.Clear();
+    ClearItems(); // в ФС Items не используем
 
-    IReadOnlyList<FileSystemEntry> entries = directory is null
-        ? _fileSystemBrowser.ListRoots()
-        : _fileSystemBrowser.ListDirectory(directory);
-
-    ClearItems();
-
-    foreach (FileSystemEntry entry in entries
+    foreach (FileSystemEntry root in _fileSystemBrowser.ListRoots()
                  .OrderByDescending(e => e.IsDirectory)
                  .ThenBy(e => e.Name, StringComparer.OrdinalIgnoreCase))
     {
-      AddItem(new ArchiveItem
-      {
-        Name = entry.Name,
-        IsDirectory = entry.IsDirectory,
-        Size = entry.Size,
-        FullPath = entry.FullPath,
-      });
+      FileSystemTree.Add(MakeFsNode(root));
     }
 
-    CurrentPath = directory ?? "Этот компьютер";
-    CanGoUp = directory is not null;
-    SetBreadcrumbs(BuildFileSystemCrumbs(directory));
+    SelectedCount = 0;
+    _currentDirectory = null;
+    CurrentPath = "Этот компьютер";
+    CanGoUp = false;
+    SetBreadcrumbs([]); // в ФС-дереве крошек нет
+  }
+
+  // Создаёт узел дерева ФС с ленивым загрузчиком детей + подпиской на изменение выбора.
+  private TreeNodeItem MakeFsNode(FileSystemEntry e)
+  {
+    var node = new TreeNodeItem(LoadFsChildren)
+    {
+      Name = e.Name,
+      IsDirectory = e.IsDirectory,
+      Size = e.Size,
+      FullPath = e.FullPath,
+    };
+    node.AddLoadingPlaceholder();
+    node.PropertyChanged += OnTreeNodeChanged;
+    _trackedTreeNodes.Add(node);
+    return node;
+  }
+
+  // Ленивая догрузка детей узла ФС (папки первыми, затем по имени).
+  private IReadOnlyList<TreeNodeItem> LoadFsChildren(TreeNodeItem parent)
+  {
+    if (_fileSystemBrowser is null || parent.FullPath is null)
+      return [];
+
+    return [.. _fileSystemBrowser.ListDirectory(parent.FullPath)
+        .OrderByDescending(e => e.IsDirectory)
+        .ThenBy(e => e.Name, StringComparer.OrdinalIgnoreCase)
+        .Select(MakeFsNode)];
+  }
+
+  // Изменилась галочка узла дерева → пересчитываем выбор.
+  private void OnTreeNodeChanged(object? sender, PropertyChangedEventArgs e)
+  {
+    if (e.PropertyName == nameof(TreeNodeItem.IsSelected))
+      SelectedCount = CountSelectedTreeNodes(FileSystemTree);
+  }
+
+  private static int CountSelectedTreeNodes(IEnumerable<TreeNodeItem> nodes)
+  {
+    int count = 0;
+    foreach (TreeNodeItem node in nodes)
+    {
+      if (node.IsSelected)
+        count++;
+      count += CountSelectedTreeNodes(node.Children);
+    }
+
+    return count;
+  }
+
+  // Раскрывает дерево ФС до указанного пути (адресная строка): раскрывает предков, чтобы папка стала
+  // видимой. Возвращает найденный узел или null. Сопоставление по FullPath.
+  private TreeNodeItem? ExpandToPath(string canonicalPath)
+  {
+    IEnumerable<TreeNodeItem> level = FileSystemTree;
+
+    while (true)
+    {
+      TreeNodeItem? node = null;
+      foreach (TreeNodeItem candidate in level)
+      {
+        if (candidate.FullPath is not { } fp)
+          continue;
+
+        if (PathEquals(fp, canonicalPath))
+          return node = candidate; // точное совпадение
+
+        if (IsUnder(canonicalPath, fp))
+        {
+          node = candidate;
+          break;
+        }
+      }
+
+      if (node is null)
+        return null;
+
+      node.IsExpanded = true; // догружает детей
+      level = node.Children;
+    }
+  }
+
+  private static bool PathEquals(string a, string b)
+      => string.Equals(a.TrimEnd('\\', '/'), b.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase);
+
+  // target лежит ВНУТРИ каталога dir (dir — префикс-путь).
+  private static bool IsUnder(string target, string dir)
+  {
+    string d = dir.TrimEnd('\\', '/');
+    string t = target.TrimEnd('\\', '/');
+    return t.Length > d.Length
+        && t.StartsWith(d, StringComparison.OrdinalIgnoreCase)
+        && (t[d.Length] == '\\' || t[d.Length] == '/');
   }
 
   /// <summary>Переход к сегменту «хлебных крошек» (в ФС — по пути, в архиве — по глубине узла).</summary>
@@ -694,10 +799,7 @@ public sealed class MainViewModel : ObservableObject
       return;
 
     if (IsFileSystemMode)
-    {
-      ShowFileSystem(crumb.FullPath); // null → к списку корней
-      return;
-    }
+      return; // в ФС-дереве крошек нет
 
     // Режим архива: спускаемся от корня к узлу нужной глубины по текущей цепочке предков.
     var chain = new List<Node>();
@@ -742,15 +844,17 @@ public sealed class MainViewModel : ObservableObject
 
     if (input.Length == 0)
     {
-      ShowFileSystem(null); // к корням
-      IsEditingPath = false;
+      IsEditingPath = false; // пусто → просто закрыть ввод (дерево уже от корней)
       return;
     }
 
     string? resolved = _fileSystemBrowser.ResolveDirectory(input);
     if (resolved is not null)
     {
-      ShowFileSystem(resolved);
+      // Раскрываем дерево до пути (адрес → показать папку), выделяем найденный узел.
+      TreeNodeItem? node = ExpandToPath(resolved);
+      if (node is not null)
+        SelectedTreeNode = node;
       IsEditingPath = false;
       return;
     }
@@ -2099,9 +2203,9 @@ public sealed class MainViewModel : ObservableObject
     _zipEntries = null;
     _zipArchivePath = null;
 
-    // Если доступен браузер ФС — возвращаемся к нему (на тот же каталог), а не к пустому состоянию.
+    // Если доступен браузер ФС — возвращаемся к дереву файловой системы, а не к пустому состоянию.
     if (_fileSystemBrowser is not null)
-      ShowFileSystem(_currentDirectory);
+      ShowFileSystemTree();
   }
 
   // Пересобирает список текущей папки и навигационное состояние.
@@ -2144,9 +2248,34 @@ public sealed class MainViewModel : ObservableObject
   /// <summary>Есть ли отмеченные элементы.</summary>
   public bool HasSelection => SelectedCount > 0;
 
-  /// <summary>Полные пути отмеченных элементов ФС (папки и файлы) — для действий над выбором.</summary>
-  public IReadOnlyList<string> SelectedPaths =>
-      [.. Items.Where(i => i.IsSelected && i.FullPath is not null).Select(i => i.FullPath!)];
+  /// <summary>Полные пути отмеченных узлов дерева ФС (папки и файлы) — для действий над выбором.
+  /// Отмеченная папка покрывает всё поддерево, поэтому в неё не спускаемся.</summary>
+  public IReadOnlyList<string> SelectedPaths
+  {
+    get
+    {
+      var result = new List<string>();
+      CollectSelectedPaths(FileSystemTree, result);
+      return result;
+    }
+  }
+
+  private static void CollectSelectedPaths(IEnumerable<TreeNodeItem> nodes, List<string> result)
+  {
+    foreach (TreeNodeItem node in nodes)
+    {
+      if (node.IsSelected)
+      {
+        if (node.FullPath is not null)
+          result.Add(node.FullPath);
+        // выбранная папка покрывает поддерево — глубже не идём
+      }
+      else
+      {
+        CollectSelectedPaths(node.Children, result);
+      }
+    }
+  }
 
   // Очищает список, отписываясь от уведомлений выбора (без утечек), и сбрасывает счётчик.
   private void ClearItems()
