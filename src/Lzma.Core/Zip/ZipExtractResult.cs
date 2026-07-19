@@ -13,4 +13,7 @@ public enum ZipExtractResult
 
   /// <summary>Ошибка ввода-вывода при записи на диск.</summary>
   IOError = 2,
+
+  /// <summary>Зашифрованный архив: неверный пароль либо пароль не задан.</summary>
+  WrongPassword = 3,
 }

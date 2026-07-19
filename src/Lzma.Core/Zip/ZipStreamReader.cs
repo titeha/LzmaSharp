@@ -94,11 +94,10 @@ public static class ZipStreamReader
       int commentLen = BinaryPrimitives.ReadUInt16LittleEndian(central.AsSpan(pos + 32, 2));
       uint localOffset32 = BinaryPrimitives.ReadUInt32LittleEndian(central.AsSpan(pos + 42, 4));
 
-      if ((flags & FlagEncrypted) != 0)
-        return ZipReadResult.NotSupported;
-
       if (pos + 46 + nameLen + extraLen > central.Length)
         return ZipReadResult.InvalidData;
+
+      ReadOnlySpan<byte> extra = central.AsSpan(pos + 46 + nameLen, extraLen);
 
       long compSize = compSize32;
       long uncompSize = uncompSize32;
@@ -110,7 +109,6 @@ public static class ZipStreamReader
 
       if (needUncomp || needComp || needOffset)
       {
-        ReadOnlySpan<byte> extra = central.AsSpan(pos + 46 + nameLen, extraLen);
         if (!TryApplyZip64Extra(extra, ref compSize, ref uncompSize, ref localOffset, needUncomp, needComp, needOffset))
           return ZipReadResult.InvalidData;
       }
@@ -118,10 +116,25 @@ public static class ZipStreamReader
       string name = DecodeName(central.AsSpan(pos + 46, nameLen), flags);
       bool isDirectory = name.EndsWith('/');
 
-      if (!isDirectory && method != MethodStore && method != MethodDeflate)
+      // WinZip-AES: метод 99 + extra 0x9901 → реальный метод и сила. Legacy ZipCrypto — не поддержан.
+      ushort effectiveMethod = method;
+      bool isEncrypted = false;
+      WinZipAes.Strength strength = default;
+      if (method == WinZipAes.EncryptionMethod)
+      {
+        if (!TryFindAesExtra(extra, out strength, out effectiveMethod))
+          return ZipReadResult.NotSupported;
+        isEncrypted = true;
+      }
+      else if ((flags & FlagEncrypted) != 0)
+      {
+        return ZipReadResult.NotSupported;
+      }
+
+      if (!isDirectory && effectiveMethod != MethodStore && effectiveMethod != MethodDeflate)
         return ZipReadResult.NotSupported;
 
-      list.Add(new ZipStreamEntry(name, method, crc, compSize, uncompSize, localOffset, isDirectory, flags));
+      list.Add(new ZipStreamEntry(name, effectiveMethod, crc, compSize, uncompSize, localOffset, isDirectory, flags, isEncrypted, strength));
 
       pos += 46 + nameLen + extraLen + commentLen;
     }
@@ -291,6 +304,31 @@ public static class ZipStreamReader
     }
 
     return false; // ожидали ZIP64 extra, но не нашли
+  }
+
+  // Ищет в extra-поле подполе WinZip-AES (0x9901) и разбирает силу шифрования + реальный метод сжатия.
+  private static bool TryFindAesExtra(ReadOnlySpan<byte> extra, out WinZipAes.Strength strength, out ushort actualMethod)
+  {
+    strength = default;
+    actualMethod = 0;
+
+    int p = 0;
+    while (p + 4 <= extra.Length)
+    {
+      ushort id = BinaryPrimitives.ReadUInt16LittleEndian(extra.Slice(p, 2));
+      int size = BinaryPrimitives.ReadUInt16LittleEndian(extra.Slice(p + 2, 2));
+      int dataStart = p + 4;
+
+      if (dataStart + size > extra.Length)
+        return false;
+
+      if (id == WinZipAes.ExtraFieldId)
+        return WinZipAesMember.TryParseExtraFieldData(extra.Slice(dataStart, size), out _, out strength, out actualMethod);
+
+      p = dataStart + size;
+    }
+
+    return false;
   }
 
   private static string DecodeName(ReadOnlySpan<byte> raw, ushort flags)

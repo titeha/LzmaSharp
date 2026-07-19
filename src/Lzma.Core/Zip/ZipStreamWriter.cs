@@ -32,8 +32,11 @@ public static class ZipStreamWriter
   private const ushort MethodDeflate = 8;
 
   private const ushort FlagUtf8 = 1 << 11;
+  private const ushort FlagEncrypted = 1 << 0;
   private const ushort VersionBase = 20;   // 2.0
   private const ushort VersionZip64 = 45;  // 4.5
+  private const ushort VersionAes = 51;    // 5.1 (WinZip-AES)
+  private const ushort AesExtraTotalSize = 4 + 7; // id/size + данные extra 0x9901
   private const ushort DosDate1980 = 0x0021;
 
   private const uint DosAttrDirectory = 0x10;
@@ -53,10 +56,13 @@ public static class ZipStreamWriter
       IProgress<SevenZipProgress>? progress = null,
       CancellationToken token = default,
       IProgress<string>? currentFile = null,
-      int maxDegreeOfParallelism = 0)
+      int maxDegreeOfParallelism = 0,
+      byte[]? password = null)
   {
     if (entries is null || output is null || !output.CanWrite || !output.CanSeek)
       return ZipWriteResult.InvalidData;
+
+    bool encrypt = password is not null; // WinZip-AES (AES-256) для всех непустых членов
 
     foreach (ZipStreamingEntry e in entries)
     {
@@ -86,10 +92,10 @@ public static class ZipStreamWriter
     {
       token.ThrowIfCancellationRequested();
 
-      // Директория — без данных, пишем сразу (сохраняя порядок).
+      // Директория — без данных, пишем сразу (сохраняя порядок). Директории не шифруются.
       if (entries[i].IsDirectory)
       {
-        WriteEntryRecord(output, central, entries[i].Name, isDir: true, MethodStore, crc: 0, data: [], uncompSize: 0);
+        WriteEntryRecord(output, central, entries[i].Name, isDir: true, MethodStore, crc: 0, data: [], uncompSize: 0, encrypt: false);
         i++;
         continue;
       }
@@ -119,9 +125,15 @@ public static class ZipStreamWriter
           uint crc = Crc32.Compute(content);
 
           byte[] deflated = content.Length == 0 ? [] : DeflateEncoder.Encode(content);
-          results[k] = deflated.Length != 0 && deflated.Length < content.Length
-              ? new FileResult(MethodDeflate, crc, deflated)
-              : new FileResult(MethodStore, crc, content);
+          (ushort method, byte[] data) = deflated.Length != 0 && deflated.Length < content.Length
+              ? (MethodDeflate, deflated)
+              : (MethodStore, content);
+
+          // Шифруем СЖАТЫЕ данные (Store/Deflate → CTR); реальный метод уйдёт в extra 0x9901.
+          if (encrypt)
+            data = WinZipAesMember.Encrypt(data, password!, WinZipAes.Strength.Aes256);
+
+          results[k] = new FileResult(method, crc, data);
         });
       }
       catch (AggregateException ex)
@@ -139,7 +151,7 @@ public static class ZipStreamWriter
         ZipStreamingEntry e = entries[waveStart + k];
         currentFile?.Report(e.Name.Replace('\\', '/'));
 
-        WriteEntryRecord(output, central, e.Name, isDir: false, results[k].Method, results[k].Crc, results[k].Data, e.Length);
+        WriteEntryRecord(output, central, e.Name, isDir: false, results[k].Method, results[k].Crc, results[k].Data, e.Length, encrypt);
 
         processed += e.Length;
         progress?.Report(new SevenZipProgress(processed, total));
@@ -159,8 +171,9 @@ public static class ZipStreamWriter
   }
 
   // Пишет local header + данные одного элемента и добавляет запись в центральный каталог.
-  // uncompSize — исходный размер (для Deflate не равен длине сжатых данных).
-  private static void WriteEntryRecord(Stream output, List<CentralRecord> central, string rawName, bool isDir, ushort method, uint crc, byte[] data, long uncompSize)
+  // uncompSize — исходный размер (для Deflate не равен длине сжатых данных). method — РЕАЛЬНЫЙ метод
+  // (Store/Deflate); при encrypt заголовок несёт метод 99, а реальный уходит в extra 0x9901.
+  private static void WriteEntryRecord(Stream output, List<CentralRecord> central, string rawName, bool isDir, ushort method, uint crc, byte[] data, long uncompSize, bool encrypt)
   {
     string name = rawName.Replace('\\', '/');
     if (isDir && !name.EndsWith('/'))
@@ -171,10 +184,10 @@ public static class ZipStreamWriter
     long compSize = data.Length;
     bool zip64Offset = localOffset >= Zip64Sentinel32;
 
-    WriteLocalHeader(output, nameBytes, method, crc, compSize, uncompSize);
+    WriteLocalHeader(output, nameBytes, method, crc, compSize, uncompSize, encrypt);
     output.Write(data, 0, data.Length);
 
-    central.Add(new CentralRecord(nameBytes, method, crc, compSize, uncompSize, localOffset, isDir, zip64Offset));
+    central.Add(new CentralRecord(nameBytes, method, crc, compSize, uncompSize, localOffset, isDir, zip64Offset, encrypt));
   }
 
   private readonly record struct FileResult(ushort Method, uint Crc, byte[] Data);
@@ -188,34 +201,44 @@ public static class ZipStreamWriter
     return content;
   }
 
-  private static void WriteLocalHeader(Stream output, byte[] nameBytes, ushort method, uint crc, long compSize, long uncompSize)
+  private static void WriteLocalHeader(Stream output, byte[] nameBytes, ushort method, uint crc, long compSize, long uncompSize, bool encrypt)
   {
+    ushort flags = encrypt ? (ushort)(FlagUtf8 | FlagEncrypted) : FlagUtf8;
+    ushort headerMethod = encrypt ? WinZipAes.EncryptionMethod : method;
+    ushort version = encrypt ? VersionAes : VersionBase;
+    ushort extraLen = encrypt ? AesExtraTotalSize : (ushort)0;
+
     WriteU32(output, LocalFileSignature);
-    WriteU16(output, VersionBase);
-    WriteU16(output, FlagUtf8);
-    WriteU16(output, method);
+    WriteU16(output, version);
+    WriteU16(output, flags);
+    WriteU16(output, headerMethod);
     WriteU16(output, 0);              // mod time
     WriteU16(output, DosDate1980);    // mod date
     WriteU32(output, crc);
     WriteU32(output, (uint)compSize);
     WriteU32(output, (uint)uncompSize);
     WriteU16(output, (ushort)nameBytes.Length);
-    WriteU16(output, 0);              // extra length (размеры ≤ 2 ГиБ → ZIP64 в локальном не нужен)
+    WriteU16(output, extraLen);       // размеры ≤ 2 ГиБ → ZIP64 в локальном не нужен; AES — extra 0x9901
     output.Write(nameBytes, 0, nameBytes.Length);
+
+    if (encrypt)
+      WriteAesExtra(output, method); // method = реальный (Store/Deflate)
   }
 
   private static void WriteCentralHeader(Stream output, CentralRecord r)
   {
-    // ZIP64 extra в центральном заголовке — только для большого смещения (размеры ≤ 2 ГиБ).
-    ushort extraLen = r.Zip64Offset ? (ushort)(4 + 8) : (ushort)0;
-    ushort versionNeeded = r.Zip64Offset ? VersionZip64 : VersionBase;
+    // Extra: ZIP64 (большое смещение) и/или WinZip-AES (шифрование).
+    ushort extraLen = (ushort)((r.Zip64Offset ? 4 + 8 : 0) + (r.Encrypted ? AesExtraTotalSize : 0));
+    ushort version = r.Encrypted ? VersionAes : (r.Zip64Offset ? VersionZip64 : VersionBase);
+    ushort flags = r.Encrypted ? (ushort)(FlagUtf8 | FlagEncrypted) : FlagUtf8;
+    ushort headerMethod = r.Encrypted ? WinZipAes.EncryptionMethod : r.Method;
     uint offset32 = r.Zip64Offset ? Zip64Sentinel32 : (uint)r.LocalOffset;
 
     WriteU32(output, CentralFileSignature);
-    WriteU16(output, versionNeeded);   // version made by
-    WriteU16(output, versionNeeded);   // version needed
-    WriteU16(output, FlagUtf8);
-    WriteU16(output, r.Method);
+    WriteU16(output, version);          // version made by
+    WriteU16(output, version);          // version needed
+    WriteU16(output, flags);
+    WriteU16(output, headerMethod);
     WriteU16(output, 0);               // mod time
     WriteU16(output, DosDate1980);     // mod date
     WriteU32(output, r.Crc);
@@ -236,6 +259,18 @@ public static class ZipStreamWriter
       WriteU16(output, 8);             // размер данных extra (только смещение)
       WriteU64(output, (ulong)r.LocalOffset);
     }
+
+    if (r.Encrypted)
+      WriteAesExtra(output, r.Method); // method = реальный (Store/Deflate)
+  }
+
+  // Пишет extra-поле WinZip-AES 0x9901: [id][size=7][version|"AE"|strength|actualMethod].
+  private static void WriteAesExtra(Stream output, ushort actualMethod)
+  {
+    WriteU16(output, WinZipAes.ExtraFieldId);
+    WriteU16(output, 7);
+    byte[] data = WinZipAesMember.BuildExtraFieldData(WinZipAesMember.VersionAe1, WinZipAes.Strength.Aes256, actualMethod);
+    output.Write(data, 0, data.Length);
   }
 
   private static void WriteEndRecords(Stream output, int count, long centralStart, long centralSize)
@@ -281,7 +316,8 @@ public static class ZipStreamWriter
       long UncompSize,
       long LocalOffset,
       bool IsDirectory,
-      bool Zip64Offset);
+      bool Zip64Offset,
+      bool Encrypted);
 
   private static void WriteU16(Stream output, ushort value)
   {

@@ -37,7 +37,8 @@ public static class ZipStreamExtractor
       bool overwrite = false,
       IProgress<string>? currentFile = null,
       CancellationToken token = default,
-      IProgress<SevenZipProgress>? progress = null)
+      IProgress<SevenZipProgress>? progress = null,
+      byte[]? password = null)
   {
     if (archive is null || !archive.CanSeek || !archive.CanRead || entries is null)
       return ZipExtractResult.InvalidData;
@@ -55,17 +56,18 @@ public static class ZipStreamExtractor
         entries.Count,
         i => entries[i].Name,
         i => entries[i].IsDirectory,
-        (i, fullPath) => WriteEntry(archive, entries[i], fullPath, token, progress, total, processed),
+        (i, fullPath) => WriteEntry(archive, entries[i], fullPath, token, progress, total, processed, password),
         destinationDirectory,
         overwrite,
         currentFile,
         token);
   }
 
-  // Пишет данные одного члена на диск: seek к данным по локальному заголовку → Store-копия/Deflate-декод.
+  // Пишет данные одного члена на диск: seek к данным по локальному заголовку → Store-копия/Deflate-декод
+  // (или расшифровка WinZip-AES → декомпрессия для зашифрованных членов).
   private static ZipExtractResult WriteEntry(
       Stream archive, ZipStreamEntry entry, string fullPath, CancellationToken token,
-      IProgress<SevenZipProgress>? progress, long total, long[] processed)
+      IProgress<SevenZipProgress>? progress, long total, long[] processed, byte[]? password)
   {
     // Длины имени/extra берём из ЛОКАЛЬНОГО заголовка (могут отличаться от центрального).
     archive.Position = entry.LocalHeaderOffset;
@@ -94,6 +96,9 @@ public static class ZipStreamExtractor
 
     using var file = new FileStream(fullPath, FileMode.Create, FileAccess.Write);
 
+    if (entry.IsEncrypted)
+      return WriteEncryptedEntry(archive, entry, file, password, progress, total, processed);
+
     if (entry.Method == MethodStore)
     {
       if (entry.CompressedSize != entry.UncompressedSize)
@@ -106,6 +111,58 @@ public static class ZipStreamExtractor
       return InflateToFile(archive, entry, file, progress, total, processed);
 
     return ZipExtractResult.InvalidData; // прочие методы отсеяны на чтении каталога
+  }
+
+  // Зашифрованный член (WinZip-AES): читаем весь член в память (≤2 ГиБ), расшифровываем (проверка
+  // пароля + HMAC), затем декомпрессируем по реальному методу (Store/Deflate) и сверяем CRC (AE-1).
+  private static ZipExtractResult WriteEncryptedEntry(
+      Stream archive, ZipStreamEntry entry, Stream file, byte[]? password,
+      IProgress<SevenZipProgress>? progress, long total, long[] processed)
+  {
+    if (password is null)
+      return ZipExtractResult.WrongPassword; // зашифровано, а пароль не задан
+
+    if (entry.CompressedSize > int.MaxValue)
+      return ZipExtractResult.InvalidData; // зашифрованный член > 2 ГиБ пока не поддержан
+
+    byte[] member = new byte[entry.CompressedSize];
+    try
+    {
+      archive.ReadExactly(member, 0, (int)entry.CompressedSize);
+    }
+    catch (EndOfStreamException)
+    {
+      return ZipExtractResult.InvalidData;
+    }
+
+    WinZipAesDecryptResult dr = WinZipAesMember.TryDecrypt(member, password, entry.AesStrength, out byte[] compressed);
+    if (dr == WinZipAesDecryptResult.WrongPassword)
+      return ZipExtractResult.WrongPassword;
+    if (dr != WinZipAesDecryptResult.Ok)
+      return ZipExtractResult.InvalidData; // повреждён (HMAC) / некорректная структура
+
+    if (entry.Method == MethodStore)
+    {
+      if (Crc32.Compute(compressed) != entry.Crc)
+        return ZipExtractResult.InvalidData;
+
+      file.Write(compressed, 0, compressed.Length);
+      processed[0] += compressed.Length;
+      progress?.Report(new SevenZipProgress(processed[0], total));
+      return ZipExtractResult.Ok;
+    }
+
+    if (entry.Method == MethodDeflate)
+    {
+      var crcStream = new Crc32WriteStream(file, progress, total, processed);
+      DeflateDecodeResult result = DeflateDecoder.Decode(compressed, crcStream, deflate64: false, out long written);
+      if (result != DeflateDecodeResult.Ok || written != entry.UncompressedSize)
+        return ZipExtractResult.InvalidData;
+
+      return crcStream.CurrentCrc == entry.Crc ? ZipExtractResult.Ok : ZipExtractResult.InvalidData;
+    }
+
+    return ZipExtractResult.InvalidData;
   }
 
   // Store: копирует CompressedSize байт архив→файл чанками, считая CRC и репортя прогресс.
