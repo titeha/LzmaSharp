@@ -378,6 +378,41 @@ public sealed class MainViewModelStreamingCreateTests
   }
 
   [Fact]
+  public async Task ПотоковоеСоздание_Ppmd_ИдётПотоковымПутём_БезЧтенияВПамять()
+  {
+    // PPMd тоже идёт ПОТОКОВЫМ путём (ref-пикер), а не байтовым (PickFilesAsync бросил бы). Это чинит
+    // «на больших файлах PPMd читал в память». Round-trip нашим декодером.
+    byte[] text = Encoding.UTF8.GetBytes(string.Concat(System.Linq.Enumerable.Repeat("PPMd поток документ 0123 ", 400)));
+    string dir = Path.Combine(Path.GetTempPath(), "LzmaUiPpmdCreate", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(dir);
+    string outPath = Path.Combine(dir, "out.7z");
+
+    try
+    {
+      var refs = new List<PickedFileRef> { new("doc.txt", text.LongLength, () => new MemoryStream(text)) };
+
+      var vm = new MainViewModel(
+          new StubArchivePicker(), new NullPasswordPrompt(), new StubFolderPicker(),
+          new LzmaArchiveService(), new RefsSourceFilesPicker(refs), new StubSaveFilePicker(outPath))
+      {
+        SelectedCompressionMethod = SevenZipWriterCompressionMethod.Ppmd,
+      };
+
+      await vm.CreateCommand.ExecuteAsync(); // не должно бросить (PickFilesAsync не вызывается)
+
+      Assert.True(File.Exists(outPath));
+      byte[] archive = File.ReadAllBytes(outPath);
+      Assert.Equal(SevenZipArchiveDecodeResult.Ok,
+          SevenZipArchiveDecoder.DecodeToEntries(archive, out SevenZipDecodedEntry[] entries));
+      Assert.Equal(text, Assert.Single(entries).Bytes);
+    }
+    finally
+    {
+      try { Directory.Delete(dir, recursive: true); } catch { }
+    }
+  }
+
+  [Fact]
   public async Task Copy_ТожеИдётПотоковымПутём_БезЧтенияВПамять()
   {
     // Теперь ПОТОКОВЫЙ путь используется для ВСЕХ методов (не только LZMA2): для Copy тоже берётся
