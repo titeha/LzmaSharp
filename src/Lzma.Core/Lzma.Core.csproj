@@ -34,6 +34,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="$(MSBuildProjectName).Tests" />
+    <InternalsVisibleTo Include="$(MSBuildProjectName).Benchmarks" />
     <None Include="README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
 
