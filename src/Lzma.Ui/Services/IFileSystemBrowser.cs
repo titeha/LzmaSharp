@@ -30,6 +30,13 @@ public interface IFileSystemBrowser
   /// <summary>Корни файловой системы (диски / «Этот компьютер»).</summary>
   IReadOnlyList<FileSystemEntry> ListRoots();
 
+  /// <summary>
+  /// Специальные («быстрый доступ») папки платформы для верха дерева: Рабочий стол, Загрузки,
+  /// Документы, Изображения, Музыка, Видео (Windows/Linux/macOS — свои; Android — свои). Возвращает
+  /// только существующие. По умолчанию — пусто (шов подключается только в боевой службе).
+  /// </summary>
+  IReadOnlyList<FileSystemEntry> ListSpecialFolders() => [];
+
   /// <summary>Содержимое каталога (папки и файлы); недоступные элементы пропускаются.</summary>
   IReadOnlyList<FileSystemEntry> ListDirectory(string fullPath);
 

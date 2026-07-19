@@ -100,6 +100,29 @@ public sealed class MainViewModelBrowseTests
     Assert.Empty(vm.Items); // в ФС плоский список не используется
   }
 
+  // Браузер со специальными папками (быстрый доступ) + один диск.
+  private sealed class SpecialFoldersBrowser : IFileSystemBrowser
+  {
+    public IReadOnlyList<FileSystemEntry> ListRoots() => [new("C:\\", "C:\\", IsDirectory: true, Size: 0)];
+    public IReadOnlyList<FileSystemEntry> ListSpecialFolders() =>
+        [new("Загрузки", "D:\\dl", IsDirectory: true, Size: 0), new("Документы", "D:\\doc", IsDirectory: true, Size: 0)];
+    public IReadOnlyList<FileSystemEntry> ListDirectory(string fullPath) => [];
+    public string? GetParent(string fullPath) => null;
+    public System.IO.Stream OpenRead(string fullPath) => throw new System.NotSupportedException();
+    public IReadOnlyList<ArchiveSourceFile> EnumerateForArchive(IReadOnlyList<string> paths) => [];
+  }
+
+  [Fact]
+  public void Дерево_СпециальныеПапки_ПередДисками()
+  {
+    MainViewModel vm = new(new StubArchivePicker(), new CancellingPasswordPrompt(), new CancellingFolderPicker(),
+        new LzmaArchiveService(), sourceFilesPicker: null, saveFilePicker: null,
+        sourceFolderPicker: null, createPasswordPrompt: null, fileSystemBrowser: new SpecialFoldersBrowser());
+
+    Assert.Equal(["Загрузки", "Документы", "C:\\"], vm.FileSystemTree.Select(n => n.Name));
+    Assert.True(vm.FileSystemTree[0].IsDirectory);
+  }
+
   [Fact]
   public void БезБраузера_РежимФСВыключен_ПустоеСостояние()
   {

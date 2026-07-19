@@ -685,6 +685,10 @@ public sealed class MainViewModel : ObservableObject
     FileSystemTree.Clear();
     ClearItems(); // в ФС Items не используем
 
+    // Сначала специальные папки платформы (Загрузки/Документы/…), затем диски.
+    foreach (FileSystemEntry special in _fileSystemBrowser.ListSpecialFolders())
+      FileSystemTree.Add(MakeFsNode(special));
+
     foreach (FileSystemEntry root in _fileSystemBrowser.ListRoots()
                  .OrderByDescending(e => e.IsDirectory)
                  .ThenBy(e => e.Name, StringComparer.OrdinalIgnoreCase))

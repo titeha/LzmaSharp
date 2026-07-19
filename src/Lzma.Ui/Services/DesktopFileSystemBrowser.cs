@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 
@@ -39,6 +40,31 @@ public sealed class DesktopFileSystemBrowser : IFileSystemBrowser
     }
 
     return roots;
+  }
+
+  /// <inheritdoc />
+  public IReadOnlyList<FileSystemEntry> ListSpecialFolders()
+  {
+    var list = new List<FileSystemEntry>();
+
+    void TryAdd(string display, string? path)
+    {
+      if (!string.IsNullOrEmpty(path) && Directory.Exists(path))
+        list.Add(new FileSystemEntry(display, path, IsDirectory: true, Size: 0));
+    }
+
+    // Environment.GetFolderPath кросс-платформенна: Windows — известные папки, Linux/macOS — XDG/HOME
+    // (несуществующие отсекаются проверкой). Загрузки в SpecialFolder нет — собираем из профиля.
+    TryAdd("Рабочий стол", Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory));
+    string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+    if (!string.IsNullOrEmpty(profile))
+      TryAdd("Загрузки", Path.Combine(profile, "Downloads"));
+    TryAdd("Документы", Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments));
+    TryAdd("Изображения", Environment.GetFolderPath(Environment.SpecialFolder.MyPictures));
+    TryAdd("Музыка", Environment.GetFolderPath(Environment.SpecialFolder.MyMusic));
+    TryAdd("Видео", Environment.GetFolderPath(Environment.SpecialFolder.MyVideos));
+
+    return list;
   }
 
   /// <inheritdoc />
