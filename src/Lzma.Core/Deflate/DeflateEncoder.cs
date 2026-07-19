@@ -91,6 +91,209 @@ public static class DeflateEncoder
     return dynamicWins ? WriteDynamic(plan, tokens, input.Length) : EncodeFixed(tokens, input.Length);
   }
 
+  // ============================================================
+  // Потоковое кодирование (для членов >2 ГиБ — вход/выход не держим в памяти целиком)
+  // ============================================================
+
+  /// <summary>Размер блока потокового кодирования. Каждый кусок → отдельный DEFLATE-блок.</summary>
+  private const int StreamBlockSize = 1 << 20; // 1 МиБ
+
+  /// <summary>
+  /// Кодирует <paramref name="inputLength"/> байт из <paramref name="input"/> в raw DEFLATE-поток
+  /// <paramref name="output"/>, читая вход кусками по <see cref="StreamBlockSize"/> и кодируя каждый
+  /// отдельным блоком (BFINAL=1 только на последнем). Ни вход, ни выход целиком в памяти не держатся,
+  /// поэтому размер члена не ограничен. Совпадения ищутся в пределах куска — на границах блоков
+  /// теряется пренебрежимо мало (≪1 матч на 1 МиБ). Выход валиден для любого DEFLATE-декодера.
+  /// </summary>
+  public static void Encode(Stream input, long inputLength, Stream output)
+  {
+    ArgumentNullException.ThrowIfNull(input);
+    ArgumentNullException.ThrowIfNull(output);
+    ArgumentOutOfRangeException.ThrowIfNegative(inputLength);
+
+    var writer = new StreamBitWriter(output);
+
+    if (inputLength == 0)
+    {
+      // Один пустой финальный stored-блок.
+      WriteStoredBlockInto(writer, ReadOnlySpan<byte>.Empty, isFinal: true);
+      writer.Flush();
+      return;
+    }
+
+    byte[] buffer = new byte[(int)Math.Min(StreamBlockSize, inputLength)];
+    long remaining = inputLength;
+
+    while (remaining > 0)
+    {
+      int want = (int)Math.Min(buffer.Length, remaining);
+      int filled = 0;
+      while (filled < want)
+      {
+        int read = input.Read(buffer, filled, want - filled);
+        if (read <= 0)
+          throw new EndOfStreamException("Вход короче заявленной длины при потоковом кодировании DEFLATE.");
+        filled += read;
+      }
+
+      remaining -= filled;
+      WriteBlockInto(writer, buffer.AsSpan(0, filled), isFinal: remaining == 0);
+    }
+
+    writer.Flush();
+  }
+
+  /// <summary>
+  /// Кодирует один кусок как отдельный DEFLATE-блок: выбирает fixed/dynamic/stored (те же приоритеты,
+  /// что и одноразовый путь) и пишет его в общий потоковый писатель с заданным BFINAL.
+  /// </summary>
+  private static void WriteBlockInto(StreamBitWriter writer, ReadOnlySpan<byte> input, bool isFinal)
+  {
+    List<Token> tokens = Lz77(input);
+
+    int[] litLenFreq = new int[286];
+    int[] distFreq = new int[30];
+    litLenFreq[256] = 1; // EOB
+    long extraBits = CountFrequencies(tokens, litLenFreq, distFreq);
+
+    long fixedBits = 3 + extraBits
+        + WeightedLen(litLenFreq, FixedLitLen)
+        + WeightedLen(distFreq, FixedDist);
+
+    DynamicPlan plan = BuildDynamicPlan(litLenFreq, distFreq, extraBits);
+    long dynamicBits = plan.Bits;
+    long storedBits = ComputeStoredSize(input.Length) * 8L;
+
+    bool dynamicWins = dynamicBits < fixedBits;
+    long bestBits = dynamicWins ? dynamicBits : fixedBits;
+
+    if (storedBits < bestBits)
+    {
+      WriteStoredBlockInto(writer, input, isFinal);
+      return;
+    }
+
+    uint bfinal = isFinal ? 1u : 0u;
+    if (dynamicWins)
+    {
+      writer.WriteBits(bfinal, 1);
+      writer.WriteBits(2, 2); // BTYPE = 10 (dynamic)
+      EmitDynamicHeaderAndTokens(writer, plan, tokens);
+    }
+    else
+    {
+      writer.WriteBits(bfinal, 1);
+      writer.WriteBits(1, 2); // BTYPE = 01 (fixed)
+      EmitFixedTokens(writer, tokens);
+    }
+  }
+
+  /// <summary>
+  /// Пишет данные <paramref name="input"/> stored-блоками (каждый ≤65535 байт) в потоковый писатель.
+  /// BFINAL=1 ставится только на последнем подблоке, и только если <paramref name="isFinal"/>.
+  /// </summary>
+  private static void WriteStoredBlockInto(StreamBitWriter writer, ReadOnlySpan<byte> input, bool isFinal)
+  {
+    int n = input.Length;
+    int blocks = n == 0 ? 1 : (n + 65534) / 65535;
+    int offset = 0;
+
+    for (int b = 0; b < blocks; b++)
+    {
+      int len = n == 0 ? 0 : Math.Min(65535, n - offset);
+      bool lastSub = b == blocks - 1;
+
+      writer.WriteBits(isFinal && lastSub ? 1u : 0u, 1); // BFINAL
+      writer.WriteBits(0, 2);                            // BTYPE = 00 (stored)
+      writer.AlignToByte();                              // stored выровнен по байту
+
+      writer.WriteRawByte((byte)len);
+      writer.WriteRawByte((byte)(len >> 8));
+      writer.WriteRawByte((byte)~len);
+      writer.WriteRawByte((byte)(~len >> 8));
+      writer.WriteRaw(input.Slice(offset, len));
+
+      offset += len;
+    }
+  }
+
+  /// <summary>
+  /// Потоковый bit-writer LSB-first: копит биты, сбрасывает готовые байты в выходной поток через
+  /// внутренний буфер. Частичный байт переносится между блоками; финальный сброс дописывает хвост.
+  /// </summary>
+  private sealed class StreamBitWriter(Stream output) : IBitSink
+  {
+    private readonly byte[] _buffer = new byte[1 << 16];
+    private int _bufPos;
+    private int _bitBuffer;
+    private int _bitCount;
+
+    public void WriteBits(uint value, int count)
+    {
+      _bitBuffer |= (int)((value & ((1u << count) - 1)) << _bitCount);
+      _bitCount += count;
+      while (_bitCount >= 8)
+      {
+        EmitByte((byte)_bitBuffer);
+        _bitBuffer >>= 8;
+        _bitCount -= 8;
+      }
+    }
+
+    /// <summary>Дописывает нулевые биты до границы байта (для stored-блоков).</summary>
+    public void AlignToByte()
+    {
+      if (_bitCount > 0)
+      {
+        EmitByte((byte)_bitBuffer);
+        _bitBuffer = 0;
+        _bitCount = 0;
+      }
+    }
+
+    /// <summary>Пишет байт напрямую. Допустимо только на границе байта (после AlignToByte).</summary>
+    public void WriteRawByte(byte value) => EmitByte(value);
+
+    /// <summary>Пишет блок байт напрямую. Допустимо только на границе байта (после AlignToByte).</summary>
+    public void WriteRaw(ReadOnlySpan<byte> data)
+    {
+      int pos = 0;
+      while (pos < data.Length)
+      {
+        if (_bufPos == _buffer.Length)
+        {
+          output.Write(_buffer, 0, _bufPos);
+          _bufPos = 0;
+        }
+
+        int take = Math.Min(_buffer.Length - _bufPos, data.Length - pos);
+        data.Slice(pos, take).CopyTo(_buffer.AsSpan(_bufPos));
+        _bufPos += take;
+        pos += take;
+      }
+    }
+
+    public void Flush()
+    {
+      AlignToByte();
+      if (_bufPos > 0)
+      {
+        output.Write(_buffer, 0, _bufPos);
+        _bufPos = 0;
+      }
+    }
+
+    private void EmitByte(byte value)
+    {
+      _buffer[_bufPos++] = value;
+      if (_bufPos == _buffer.Length)
+      {
+        output.Write(_buffer, 0, _bufPos);
+        _bufPos = 0;
+      }
+    }
+  }
+
   /// <summary>
   /// Считает частоты символов lit/len и dist по токенам, возвращает суммарное число
   /// доп. бит (длины + дистанции). <paramref name="litLenFreq"/> должен прийти с EOB=1.
@@ -258,10 +461,16 @@ public static class DeflateEncoder
   private static byte[] EncodeFixed(List<Token> tokens, int inputLength)
   {
     var writer = new BitWriter(inputLength / 2 + 16);
-
     writer.WriteBits(1, 1); // BFINAL = 1
     writer.WriteBits(1, 2); // BTYPE = 01 (fixed Huffman)
+    EmitFixedTokens(writer, tokens);
+    writer.Flush();
+    return writer.ToArray();
+  }
 
+  /// <summary>Пишет токены фиксированными кодами Хаффмана + EOB (без заголовка блока).</summary>
+  private static void EmitFixedTokens(IBitSink writer, List<Token> tokens)
+  {
     foreach (Token t in tokens)
     {
       if (t.Dist == 0)
@@ -282,15 +491,13 @@ public static class DeflateEncoder
     }
 
     WriteHuffman(writer, FixedLitLen[256]); // EOB
-    writer.Flush();
-    return writer.ToArray();
   }
 
   /// <summary>
   /// Пишет код Хаффмана: канонический код хранится MSB-first, в поток DEFLATE он идёт
   /// «старший бит первым», поэтому при LSB-first записи его биты разворачиваются.
   /// </summary>
-  private static void WriteHuffman(BitWriter writer, (int Code, int Len) c)
+  private static void WriteHuffman(IBitSink writer, (int Code, int Len) c)
       => writer.WriteBits((uint)ReverseBits(c.Code, c.Len), c.Len);
 
   // ============================================================
@@ -387,7 +594,17 @@ public static class DeflateEncoder
     var writer = new BitWriter(inputLength / 2 + 32);
     writer.WriteBits(1, 1); // BFINAL = 1
     writer.WriteBits(2, 2); // BTYPE = 10 (dynamic Huffman)
+    EmitDynamicHeaderAndTokens(writer, plan, tokens);
+    writer.Flush();
+    return writer.ToArray();
+  }
 
+  /// <summary>
+  /// Пишет тело динамического блока (таблицы code-length, длины кодов, токены, EOB) без
+  /// стартового BFINAL/BTYPE — их пишет вызывающий.
+  /// </summary>
+  private static void EmitDynamicHeaderAndTokens(IBitSink writer, DynamicPlan plan, List<Token> tokens)
+  {
     writer.WriteBits((uint)(plan.Hlit - 257), 5);
     writer.WriteBits((uint)(plan.Hdist - 1), 5);
     writer.WriteBits((uint)(plan.Hclen - 4), 4);
@@ -422,8 +639,6 @@ public static class DeflateEncoder
     }
 
     WriteHuffman(writer, plan.LitLenCodes[256]); // EOB
-    writer.Flush();
-    return writer.ToArray();
   }
 
   /// <summary>
@@ -657,7 +872,13 @@ public static class DeflateEncoder
   // Bit writer (LSB-first), как зеркало декодера
   // ============================================================
 
-  private sealed class BitWriter
+  /// <summary>Приёмник бит LSB-first — общий контракт in-memory и потокового писателей.</summary>
+  private interface IBitSink
+  {
+    void WriteBits(uint value, int count);
+  }
+
+  private sealed class BitWriter : IBitSink
   {
     private readonly List<byte> _bytes;
     private int _bitBuffer;
