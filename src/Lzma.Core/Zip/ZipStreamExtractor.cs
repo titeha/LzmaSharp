@@ -141,9 +141,11 @@ public static class ZipStreamExtractor
     if (dr != WinZipAesDecryptResult.Ok)
       return ZipExtractResult.InvalidData; // повреждён (HMAC) / некорректная структура
 
+    // CRC несжатых данных для шифрованных членов НЕ сверяем: целостность гарантирует HMAC (проверен в
+    // TryDecrypt), а AE-2 (пишет 7-Zip) вообще хранит CRC=0 в заголовке.
     if (entry.Method == MethodStore)
     {
-      if (Crc32.Compute(compressed) != entry.Crc)
+      if (compressed.Length != entry.UncompressedSize)
         return ZipExtractResult.InvalidData;
 
       file.Write(compressed, 0, compressed.Length);
@@ -154,12 +156,13 @@ public static class ZipStreamExtractor
 
     if (entry.Method == MethodDeflate)
     {
-      var crcStream = new Crc32WriteStream(file, progress, total, processed);
-      DeflateDecodeResult result = DeflateDecoder.Decode(compressed, crcStream, deflate64: false, out long written);
+      DeflateDecodeResult result = DeflateDecoder.Decode(compressed, file, deflate64: false, out long written);
       if (result != DeflateDecodeResult.Ok || written != entry.UncompressedSize)
         return ZipExtractResult.InvalidData;
 
-      return crcStream.CurrentCrc == entry.Crc ? ZipExtractResult.Ok : ZipExtractResult.InvalidData;
+      processed[0] += written;
+      progress?.Report(new SevenZipProgress(processed[0], total));
+      return ZipExtractResult.Ok;
     }
 
     return ZipExtractResult.InvalidData;
