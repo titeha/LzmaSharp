@@ -135,39 +135,55 @@
                        Foreground="{DynamicResource AppInkSecondary}" Margin="24"
                        IsVisible="{Binding !HasContent}" />
 
-            <!-- Таблица содержимого (архив или файловая система) -->
-            <Grid IsVisible="{Binding HasContent}" RowDefinitions="Auto,*">
+            <!-- Таблица содержимого (архив или файловая система) — «карточка»: рамка+фон+скругление
+                 отделяют браузер от тулбара/фона окна. -->
+            <Border IsVisible="{Binding HasContent}" Margin="12"
+                    CornerRadius="8" ClipToBounds="True"
+                    Background="{DynamicResource AppSurface}"
+                    BorderBrush="{DynamicResource AppCopper}" BorderThickness="1">
+                <Grid RowDefinitions="Auto,*">
 
-                <!-- Заголовок таблицы -->
-                <Border Grid.Row="0" Padding="14,6" BorderThickness="0,0,0,1"
-                        BorderBrush="{DynamicResource AppHairline}"
-                        Background="{DynamicResource AppSurfaceRaised}">
-                    <Grid ColumnDefinitions="28,24,*,120,90">
-                        <TextBlock Grid.Column="2" Text="Имя" FontWeight="SemiBold" />
-                        <TextBlock Grid.Column="3" Text="Размер" FontWeight="SemiBold" />
-                        <TextBlock Grid.Column="4" Text="Тип" FontWeight="SemiBold" />
-                    </Grid>
-                </Border>
+                    <!-- Заголовок таблицы -->
+                    <Border Grid.Row="0" Padding="14,7" BorderThickness="0,0,0,1"
+                            BorderBrush="{DynamicResource AppHairline}"
+                            Background="{DynamicResource AppSurfaceRaised}">
+                        <Grid ColumnDefinitions="28,24,*,120,90">
+                            <TextBlock Grid.Column="2" Text="Имя" FontWeight="SemiBold" FontSize="12"
+                                       Foreground="{DynamicResource AppInkSecondary}" />
+                            <TextBlock Grid.Column="3" Text="Размер" FontWeight="SemiBold" FontSize="12"
+                                       Foreground="{DynamicResource AppInkSecondary}" />
+                            <TextBlock Grid.Column="4" Text="Тип" FontWeight="SemiBold" FontSize="12"
+                                       Foreground="{DynamicResource AppInkSecondary}" />
+                        </Grid>
+                    </Border>
 
-                <ListBox Grid.Row="1" ItemsSource="{Binding Items}"
-                         SelectionMode="Single"
-                         DoubleTapped="OnItemDoubleTapped">
-                    <ListBox.ItemTemplate>
-                        <DataTemplate x:DataType="models:ArchiveItem">
-                            <Grid ColumnDefinitions="28,24,*,120,90">
-                                <CheckBox Grid.Column="0" IsChecked="{Binding IsSelected, Mode=TwoWay}"
-                                          VerticalAlignment="Center" Padding="0" MinWidth="0"
-                                          ToolTip.Tip="Отметить для действий (создать архив, …)" />
-                                <TextBlock Grid.Column="1" Text="{Binding Icon}" VerticalAlignment="Center" />
-                                <TextBlock Grid.Column="2" Text="{Binding Name}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
-                                <TextBlock Grid.Column="3" Text="{Binding DisplaySize}" Foreground="{DynamicResource AppInkSecondary}"
-                                           FontFamily="{DynamicResource AppMonoFont}" VerticalAlignment="Center" />
-                                <TextBlock Grid.Column="4" Text="{Binding Kind}" Foreground="{DynamicResource AppInkSecondary}" VerticalAlignment="Center" />
-                            </Grid>
-                        </DataTemplate>
-                    </ListBox.ItemTemplate>
-                </ListBox>
-            </Grid>
+                    <ListBox Grid.Row="1" ItemsSource="{Binding Items}"
+                             SelectionMode="Single" Background="Transparent" BorderThickness="0"
+                             DoubleTapped="OnItemDoubleTapped">
+                        <!-- Плотные строки: убираем крупные Fluent-отступы ListBoxItem, ведём свой ритм. -->
+                        <ListBox.Styles>
+                            <Style Selector="ListBoxItem">
+                                <Setter Property="Padding" Value="14,4" />
+                                <Setter Property="MinHeight" Value="0" />
+                            </Style>
+                        </ListBox.Styles>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate x:DataType="models:ArchiveItem">
+                                <Grid ColumnDefinitions="28,24,*,120,90">
+                                    <CheckBox Grid.Column="0" IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                              VerticalAlignment="Center" Padding="0" MinWidth="0"
+                                              ToolTip.Tip="Отметить для действий (создать архив, …)" />
+                                    <TextBlock Grid.Column="1" Text="{Binding Icon}" VerticalAlignment="Center" />
+                                    <TextBlock Grid.Column="2" Text="{Binding Name}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                                    <TextBlock Grid.Column="3" Text="{Binding DisplaySize}" Foreground="{DynamicResource AppInkSecondary}"
+                                               FontFamily="{DynamicResource AppMonoFont}" VerticalAlignment="Center" />
+                                    <TextBlock Grid.Column="4" Text="{Binding Kind}" Foreground="{DynamicResource AppInkSecondary}" VerticalAlignment="Center" />
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Grid>
+            </Border>
         </Panel>
 
     </DockPanel>
