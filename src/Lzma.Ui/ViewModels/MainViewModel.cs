@@ -198,6 +198,7 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(HasContent));
         OnPropertyChanged(nameof(CanExtractSelected));
         OnPropertyChanged(nameof(CanEditPath));
+        OnPropertyChanged(nameof(ShowAddressField));
         IsEditingPath = false; // смена режима гасит ввод пути
       }
     }
@@ -227,7 +228,11 @@ public sealed class MainViewModel : ObservableObject
   public bool IsEditingPath
   {
     get => _isEditingPath;
-    private set => Set(ref _isEditingPath, value);
+    private set
+    {
+      if (Set(ref _isEditingPath, value))
+        OnPropertyChanged(nameof(ShowAddressField));
+    }
   }
 
   /// <summary>Редактируемый текст адресной строки (полный путь для ввода).</summary>
@@ -239,6 +244,12 @@ public sealed class MainViewModel : ObservableObject
 
   /// <summary>Можно ли редактировать адрес (ввод пути доступен только в режиме браузера ФС).</summary>
   public bool CanEditPath => IsFileSystemMode;
+
+  /// <summary>Показывать кликабельное поле адреса ФС (клик → ввод пути): режим ФС и сейчас не редактируем.</summary>
+  public bool ShowAddressField => CanEditPath && !IsEditingPath;
+
+  /// <summary>Текст кликабельного поля адреса: путь выделенного узла дерева либо подсказка.</summary>
+  public string AddressText => SelectedTreeNode?.FullPath ?? "Перейти к пути…";
 
   /// <summary>
   /// Визуальный индикатор «занято»: включается только если операция длится дольше
@@ -393,7 +404,11 @@ public sealed class MainViewModel : ObservableObject
   public TreeNodeItem? SelectedTreeNode
   {
     get => _selectedTreeNode;
-    set => Set(ref _selectedTreeNode, value);
+    set
+    {
+      if (Set(ref _selectedTreeNode, value))
+        OnPropertyChanged(nameof(AddressText));
+    }
   }
 
   /// <summary>«Хлебные крошки» текущего пути (корень → текущая папка). Каждая крошка кликабельна.</summary>

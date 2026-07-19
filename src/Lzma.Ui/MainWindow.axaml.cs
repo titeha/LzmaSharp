@@ -71,8 +71,8 @@ public partial class MainWindow : Window
         }
     }
 
-    // Карандаш адресной строки: включить ручной ввод пути, сфокусировать поле и выделить текст.
-    private void OnEditPath(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    // Клик по строке адреса: включить ручной ввод пути, сфокусировать поле и выделить текст.
+    private void OnEditPath(object? sender, PointerPressedEventArgs e)
     {
         if (DataContext is not MainViewModel viewModel || !viewModel.CanEditPath)
             return;

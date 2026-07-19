@@ -60,11 +60,10 @@
                         ToolTip.Tip="О программе">
                     <PathIcon Data="{StaticResource IconInfo}" />
                 </Button>
-                <!-- Адресная строка: крошки + карандаш (браузер ФС) ↔ поле ввода пути (как в проводнике).
+                <!-- Адресная строка: крошки (архив) ↔ кликабельное поле адреса (ФС) ↔ поле ввода пути.
                      Весь блок скрыт во время операции (IsBusy). -->
                 <Panel VerticalAlignment="Center" IsVisible="{Binding !IsBusy}">
-                  <!-- Режим просмотра: крошки (только в архиве) + карандаш ручного ввода пути (только ФС). -->
-                  <StackPanel Orientation="Horizontal" VerticalAlignment="Center" IsVisible="{Binding !IsEditingPath}">
+                <!-- Режим архива: кликабельные крошки навигации. -->
                 <ItemsControl ItemsSource="{Binding Breadcrumbs}" VerticalAlignment="Center"
                               IsVisible="{Binding HasArchive}">
                     <ItemsControl.Styles>
@@ -98,13 +97,15 @@
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
-                    <!-- Карандаш: перейти в режим ручного ввода пути (только браузер ФС). -->
-                    <Button Classes="tool" Click="OnEditPath" Padding="6" Margin="4,0,0,0"
-                            IsVisible="{Binding CanEditPath}"
-                            ToolTip.Tip="Ввести путь вручную и перейти (как в проводнике)">
-                        <PathIcon Data="{StaticResource IconEdit}" Width="14" Height="14" />
-                    </Button>
-                  </StackPanel>
+                  <!-- Режим ФС: кликабельное поле адреса (клик по строке → ввод пути, как в проводнике). -->
+                  <Border IsVisible="{Binding ShowAddressField}" PointerPressed="OnEditPath" Cursor="Hand"
+                          Background="{DynamicResource AppSurfaceRaised}" BorderBrush="{DynamicResource AppHairline}"
+                          BorderThickness="1" CornerRadius="4" Padding="9,4" MinWidth="280"
+                          VerticalAlignment="Center"
+                          ToolTip.Tip="Кликните, чтобы ввести путь и перейти (как в проводнике)">
+                      <TextBlock Text="{Binding AddressText}" Foreground="{DynamicResource AppInkSecondary}"
+                                 VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                  </Border>
                   <!-- Режим ввода пути: Enter — перейти, Esc/уход фокуса — отмена. -->
                   <TextBox x:Name="PathBox" IsVisible="{Binding IsEditingPath}" MinWidth="380"
                            Text="{Binding EditablePath}" Watermark="Введите путь и нажмите Enter…"
