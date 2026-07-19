@@ -10,12 +10,14 @@ namespace Lzma.Core.Zip;
 /// <summary>
 /// <para>Потоковый писатель ZIP в seekable-<see cref="Stream"/> — без удержания всего архива в памяти.</para>
 /// <para>
-/// Каждый файл читается по одному (≤ 2 ГиБ), сжимается меньшим из Store(0)/Deflate(8) одноразовым
-/// энкодером и пишется в выход; центральный каталог и EOCD дописываются в конце. Смещения/счётчик —
-/// 64-битные, при переполнении 4 ГиБ / 65535 записей пишется ZIP64 (extra <c>0x0001</c> + ZIP64 EOCD),
-/// поэтому итоговый архив может быть больше 4 ГиБ. Имена — UTF-8 (флаг bit 11).
+/// Файлы ≤ 2 ГиБ читаются по одному в память и сжимаются меньшим из Store(0)/Deflate(8) одноразовым
+/// энкодером ПАРАЛЛЕЛЬНО волнами; файлы > 2 ГиБ пишутся потоково (Deflate, вход/выход не в памяти,
+/// заголовок патчится seek-назад, при ≥ 4 ГиБ — ZIP64-размеры). Центральный каталог и EOCD
+/// дописываются в конце. Смещения/счётчик 64-битные, при переполнении 4 ГиБ / 65535 записей пишется
+/// ZIP64 (extra <c>0x0001</c> + ZIP64 EOCD), поэтому итоговый архив может быть больше 4 ГиБ. Имена —
+/// UTF-8 (флаг bit 11).
 /// </para>
-/// <para>Отдельный файл больше 2 ГиБ пока не поддержан (нужен потоковый Deflate/Store) —
+/// <para>Шифрование члена больше 2 ГиБ пока не поддержано (нужен потоковый AES) —
 /// <see cref="ZipWriteResult.NotSupported"/>.</para>
 /// </summary>
 public static class ZipStreamWriter
@@ -58,6 +60,21 @@ public static class ZipStreamWriter
       IProgress<string>? currentFile = null,
       int maxDegreeOfParallelism = 0,
       byte[]? password = null)
+      => Write(entries, output, int.MaxValue, Zip64SizeThreshold, progress, token, currentFile, maxDegreeOfParallelism, password);
+
+  // Внутренняя перегрузка с настраиваемыми порогами: largeThreshold — с какого размера файл идёт
+  // потоковым путём; zip64SizeThreshold — с какого размера local/central резервируют ZIP64-размеры.
+  // Тесты понижают пороги, чтобы прогнать эти ветки на маленьких файлах без гигабайтных данных.
+  internal static ZipWriteResult Write(
+      IReadOnlyList<ZipStreamingEntry> entries,
+      Stream output,
+      long largeThreshold,
+      long zip64SizeThreshold,
+      IProgress<SevenZipProgress>? progress,
+      CancellationToken token,
+      IProgress<string>? currentFile,
+      int maxDegreeOfParallelism,
+      byte[]? password)
   {
     if (entries is null || output is null || !output.CanWrite || !output.CanSeek)
       return ZipWriteResult.InvalidData;
@@ -69,8 +86,8 @@ public static class ZipStreamWriter
       if (e is null || string.IsNullOrEmpty(e.Name) || e.Name.Contains('\0'))
         return ZipWriteResult.InvalidData;
 
-      if (!e.IsDirectory && e.Length > int.MaxValue)
-        return ZipWriteResult.NotSupported; // отдельный файл > 2 ГиБ пока не поддержан
+      if (!e.IsDirectory && e.Length > largeThreshold && encrypt)
+        return ZipWriteResult.NotSupported; // шифрование члена > 2 ГиБ пока не поддержано (потоковый AES — отдельный шаг)
     }
 
     long total = 0;
@@ -100,10 +117,27 @@ public static class ZipStreamWriter
         continue;
       }
 
-      // Волна подряд идущих файлов: лимит по числу потоков и по памяти.
+      // Большой файл (> 2 ГиБ) — отдельный потоковый путь (в память не читаем). Шифрование отложено:
+      // такие члены отсеяны выше как NotSupported, поэтому здесь encrypt для большого файла невозможен.
+      if (entries[i].Length > largeThreshold)
+      {
+        ZipStreamingEntry big = entries[i];
+        currentFile?.Report(big.Name.Replace('\\', '/'));
+
+        ZipWriteResult r = WriteLargeEntryStreaming(output, central, big, zip64SizeThreshold, token);
+        if (r != ZipWriteResult.Ok)
+          return r;
+
+        processed += big.Length;
+        progress?.Report(new SevenZipProgress(processed, total));
+        i++;
+        continue;
+      }
+
+      // Волна подряд идущих файлов ≤ 2 ГиБ: лимит по числу потоков и по памяти.
       int waveStart = i;
       long waveBytes = 0;
-      while (i < entries.Count && !entries[i].IsDirectory)
+      while (i < entries.Count && !entries[i].IsDirectory && entries[i].Length <= largeThreshold)
       {
         int waveCount = i - waveStart;
         if (waveCount >= dop || (waveCount > 0 && waveBytes + entries[i].Length > WaveMemoryLimit))
@@ -187,10 +221,136 @@ public static class ZipStreamWriter
     WriteLocalHeader(output, nameBytes, method, crc, compSize, uncompSize, encrypt);
     output.Write(data, 0, data.Length);
 
-    central.Add(new CentralRecord(nameBytes, method, crc, compSize, uncompSize, localOffset, isDir, zip64Offset, encrypt));
+    central.Add(new CentralRecord(nameBytes, method, crc, compSize, uncompSize, localOffset, isDir, zip64Offset, Zip64Sizes: false, encrypt));
   }
 
   private readonly record struct FileResult(ushort Method, uint Crc, byte[] Data);
+
+  // Порог, с которого local header резервирует ZIP64-размеры: uncomp близок к 4 ГиБ (или compSize
+  // из-за stored-накладных может перескочить сентинел). Запас 1 МиБ покрывает накладные stored.
+  private const long Zip64SizeThreshold = (long)Zip64Sentinel32 - (1L << 20);
+
+  /// <summary>
+  /// Пишет большой файл (> 2 ГиБ) потоково: local header с заглушками CRC/compSize → потоковое
+  /// сжатие Deflate прямо в выход (CRC входа и compSize считаются на лету) → seek назад и патч
+  /// CRC/compSize. Выход seekable (проверено вызывающим). Метод всегда Deflate: на несжимаемых
+  /// кусках энкодер сам падает в stored, так что compSize ≈ uncompSize + пренебрежимо малые накладные.
+  /// </summary>
+  private static ZipWriteResult WriteLargeEntryStreaming(
+      Stream output, List<CentralRecord> central, ZipStreamingEntry e, long zip64SizeThreshold, CancellationToken token)
+  {
+    string name = e.Name.Replace('\\', '/');
+    byte[] nameBytes = Encoding.UTF8.GetBytes(name);
+    long uncompSize = e.Length;
+    long localOffset = output.Position;
+    bool zip64Sizes = uncompSize >= zip64SizeThreshold;
+    bool zip64Offset = localOffset >= Zip64Sentinel32;
+    const ushort method = MethodDeflate;
+
+    // --- local header ---
+    ushort version = zip64Sizes ? VersionZip64 : VersionBase;
+    ushort extraLen = zip64Sizes ? (ushort)(4 + 16) : (ushort)0;
+
+    WriteU32(output, LocalFileSignature);
+    WriteU16(output, version);
+    WriteU16(output, FlagUtf8);
+    WriteU16(output, method);
+    WriteU16(output, 0);           // mod time
+    WriteU16(output, DosDate1980); // mod date
+    WriteU32(output, 0);                                                     // crc — патчим после данных
+    WriteU32(output, zip64Sizes ? Zip64Sentinel32 : 0);                      // compSize — патчим
+    WriteU32(output, zip64Sizes ? Zip64Sentinel32 : (uint)uncompSize);       // uncompSize — известен
+    WriteU16(output, (ushort)nameBytes.Length);
+    WriteU16(output, extraLen);
+    output.Write(nameBytes, 0, nameBytes.Length);
+
+    if (zip64Sizes)
+    {
+      WriteU16(output, Zip64ExtraId);
+      WriteU16(output, 16);             // uncomp(8) + comp(8)
+      WriteU64(output, (ulong)uncompSize); // известен
+      WriteU64(output, 0);                 // comp — патчим
+    }
+
+    long dataStart = output.Position;
+
+    // --- потоковое сжатие ---
+    uint crc;
+    try
+    {
+      using Stream source = e.OpenRead();
+      var crcSource = new Crc32ReadStream(source);
+      DeflateEncoder.Encode(crcSource, uncompSize, output);
+      if (crcSource.BytesRead != uncompSize)
+        return ZipWriteResult.InvalidData; // источник короче заявленной длины
+      crc = crcSource.Crc;
+    }
+    catch (OperationCanceledException)
+    {
+      throw;
+    }
+    catch (Exception)
+    {
+      return ZipWriteResult.InvalidData; // ошибка чтения источника
+    }
+
+    token.ThrowIfCancellationRequested();
+
+    long dataEnd = output.Position;
+    long compSize = dataEnd - dataStart;
+
+    // --- патч CRC + compSize (seek назад, затем вернуть позицию в конец данных) ---
+    output.Position = localOffset + 14;
+    WriteU32(output, crc);
+
+    if (zip64Sizes)
+    {
+      output.Position = dataStart - 8; // comp u64 — последние 8 байт перед данными
+      WriteU64(output, (ulong)compSize);
+    }
+    else
+    {
+      output.Position = localOffset + 18;
+      WriteU32(output, (uint)compSize);
+    }
+
+    output.Position = dataEnd;
+
+    central.Add(new CentralRecord(nameBytes, method, crc, compSize, uncompSize, localOffset, false, zip64Offset, zip64Sizes, Encrypted: false));
+    return ZipWriteResult.Ok;
+  }
+
+  // Read-through поток: считает CRC-32 прочитанных байт и их число. Позволяет получить CRC входа,
+  // отдавая байты потоковому энкодеру без второго прохода.
+  private sealed class Crc32ReadStream(Stream inner) : Stream
+  {
+    private uint _state = Crc32.InitialState;
+
+    public uint Crc => Crc32.Finalize(_state);
+    public long BytesRead { get; private set; }
+
+    public override int Read(byte[] buffer, int offset, int count)
+    {
+      int n = inner.Read(buffer, offset, count);
+      if (n > 0)
+      {
+        _state = Crc32.Update(_state, buffer.AsSpan(offset, n));
+        BytesRead += n;
+      }
+
+      return n;
+    }
+
+    public override bool CanRead => true;
+    public override bool CanSeek => false;
+    public override bool CanWrite => false;
+    public override long Length => throw new NotSupportedException();
+    public override long Position { get => BytesRead; set => throw new NotSupportedException(); }
+    public override void Flush() { }
+    public override long Seek(long o, SeekOrigin r) => throw new NotSupportedException();
+    public override void SetLength(long v) => throw new NotSupportedException();
+    public override void Write(byte[] b, int o, int c) => throw new NotSupportedException();
+  }
 
   // Читает ровно Length байт элемента (файл ≤ 2 ГиБ, проверено выше).
   private static byte[] ReadEntry(ZipStreamingEntry e)
@@ -227,12 +387,18 @@ public static class ZipStreamWriter
 
   private static void WriteCentralHeader(Stream output, CentralRecord r)
   {
-    // Extra: ZIP64 (большое смещение) и/или WinZip-AES (шифрование).
-    ushort extraLen = (ushort)((r.Zip64Offset ? 4 + 8 : 0) + (r.Encrypted ? AesExtraTotalSize : 0));
-    ushort version = r.Encrypted ? VersionAes : (r.Zip64Offset ? VersionZip64 : VersionBase);
+    // Extra: ZIP64 (большие размеры и/или смещение) и/или WinZip-AES (шифрование).
+    // В ZIP64-extra поля идут строго в порядке: uncomp, comp, offset — только для тех, чьё 32-битное
+    // поле в фиксированной части выставлено в сентинел.
+    bool anyZip64 = r.Zip64Sizes || r.Zip64Offset;
+    int zip64DataLen = (r.Zip64Sizes ? 16 : 0) + (r.Zip64Offset ? 8 : 0);
+    ushort extraLen = (ushort)((anyZip64 ? 4 + zip64DataLen : 0) + (r.Encrypted ? AesExtraTotalSize : 0));
+    ushort version = r.Encrypted ? VersionAes : (anyZip64 ? VersionZip64 : VersionBase);
     ushort flags = r.Encrypted ? (ushort)(FlagUtf8 | FlagEncrypted) : FlagUtf8;
     ushort headerMethod = r.Encrypted ? WinZipAes.EncryptionMethod : r.Method;
     uint offset32 = r.Zip64Offset ? Zip64Sentinel32 : (uint)r.LocalOffset;
+    uint comp32 = r.Zip64Sizes ? Zip64Sentinel32 : (uint)r.CompSize;
+    uint uncomp32 = r.Zip64Sizes ? Zip64Sentinel32 : (uint)r.UncompSize;
 
     WriteU32(output, CentralFileSignature);
     WriteU16(output, version);          // version made by
@@ -242,8 +408,8 @@ public static class ZipStreamWriter
     WriteU16(output, 0);               // mod time
     WriteU16(output, DosDate1980);     // mod date
     WriteU32(output, r.Crc);
-    WriteU32(output, (uint)r.CompSize);
-    WriteU32(output, (uint)r.UncompSize);
+    WriteU32(output, comp32);
+    WriteU32(output, uncomp32);
     WriteU16(output, (ushort)r.NameBytes.Length);
     WriteU16(output, extraLen);
     WriteU16(output, 0);               // comment length
@@ -253,11 +419,18 @@ public static class ZipStreamWriter
     WriteU32(output, offset32);
     output.Write(r.NameBytes, 0, r.NameBytes.Length);
 
-    if (r.Zip64Offset)
+    if (anyZip64)
     {
       WriteU16(output, Zip64ExtraId);
-      WriteU16(output, 8);             // размер данных extra (только смещение)
-      WriteU64(output, (ulong)r.LocalOffset);
+      WriteU16(output, (ushort)zip64DataLen);
+      if (r.Zip64Sizes)
+      {
+        WriteU64(output, (ulong)r.UncompSize);
+        WriteU64(output, (ulong)r.CompSize);
+      }
+
+      if (r.Zip64Offset)
+        WriteU64(output, (ulong)r.LocalOffset);
     }
 
     if (r.Encrypted)
@@ -317,6 +490,7 @@ public static class ZipStreamWriter
       long LocalOffset,
       bool IsDirectory,
       bool Zip64Offset,
+      bool Zip64Sizes,
       bool Encrypted);
 
   private static void WriteU16(Stream output, ushort value)
