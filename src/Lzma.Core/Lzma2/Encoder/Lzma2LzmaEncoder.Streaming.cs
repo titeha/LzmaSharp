@@ -336,6 +336,20 @@ public static partial class Lzma2LzmaEncoder
       if (distance > maxDistance)
         break;
 
+      // Быстрый отказ (как в FindMatchesCyclic, идентично для байт-в-байт): кандидат, не совпавший по
+      // байту на позиции bestLength, не улучшит длину — пропускаем дорогой MatchLength.
+      if (bestLength > 0)
+      {
+        if (pos + bestLength >= totalLength)
+          break;
+
+        if (ring[(candidate + bestLength) & ringMask] != ring[(pos + bestLength) & ringMask])
+        {
+          candidate = prev[candidate & windowMask];
+          continue;
+        }
+      }
+
       int length = MatchLengthStreaming(ring, ringMask, candidate, pos, totalLength, maxMatch);
 
       if (length > bestLength)

@@ -149,6 +149,23 @@ internal static class LzmaMatchFinder
       if (distance > maxDistance)
         break;
 
+      // Быстрый отказ: чтобы превзойти bestLength, кандидат ОБЯЗАН совпасть по байту на позиции
+      // bestLength. Иначе его длина ≤ bestLength (не улучшит) — пропускаем дорогой MatchLength. Это
+      // НЕ меняет набор записанных матчей (те кандидаты и так не проходили length > bestLength),
+      // поэтому выход байт-в-байт прежний; ускоряет длинные цепочки. Если bestLength уже упёрся в
+      // остаток входа — дальше улучшений быть не может.
+      if (bestLength > 0)
+      {
+        if (pos + bestLength >= n)
+          break;
+
+        if (input[candidate + bestLength] != input[pos + bestLength])
+        {
+          candidate = prev[candidate & windowMask];
+          continue;
+        }
+      }
+
       int length = MatchLength(input, candidate, pos, maxMatch);
 
       if (length > bestLength)
@@ -209,6 +226,20 @@ internal static class LzmaMatchFinder
       // как только вышли за словарь — дальше смысла нет.
       if (distance > maxDistance)
         break;
+
+      // Быстрый отказ (как в FindMatchesCyclic): пропускаем кандидатов, что не могут превзойти
+      // bestLength (байт на позиции bestLength не совпал) — не меняет результат, ускоряет цепочку.
+      if (bestLength > 0)
+      {
+        if (pos + bestLength >= n)
+          break;
+
+        if (input[candidate + bestLength] != input[pos + bestLength])
+        {
+          candidate = prev[candidate];
+          continue;
+        }
+      }
 
       int length = MatchLength(input, candidate, pos, maxMatch);
 
