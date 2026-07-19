@@ -59,4 +59,50 @@ public static class Ppmd7Encoder
     output = model.GetEncodedOutput();
     return Ppmd7EncodeResult.Ok;
   }
+
+  /// <summary>
+  /// ПОТОКОВОЕ кодирование: читает <paramref name="length"/> байт из <paramref name="input"/> и пишет
+  /// «сырой» PPMd7-поток в <paramref name="output"/>, не держа ни вход, ни выход целиком в памяти
+  /// (размер входа не ограничен). PPMd читает вход строго вперёд по одному байту — вся «история» живёт
+  /// в модели фиксированного размера, поэтому кольцевой буфер не нужен. Выход БАЙТ-В-БАЙТ совпадает с
+  /// одноразовым <see cref="Encode(ReadOnlySpan{byte},int,uint,out byte[])"/> на тех же данных.
+  /// </summary>
+  /// <param name="bytesWritten">Число записанных сжатых байт.</param>
+  public static Ppmd7EncodeResult Encode(Stream input, long length, int order, uint memSize, Stream output, out long bytesWritten)
+  {
+    ArgumentNullException.ThrowIfNull(input);
+    ArgumentNullException.ThrowIfNull(output);
+    ArgumentOutOfRangeException.ThrowIfNegative(length);
+    bytesWritten = 0;
+
+    if (order < MinOrder || order > MaxOrder)
+      return Ppmd7EncodeResult.NotSupported;
+
+    if (memSize < MinMemSize || memSize > MaxMemSize)
+      return Ppmd7EncodeResult.NotSupported;
+
+    var model = new Ppmd7Model(memSize, ReadOnlySpan<byte>.Empty);
+    model.Init(order);
+    model.RangeEncInit(output);
+
+    byte[] buffer = new byte[1 << 16];
+    long remaining = length;
+    while (remaining > 0)
+    {
+      int want = (int)Math.Min(buffer.Length, remaining);
+      int read = input.Read(buffer, 0, want);
+      if (read <= 0)
+        throw new EndOfStreamException("Вход короче заявленной длины при потоковом кодировании PPMd.");
+
+      for (int i = 0; i < read; i++)
+        model.EncodeSymbol(buffer[i]);
+
+      remaining -= read;
+    }
+
+    model.RangeEncFlush();
+    model.FlushEncoderOutput();
+    bytesWritten = model.EncodedByteCount;
+    return Ppmd7EncodeResult.Ok;
+  }
 }

@@ -58,7 +58,11 @@ internal sealed class Ppmd7Model
   private uint _code;
 
   // ----- Range encoder -----
-  private List<byte>? _output;
+  private List<byte>? _output;         // in-memory приёмник выхода (одноразовый путь)
+  private Stream? _outputStream;       // потоковый приёмник выхода (для входа/выхода >2 ГиБ)
+  private byte[]? _outBuffer;          // буфер потокового приёмника
+  private int _outBufPos;
+  private long _encBytesWritten;       // счётчик сжатых байт (для потокового пути)
   private ulong _low;
   private byte _cache;
   private uint _cacheSize;
@@ -1122,10 +1126,63 @@ internal sealed class Ppmd7Model
   public void RangeEncInit(List<byte> output)
   {
     _output = output;
+    _outputStream = null;
+    RangeEncResetState();
+  }
+
+  /// <summary>
+  /// Инициализирует range-энкодер на ПОТОКОВЫЙ выход: готовые байты буферизуются и сбрасываются в
+  /// <paramref name="output"/> (не держим сжатый результат в памяти). Число записанных байт — в
+  /// <see cref="EncodedByteCount"/> после <see cref="FlushEncoderOutput"/>.
+  /// </summary>
+  public void RangeEncInit(Stream output)
+  {
+    _outputStream = output;
+    _output = null;
+    _outBuffer ??= new byte[1 << 16];
+    _outBufPos = 0;
+    _encBytesWritten = 0;
+    RangeEncResetState();
+  }
+
+  private void RangeEncResetState()
+  {
     _low = 0;
     _range = 0xFFFFFFFF;
     _cache = 0;
     _cacheSize = 1;
+  }
+
+  /// <summary>Число сжатых байт, записанных в потоковый выход (валидно после <see cref="FlushEncoderOutput"/>).</summary>
+  public long EncodedByteCount => _encBytesWritten;
+
+  // Направляет один готовый байт выхода в активный приёмник (List или буферизованный Stream).
+  private void EmitByte(byte value)
+  {
+    if (_outputStream is not null)
+    {
+      _outBuffer![_outBufPos++] = value;
+      _encBytesWritten++;
+      if (_outBufPos == _outBuffer.Length)
+      {
+        _outputStream.Write(_outBuffer, 0, _outBufPos);
+        _outBufPos = 0;
+      }
+    }
+    else
+    {
+      _output!.Add(value);
+    }
+  }
+
+  /// <summary>Дописывает хвост буфера потокового приёмника (вызывать после <see cref="RangeEncFlush"/>).</summary>
+  public void FlushEncoderOutput()
+  {
+    if (_outputStream is not null && _outBufPos > 0)
+    {
+      _outputStream.Write(_outBuffer!, 0, _outBufPos);
+      _outBufPos = 0;
+    }
   }
 
   private void ShiftLow()
@@ -1135,7 +1192,7 @@ internal sealed class Ppmd7Model
       byte temp = _cache;
       do
       {
-        _output!.Add((byte)(temp + (byte)(_low >> 32)));
+        EmitByte((byte)(temp + (byte)(_low >> 32)));
         temp = 0xFF;
       }
       while (--_cacheSize != 0);
