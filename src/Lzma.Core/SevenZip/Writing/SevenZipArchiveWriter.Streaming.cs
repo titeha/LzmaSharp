@@ -197,7 +197,8 @@ public static partial class SevenZipArchiveWriter
       Func<byte[], StreamingEncodedFile?> encodeFile,
       IProgress<SevenZipProgress>? progress,
       System.Threading.CancellationToken token,
-      IProgress<SevenZipCompressionFileProgress>? currentFile = null)
+      IProgress<SevenZipCompressionFileProgress>? currentFile = null,
+      int maxDegreeOfParallelism = 0)
   {
     ArgumentNullException.ThrowIfNull(entries);
     ArgumentNullException.ThrowIfNull(output);
@@ -209,17 +210,22 @@ public static partial class SevenZipArchiveWriter
     if (validation != SevenZipArchiveWriteResult.Ok)
       return validation;
 
-    long startPos = output.Position;
-    output.Write(new byte[SevenZipSignatureHeader.Size]);
-
-    int count = 0;
+    // Индексы файлов с данными + предвалидация размера (пофайловое сжатие держит файл в памяти).
+    var dataOrder = new List<int>();
     long totalContent = 0;
     for (int i = 0; i < entries.Count; i++)
       if (IsStreamingDataEntry(entries[i]))
       {
-        count++;
+        if (entries[i].Length > int.MaxValue)
+          return SevenZipArchiveWriteResult.NotSupported; // > 2 ГиБ на файл пока не поддерживаем
+        dataOrder.Add(i);
         totalContent += entries[i].Length;
       }
+
+    int count = dataOrder.Count;
+
+    long startPos = output.Position;
+    output.Write(new byte[SevenZipSignatureHeader.Size]);
 
     // packSizes — ПЛОСКИЙ список по всем folder-ам (folder может дать несколько packed-стримов: BCJ2 — 4).
     var flatPackSizes = new List<ulong>(count);
@@ -227,45 +233,81 @@ public static partial class SevenZipArchiveWriter
     var coderUnpackSizes = new ulong[count][];
     var crcs = new uint[count];
 
+    int dop = maxDegreeOfParallelism > 0 ? maxDegreeOfParallelism : Environment.ProcessorCount;
+    var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = dop, CancellationToken = token };
+    const long WaveMemoryLimit = 128L * 1024 * 1024;
+
     progress?.Report(new SevenZipProgress(0, totalContent));
     long processed = 0;
     int folder = 0;
 
-    for (int i = 0; i < entries.Count; i++)
+    int di = 0;
+    while (di < count)
     {
-      SevenZipStreamingEntry entry = entries[i];
-      if (!IsStreamingDataEntry(entry))
-        continue;
-
       token.ThrowIfCancellationRequested();
 
-      // Пофайловое сжатие держит файл в памяти целиком — > 2 ГиБ на файл пока не поддерживаем.
-      if (entry.Length > int.MaxValue)
-        return SevenZipArchiveWriteResult.NotSupported;
-
-      byte[] data = ReadExactlyToArray(entry.OpenRead(), (int)entry.Length);
-      uint crc = Crc32.Compute(data);
-
-      if (encodeFile(data) is not { } enc)
-        return SevenZipArchiveWriteResult.InternalError;
-
-      currentFile?.Report(new SevenZipCompressionFileProgress(entry.Name, enc.Codec));
-
-      // Packed-стримы folder-а пишем строго в порядке его packed-индексов.
-      for (int s = 0; s < enc.PackedStreams.Length; s++)
+      // Волна подряд идущих файлов: лимит по числу потоков и по памяти. Файлы сжимаются параллельно
+      // (кодек детерминирован + пофайлово, поэтому выход байт-идентичен последовательному).
+      int waveStart = di;
+      long waveBytes = 0;
+      while (di < count)
       {
-        byte[] packed = enc.PackedStreams[s];
-        output.Write(packed, 0, packed.Length);
-        flatPackSizes.Add((ulong)packed.Length);
+        int waveCount = di - waveStart;
+        long len = entries[dataOrder[di]].Length;
+        if (waveCount >= dop || (waveCount > 0 && waveBytes + len > WaveMemoryLimit))
+          break;
+        waveBytes += len;
+        di++;
       }
 
-      folderBodies[folder] = enc.FolderBody;
-      coderUnpackSizes[folder] = enc.CoderUnpackSizes;
-      crcs[folder] = crc;
-      folder++;
+      int n = di - waveStart;
+      var encs = new StreamingEncodedFile?[n];
+      var waveCrcs = new uint[n];
 
-      processed += entry.Length;
-      progress?.Report(new SevenZipProgress(processed, totalContent));
+      try
+      {
+        Parallel.For(0, n, parallelOptions, k =>
+        {
+          SevenZipStreamingEntry e = entries[dataOrder[waveStart + k]];
+          byte[] data = ReadExactlyToArray(e.OpenRead(), (int)e.Length);
+          waveCrcs[k] = Crc32.Compute(data);
+          encs[k] = encodeFile(data);
+        });
+      }
+      catch (AggregateException ex)
+      {
+        foreach (Exception inner in ex.Flatten().InnerExceptions)
+          if (inner is OperationCanceledException)
+            throw new OperationCanceledException(token);
+
+        return SevenZipArchiveWriteResult.InternalError;
+      }
+
+      // Пишем folder-ы СТРОГО по порядку волны.
+      for (int k = 0; k < n; k++)
+      {
+        if (encs[k] is not { } enc)
+          return SevenZipArchiveWriteResult.InternalError;
+
+        SevenZipStreamingEntry e = entries[dataOrder[waveStart + k]];
+        currentFile?.Report(new SevenZipCompressionFileProgress(e.Name, enc.Codec));
+
+        // Packed-стримы folder-а пишем строго в порядке его packed-индексов.
+        for (int s = 0; s < enc.PackedStreams.Length; s++)
+        {
+          byte[] packed = enc.PackedStreams[s];
+          output.Write(packed, 0, packed.Length);
+          flatPackSizes.Add((ulong)packed.Length);
+        }
+
+        folderBodies[folder] = enc.FolderBody;
+        coderUnpackSizes[folder] = enc.CoderUnpackSizes;
+        crcs[folder] = waveCrcs[k];
+        folder++;
+
+        processed += e.Length;
+        progress?.Report(new SevenZipProgress(processed, totalContent));
+      }
     }
 
     return FinalizeStreamingArchiveMultiFolder(entries, output, startPos, folderBodies, [.. flatPackSizes], coderUnpackSizes, crcs);
@@ -290,11 +332,12 @@ public static partial class SevenZipArchiveWriter
       Stream output,
       IProgress<SevenZipProgress>? progress = null,
       System.Threading.CancellationToken token = default,
-      IProgress<SevenZipCompressionFileProgress>? currentFile = null)
+      IProgress<SevenZipCompressionFileProgress>? currentFile = null,
+      int maxDegreeOfParallelism = 0)
   {
     byte[] coderBytes = PpmdCoderBytes();
     return BuildPerFileStreamingArchiveToStream(entries, output,
-        data => SingleCoderEncoded(EncodePpmd(data), coderBytes, data.Length, "PPMd"), progress, token, currentFile);
+        data => SingleCoderEncoded(EncodePpmd(data), coderBytes, data.Length, "PPMd"), progress, token, currentFile, maxDegreeOfParallelism);
   }
 
   /// <summary>Потоковое создание Copy-архива (без сжатия; пофайлово, не держим весь набор в памяти).</summary>
@@ -303,12 +346,13 @@ public static partial class SevenZipArchiveWriter
       Stream output,
       IProgress<SevenZipProgress>? progress = null,
       System.Threading.CancellationToken token = default,
-      IProgress<SevenZipCompressionFileProgress>? currentFile = null)
+      IProgress<SevenZipCompressionFileProgress>? currentFile = null,
+      int maxDegreeOfParallelism = 0)
   {
     // Copy coder: flags = idSize(1) | без атрибутов = 0x01, method id = 0x00.
     byte[] coderBytes = [0x01, 0x00];
     return BuildPerFileStreamingArchiveToStream(entries, output,
-        data => SingleCoderEncoded(data, coderBytes, data.Length, "Copy"), progress, token, currentFile);
+        data => SingleCoderEncoded(data, coderBytes, data.Length, "Copy"), progress, token, currentFile, maxDegreeOfParallelism);
   }
 
   /// <summary>
@@ -321,8 +365,9 @@ public static partial class SevenZipArchiveWriter
       Stream output,
       IProgress<SevenZipProgress>? progress = null,
       System.Threading.CancellationToken token = default,
-      IProgress<SevenZipCompressionFileProgress>? currentFile = null)
-      => BuildPerFileStreamingArchiveToStream(entries, output, EncodeBcj2Streaming, progress, token, currentFile);
+      IProgress<SevenZipCompressionFileProgress>? currentFile = null,
+      int maxDegreeOfParallelism = 0)
+      => BuildPerFileStreamingArchiveToStream(entries, output, EncodeBcj2Streaming, progress, token, currentFile, maxDegreeOfParallelism);
 
   /// <summary>
   /// Потоковое создание архива с АВТОВЫБОРОМ кодека ПОФАЙЛОВО: для каждого файла эвристика по доле

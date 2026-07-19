@@ -128,13 +128,13 @@ public sealed class LzmaArchiveService : IArchiveService
           SevenZipWriterCompressionMethod.Auto =>
               SevenZipArchiveWriter.BuildAutoSolidArchiveToStream(entries, output, dictionarySize, maxDegreeOfParallelism, progress, token, currentFile),
           SevenZipWriterCompressionMethod.Bcj2 =>
-              SevenZipArchiveWriter.BuildBcj2ArchiveToStream(entries, output, progress, token, currentFile),
+              SevenZipArchiveWriter.BuildBcj2ArchiveToStream(entries, output, progress, token, currentFile, maxDegreeOfParallelism),
           SevenZipWriterCompressionMethod.Aes =>
               BuildAesToStream(entries, output, password, dictionarySize, progress, token, currentFile),
           SevenZipWriterCompressionMethod.Ppmd =>
-              SevenZipArchiveWriter.BuildPpmdArchiveToStream(entries, output, progress, token, currentFile),
+              SevenZipArchiveWriter.BuildPpmdArchiveToStream(entries, output, progress, token, currentFile, maxDegreeOfParallelism),
           SevenZipWriterCompressionMethod.Copy =>
-              SevenZipArchiveWriter.BuildCopyArchiveToStream(entries, output, progress, token, currentFile),
+              SevenZipArchiveWriter.BuildCopyArchiveToStream(entries, output, progress, token, currentFile, maxDegreeOfParallelism),
           _ => SevenZipArchiveWriteResult.NotSupported,
         };
       }
