@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Lzma.Core.Checksums;
 using Lzma.Core.Lzma1;
 using Lzma.Core.Lzma2;
+using Lzma.Core.Ppmd;
 
 namespace Lzma.Core.SevenZip;
 
@@ -191,6 +192,12 @@ public static partial class SevenZipArchiveWriter
   /// — не держим весь набор файлов в памяти. Последовательно (без параллелизма — для PPMd это
   /// обязательно). <paramref name="coderBytes"/> — байты coder-а для next-header.
   /// </summary>
+  // Потоковое кодирование ОДНОГО большого файла (> 2 ГиБ) прямо в output: читает input (length байт),
+  // пишет packed в output, возвращает тело folder-а и размеры выходов coder-ов. CRC входа считает
+  // вызывающий (через read-through). Не держит ни вход, ни выход файла в памяти.
+  private delegate SevenZipArchiveWriteResult StreamEncodeLargeEntry(
+      Stream input, long length, Stream output, out byte[] folderBody, out ulong[] coderUnpackSizes);
+
   private static SevenZipArchiveWriteResult BuildPerFileStreamingArchiveToStream(
       IReadOnlyList<SevenZipStreamingEntry> entries,
       Stream output,
@@ -198,7 +205,10 @@ public static partial class SevenZipArchiveWriter
       IProgress<SevenZipProgress>? progress,
       System.Threading.CancellationToken token,
       IProgress<SevenZipCompressionFileProgress>? currentFile = null,
-      int maxDegreeOfParallelism = 0)
+      int maxDegreeOfParallelism = 0,
+      StreamEncodeLargeEntry? encodeLargeFile = null,
+      string largeFileCodec = "",
+      long largeFileThreshold = int.MaxValue)
   {
     ArgumentNullException.ThrowIfNull(entries);
     ArgumentNullException.ThrowIfNull(output);
@@ -210,14 +220,15 @@ public static partial class SevenZipArchiveWriter
     if (validation != SevenZipArchiveWriteResult.Ok)
       return validation;
 
-    // Индексы файлов с данными + предвалидация размера (пофайловое сжатие держит файл в памяти).
+    // Индексы файлов с данными + предвалидация размера. Файл > 2 ГиБ поддержан только если задан
+    // потоковый кодировщик большого файла (encodeLargeFile); иначе пофайловое сжатие держит файл в памяти.
     var dataOrder = new List<int>();
     long totalContent = 0;
     for (int i = 0; i < entries.Count; i++)
       if (IsStreamingDataEntry(entries[i]))
       {
-        if (entries[i].Length > int.MaxValue)
-          return SevenZipArchiveWriteResult.NotSupported; // > 2 ГиБ на файл пока не поддерживаем
+        if (entries[i].Length > largeFileThreshold && encodeLargeFile is null)
+          return SevenZipArchiveWriteResult.NotSupported; // > порога на файл — нужен потоковый кодек
         dataOrder.Add(i);
         totalContent += entries[i].Length;
       }
@@ -246,15 +257,49 @@ public static partial class SevenZipArchiveWriter
     {
       token.ThrowIfCancellationRequested();
 
-      // Волна подряд идущих файлов: лимит по числу потоков и по памяти. Файлы сжимаются параллельно
-      // (кодек детерминирован + пофайлово, поэтому выход байт-идентичен последовательному).
+      // Большой файл (> порога) — потоковое кодирование прямо в output, вне волны (в память не читаем).
+      // Такие файлы отсеяны выше, если encodeLargeFile == null, поэтому здесь он гарантированно задан.
+      if (entries[dataOrder[di]].Length > largeFileThreshold)
+      {
+        SevenZipStreamingEntry big = entries[dataOrder[di]];
+        currentFile?.Report(new SevenZipCompressionFileProgress(big.Name, largeFileCodec));
+
+        long before = output.Position;
+        uint bigCrc;
+        byte[] bigFolderBody;
+        ulong[] bigCoderUnpackSizes;
+        using (Stream src = big.OpenRead())
+        {
+          var crcSrc = new CrcReadThroughStream(src);
+          SevenZipArchiveWriteResult r = encodeLargeFile!(crcSrc, big.Length, output, out bigFolderBody, out bigCoderUnpackSizes);
+          if (r != SevenZipArchiveWriteResult.Ok)
+            return r;
+          if (crcSrc.BytesRead != big.Length)
+            return SevenZipArchiveWriteResult.InternalError; // источник короче заявленной длины
+          bigCrc = crcSrc.Crc;
+        }
+
+        folderBodies[folder] = bigFolderBody;
+        coderUnpackSizes[folder] = bigCoderUnpackSizes;
+        crcs[folder] = bigCrc;
+        flatPackSizes.Add((ulong)(output.Position - before));
+        folder++;
+
+        processed += big.Length;
+        progress?.Report(new SevenZipProgress(processed, totalContent));
+        di++;
+        continue;
+      }
+
+      // Волна подряд идущих файлов ≤ 2 ГиБ: лимит по числу потоков и по памяти. Файлы сжимаются
+      // параллельно (кодек детерминирован + пофайлово, поэтому выход байт-идентичен последовательному).
       int waveStart = di;
       long waveBytes = 0;
       while (di < count)
       {
         int waveCount = di - waveStart;
         long len = entries[dataOrder[di]].Length;
-        if (waveCount >= dop || (waveCount > 0 && waveBytes + len > WaveMemoryLimit))
+        if (len > largeFileThreshold || waveCount >= dop || (waveCount > 0 && waveBytes + len > WaveMemoryLimit))
           break;
         waveBytes += len;
         di++;
@@ -326,18 +371,39 @@ public static partial class SevenZipArchiveWriter
       (byte)((PpmdMemSize >> 24) & 0xFF),
   ];
 
-  /// <summary>Потоковое создание PPMd-архива (пофайлово, без загрузки всего набора в память).</summary>
+  /// <summary>
+  /// Потоковое создание PPMd-архива (пофайлово, без загрузки всего набора в память). Файлы ≤ 2 ГиБ
+  /// жмутся параллельно волнами (в память по одному); файл &gt; 2 ГиБ жмётся ПОТОКОВО прямо в выход
+  /// (PPMd читает вход строго вперёд — размер не ограничен).
+  /// </summary>
+  /// <param name="largeFileThreshold">Порог, с которого файл идёт потоковым путём (по умолчанию 2 ГиБ;
+  /// тесты понижают, чтобы прогнать потоковый путь на маленьких файлах).</param>
   public static SevenZipArchiveWriteResult BuildPpmdArchiveToStream(
       IReadOnlyList<SevenZipStreamingEntry> entries,
       Stream output,
       IProgress<SevenZipProgress>? progress = null,
       System.Threading.CancellationToken token = default,
       IProgress<SevenZipCompressionFileProgress>? currentFile = null,
-      int maxDegreeOfParallelism = 0)
+      int maxDegreeOfParallelism = 0,
+      long largeFileThreshold = int.MaxValue)
   {
     byte[] coderBytes = PpmdCoderBytes();
     return BuildPerFileStreamingArchiveToStream(entries, output,
-        data => SingleCoderEncoded(EncodePpmd(data), coderBytes, data.Length, "PPMd"), progress, token, currentFile, maxDegreeOfParallelism);
+        data => SingleCoderEncoded(EncodePpmd(data), coderBytes, data.Length, "PPMd"),
+        progress, token, currentFile, maxDegreeOfParallelism,
+        encodeLargeFile: EncodePpmdLargeToStream, largeFileCodec: "PPMd", largeFileThreshold: largeFileThreshold);
+  }
+
+  // Потоковое PPMd-кодирование одного большого файла (> 2 ГиБ) прямо в output: PPMd читает вход строго
+  // вперёд по байту (модель фиксирована), поэтому вход не держим в памяти. Тело folder-а — один coder.
+  private static SevenZipArchiveWriteResult EncodePpmdLargeToStream(
+      Stream input, long length, Stream output, out byte[] folderBody, out ulong[] coderUnpackSizes)
+  {
+    folderBody = WrapSingleCoderFolderBody(PpmdCoderBytes());
+    coderUnpackSizes = [(ulong)length];
+
+    Ppmd7EncodeResult r = Ppmd7Encoder.Encode(input, length, PpmdOrder, PpmdMemSize, output, out _);
+    return r == Ppmd7EncodeResult.Ok ? SevenZipArchiveWriteResult.Ok : SevenZipArchiveWriteResult.NotSupported;
   }
 
   /// <summary>Потоковое создание Copy-архива (без сжатия; пофайлово, не держим весь набор в памяти).</summary>
@@ -598,6 +664,38 @@ public static partial class SevenZipArchiveWriter
 
   private static bool IsStreamingDataEntry(SevenZipStreamingEntry e)
       => !e.IsDirectory && e.Length > 0;
+
+  // Read-through поток: считает CRC-32 прочитанных байт и их число (для CRC несжатого содержимого
+  // большого файла на лету, пока потоковый кодек читает его вход).
+  private sealed class CrcReadThroughStream(Stream inner) : Stream
+  {
+    private uint _state = Crc32.InitialState;
+
+    public uint Crc => Crc32.Finalize(_state);
+    public long BytesRead { get; private set; }
+
+    public override int Read(byte[] buffer, int offset, int count)
+    {
+      int n = inner.Read(buffer, offset, count);
+      if (n > 0)
+      {
+        _state = Crc32.Update(_state, buffer.AsSpan(offset, n));
+        BytesRead += n;
+      }
+
+      return n;
+    }
+
+    public override bool CanRead => true;
+    public override bool CanSeek => false;
+    public override bool CanWrite => false;
+    public override long Length => throw new NotSupportedException();
+    public override long Position { get => BytesRead; set => throw new NotSupportedException(); }
+    public override void Flush() { }
+    public override long Seek(long o, SeekOrigin r) => throw new NotSupportedException();
+    public override void SetLength(long v) => throw new NotSupportedException();
+    public override void Write(byte[] b, int o, int c) => throw new NotSupportedException();
+  }
 
   // Читает ровно length байт из потока в массив и закрывает поток (для параллельного сжатия мелких файлов).
   private static byte[] ReadExactlyToArray(Stream source, int length)
