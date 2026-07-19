@@ -93,6 +93,49 @@ public interface IArchiveService
       IProgress<string>? currentFile = null);
 
   /// <summary>
+  /// Извлекает ТОЛЬКО выбранные записи in-memory 7z-архива: <paramref name="shouldExtract"/> — предикат
+  /// по имени записи (полному пути внутри архива). По умолчанию —
+  /// <see cref="SevenZipArchiveDecodeResult.NotSupported"/>.
+  /// </summary>
+  Task<SevenZipArchiveDecodeResult> ExtractSelectedAsync(
+      byte[] bytes,
+      string? password,
+      string destination,
+      Func<string, bool> shouldExtract,
+      IProgress<SevenZipProgress>? progress = null,
+      CancellationToken token = default,
+      IProgress<string>? currentFile = null)
+      => Task.FromResult(SevenZipArchiveDecodeResult.NotSupported);
+
+  /// <summary>
+  /// ПОТОКОВОЕ извлечение выбранных записей 7z по пути (предикат по имени), без загрузки архива в память.
+  /// По умолчанию — <see cref="SevenZipArchiveDecodeResult.NotSupported"/>.
+  /// </summary>
+  Task<SevenZipArchiveDecodeResult> ExtractSelectedArchiveFileAsync(
+      string archivePath,
+      string destination,
+      Func<string, bool> shouldExtract,
+      IProgress<SevenZipProgress>? progress = null,
+      CancellationToken token = default,
+      IProgress<string>? currentFile = null,
+      string? password = null)
+      => Task.FromResult(SevenZipArchiveDecodeResult.NotSupported);
+
+  /// <summary>
+  /// ПОТОКОВОЕ извлечение выбранных записей ZIP по пути (предикат по имени), без загрузки архива в память.
+  /// По умолчанию — <see cref="ZipExtractResult.IOError"/>.
+  /// </summary>
+  Task<ZipExtractResult> ExtractSelectedZipFileAsync(
+      string archivePath,
+      string destination,
+      Func<string, bool> shouldExtract,
+      CancellationToken token = default,
+      IProgress<string>? currentFile = null,
+      IProgress<SevenZipProgress>? progress = null,
+      string? password = null)
+      => Task.FromResult(ZipExtractResult.IOError);
+
+  /// <summary>
   /// Собирает 7z-архив из набора записей выбранным методом сжатия. Возвращает байты архива;
   /// запись на диск — отдельный шаг (<see cref="WriteArchiveAsync"/>). Опциональный
   /// <paramref name="progress"/> получает отчёт о ходе сжатия (по исходным размерам файлов).

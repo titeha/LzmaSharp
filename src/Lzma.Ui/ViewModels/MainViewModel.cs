@@ -141,6 +141,7 @@ public sealed class MainViewModel : ObservableObject
     NavigateUpCommand = new RelayCommand(NavigateUp, () => CanGoUp, this);
     NavigateToCrumbCommand = new RelayCommand<PathCrumb>(NavigateToCrumb);
     ExtractAllCommand = new AsyncRelayCommand(ExtractAllAsync, () => HasArchive && !IsOperating, this);
+    ExtractSelectedCommand = new AsyncRelayCommand(ExtractSelectedAsync, () => CanExtractSelected && !IsOperating, this);
     ExtractArchiveFileCommand = new AsyncRelayCommand(ExtractArchiveFileAsync, () => !IsOperating, this);
     CreateCommand = new AsyncRelayCommand(CreateFromFilesAsync, () => CanCreate && !IsOperating, this);
     CreateFromFolderCommand = new AsyncRelayCommand(CreateFromFolderAsync, () => CanCreateFromFolder && !IsOperating, this);
@@ -186,6 +187,7 @@ public sealed class MainViewModel : ObservableObject
       {
         OnPropertyChanged(nameof(IsFileSystemMode));
         OnPropertyChanged(nameof(HasContent));
+        OnPropertyChanged(nameof(CanExtractSelected));
       }
     }
   }
@@ -377,6 +379,9 @@ public sealed class MainViewModel : ObservableObject
   /// <summary>Команда «Извлечь всё» — распаковать содержимое архива в выбранную папку.</summary>
   public AsyncRelayCommand ExtractAllCommand { get; }
 
+  /// <summary>Команда «Извлечь выбранное» — распаковать только отмеченные записи открытого архива.</summary>
+  public AsyncRelayCommand ExtractSelectedCommand { get; }
+
   /// <summary>
   /// Команда «Извлечь архив с диска…» — выбрать .7z по пути и извлечь ПОТОКОВО, не загружая архив
   /// в память (для архивов больше 2 ГиБ). Не требует предварительного открытия/обзора.
@@ -510,6 +515,9 @@ public sealed class MainViewModel : ObservableObject
 
   /// <summary>Доступно ли создание из выбранного в браузере (есть шов ФС, куда сохранять и что паковать).</summary>
   public bool CanCreateFromSelection => _fileSystemBrowser is not null && _saveFilePicker is not null && HasSelection;
+
+  /// <summary>Доступно ли извлечение выбранного (открыт архив и есть отмеченные записи).</summary>
+  public bool CanExtractSelected => HasArchive && HasSelection;
 
   /// <summary>
   /// Активировать элемент (двойной клик): в браузере ФС файл-архив открывается, папка/диск —
@@ -1103,6 +1111,148 @@ public sealed class MainViewModel : ObservableObject
     SevenZipArchiveDecodeResult.NotSupported => "Извлечение не поддерживается для этого архива.",
     _ => "Не удалось извлечь: ошибка данных или файл уже существует.",
   };
+
+  // Извлечение ТОЛЬКО отмеченных записей открытого архива. Предикат по имени строится из выбора
+  // текущей папки (файл → точный путь, папка → всё поддерево); маршрутизация по режиму открытия
+  // повторяет ExtractAllAsync. Для 7z solid-folder декодируется целиком, но на диск идут только
+  // выбранные подпотоки (фильтр в ядре).
+  private async Task ExtractSelectedAsync()
+  {
+    Func<string, bool>? predicate = BuildArchiveExtractPredicate();
+    if (predicate is null)
+      return; // ничего не отмечено (гарантируется CanExtractSelected, но перестрахуемся)
+
+    string? destination = await _folderPicker.PickFolderAsync();
+    if (destination is null)
+      return; // выбор папки отменён
+
+    IProgress<SevenZipProgress> progress = CreateProgress();
+    var currentFile = new Progress<string>(name => CurrentFileStatus = FormatExtractingFileStatus(name));
+
+    // Открыт «большой» ZIP по пути — потоковое частичное извлечение.
+    if (_zipArchivePath is { } zipArchivePath)
+    {
+      string? zipPassword = null;
+      if (await _archiveService.IsZipEncryptedAsync(zipArchivePath))
+      {
+        zipPassword = await _passwordPrompt.RequestAsync(Path.GetFileName(zipArchivePath), previousAttemptFailed: false);
+        if (zipPassword is null)
+        {
+          StatusMessage = "Извлечение отменено: для зашифрованного архива нужен пароль.";
+          return;
+        }
+      }
+
+      await RunOperationAsync(async token =>
+      {
+        try
+        {
+          ZipExtractResult result = await _archiveService.ExtractSelectedZipFileAsync(
+              zipArchivePath, destination, predicate, token, currentFile, progress, zipPassword);
+          StatusMessage = result == ZipExtractResult.WrongPassword
+              ? "Неверный пароль для зашифрованного ZIP."
+              : ZipExtractStatus(result, destination);
+        }
+        finally { CurrentFileStatus = null; }
+      });
+      return;
+    }
+
+    // Открыт ZIP in-memory — фильтруем уже прочитанные записи (члены независимы).
+    if (_zipEntries is { } zipEntries)
+    {
+      ZipEntry[] subset = [.. zipEntries.Where(e => predicate(e.Name))];
+      await RunOperationAsync(async token =>
+      {
+        try
+        {
+          ZipExtractResult result = await _archiveService.ExtractZipAsync(subset, destination, token, currentFile);
+          StatusMessage = ZipExtractStatus(result, destination);
+        }
+        finally { CurrentFileStatus = null; }
+      });
+      return;
+    }
+
+    // Открыт как «большой» (потоковый) 7z — частичное извлечение прямо из файла.
+    if (_archivePath is { } archivePath)
+    {
+      (bool proceed, string? streamPassword, bool encrypted) = await ResolveStreamingExtractPasswordAsync(archivePath);
+      if (!proceed)
+      {
+        StatusMessage = "Извлечение отменено: для зашифрованного архива нужен пароль.";
+        return;
+      }
+
+      await RunOperationAsync(async token =>
+      {
+        try
+        {
+          SevenZipArchiveDecodeResult result = await _archiveService.ExtractSelectedArchiveFileAsync(
+              archivePath, destination, predicate, progress, token, currentFile, streamPassword);
+          StatusMessage = StreamingExtractStatus(result, destination, encrypted);
+        }
+        finally { CurrentFileStatus = null; }
+      });
+      return;
+    }
+
+    // In-memory 7z.
+    if (_archiveBytes is { } bytes)
+    {
+      string? password = _archivePassword;
+      await RunOperationAsync(async token =>
+      {
+        try
+        {
+          SevenZipArchiveDecodeResult result = await _archiveService.ExtractSelectedAsync(
+              bytes, password, destination, predicate, progress, token, currentFile);
+          StatusMessage = ExtractStatus(result, destination);
+        }
+        finally { CurrentFileStatus = null; }
+      });
+    }
+  }
+
+  // Предикат «извлекать ли запись архива» по отмеченным элементам ТЕКУЩЕЙ папки: файл — точный путь
+  // внутри архива, папка — весь её поддерев (префикс «путь/»). Имена нормализуем к '/'. null — если
+  // ничего не отмечено.
+  private Func<string, bool>? BuildArchiveExtractPredicate()
+  {
+    string prefix = BuildCurrentPath();
+    string basePath = prefix.Length == 0 ? string.Empty : prefix + "/";
+
+    var files = new HashSet<string>(StringComparer.Ordinal);
+    var folderPrefixes = new List<string>();
+
+    foreach (ArchiveItem item in Items)
+    {
+      if (!item.IsSelected)
+        continue;
+
+      string full = basePath + item.Name;
+      if (item.IsDirectory)
+        folderPrefixes.Add(full + "/");
+      else
+        files.Add(full);
+    }
+
+    if (files.Count == 0 && folderPrefixes.Count == 0)
+      return null;
+
+    return name =>
+    {
+      string norm = name.Replace('\\', '/');
+      if (files.Contains(norm))
+        return true;
+
+      foreach (string p in folderPrefixes)
+        if (norm == p[..^1] || norm.StartsWith(p, StringComparison.Ordinal))
+          return true;
+
+      return false;
+    };
+  }
 
   // Распаковка открытого ZIP на диск (уже прочитанные элементы, in-memory).
   private async Task ExtractZipAsync(ZipEntry[] entries)
@@ -1909,7 +2059,10 @@ public sealed class MainViewModel : ObservableObject
     private set
     {
       if (Set(ref _selectedCount, value))
+      {
         OnPropertyChanged(nameof(HasSelection));
+        OnPropertyChanged(nameof(CanExtractSelected));
+      }
     }
   }
 

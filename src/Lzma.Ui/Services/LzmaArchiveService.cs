@@ -60,6 +60,93 @@ public sealed class LzmaArchiveService : IArchiveService
   }
 
   /// <inheritdoc />
+  public Task<SevenZipArchiveDecodeResult> ExtractSelectedAsync(
+      byte[] bytes,
+      string? password,
+      string destination,
+      System.Func<string, bool> shouldExtract,
+      System.IProgress<SevenZipProgress>? progress = null,
+      System.Threading.CancellationToken token = default,
+      System.IProgress<string>? currentFile = null)
+  {
+    return Task.Run(() => WithOptions(password, options =>
+        SevenZipArchiveDecoder.ExtractToDirectory(bytes, options, destination, overwrite: false, out _, progress, token, currentFile, shouldExtract)), token);
+  }
+
+  /// <inheritdoc />
+  public Task<SevenZipArchiveDecodeResult> ExtractSelectedArchiveFileAsync(
+      string archivePath,
+      string destination,
+      System.Func<string, bool> shouldExtract,
+      System.IProgress<SevenZipProgress>? progress = null,
+      System.Threading.CancellationToken token = default,
+      System.IProgress<string>? currentFile = null,
+      string? password = null)
+  {
+    return Task.Run(() =>
+    {
+      try
+      {
+        using System.IO.Stream archive = OpenArchiveReadStream(archivePath);
+
+        return WithOptions(password, options => SevenZipArchiveDecoder.ExtractToDirectoryFromStream(
+            archive, options, destination, overwrite: false, progress, token, currentFile, shouldExtract));
+      }
+      catch (System.IO.IOException)
+      {
+        return SevenZipArchiveDecodeResult.InternalError;
+      }
+      catch (System.UnauthorizedAccessException)
+      {
+        return SevenZipArchiveDecodeResult.InternalError;
+      }
+    }, token);
+  }
+
+  /// <inheritdoc />
+  public Task<ZipExtractResult> ExtractSelectedZipFileAsync(
+      string archivePath,
+      string destination,
+      System.Func<string, bool> shouldExtract,
+      System.Threading.CancellationToken token = default,
+      System.IProgress<string>? currentFile = null,
+      System.IProgress<SevenZipProgress>? progress = null,
+      string? password = null)
+  {
+    return Task.Run(() =>
+    {
+      byte[]? passwordBytes = password is null ? null : System.Text.Encoding.UTF8.GetBytes(password);
+      try
+      {
+        using System.IO.Stream archive = OpenArchiveReadStream(archivePath);
+
+        ZipReadResult read = ZipStreamReader.ReadCentralDirectory(archive, out ZipStreamEntry[] entries);
+        if (read != ZipReadResult.Ok)
+          return ZipExtractResult.InvalidData;
+
+        // ZIP-члены независимы → извлекаем отфильтрованное подмножество без правки ядра.
+        ZipStreamEntry[] subset = System.Linq.Enumerable.ToArray(
+            System.Linq.Enumerable.Where(entries, e => shouldExtract(e.Name)));
+
+        return ZipStreamExtractor.ExtractToDirectory(archive, subset, destination, overwrite: false, currentFile, token, progress, passwordBytes);
+      }
+      catch (System.IO.IOException)
+      {
+        return ZipExtractResult.IOError;
+      }
+      catch (System.UnauthorizedAccessException)
+      {
+        return ZipExtractResult.IOError;
+      }
+      finally
+      {
+        if (passwordBytes is not null)
+          System.Security.Cryptography.CryptographicOperations.ZeroMemory(passwordBytes);
+      }
+    }, token);
+  }
+
+  /// <inheritdoc />
   public Task<ArchiveCreateOutcome> CreateArchiveAsync(
       IReadOnlyList<SevenZipArchiveWriterEntry> entries,
       SevenZipWriterCompressionMethod method,

@@ -24,6 +24,12 @@
                     HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
                     IsVisible="{Binding HasArchive}"
                     ToolTip.Tip="Извлечь все файлы сейчас открытого архива в выбранную папку" />
+            <Button Content="{Binding SelectedCount, StringFormat='Извлечь выбранное ({0})'}"
+                    Command="{Binding ExtractSelectedCommand}"
+                    Classes="accent"
+                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                    IsVisible="{Binding CanExtractSelected}"
+                    ToolTip.Tip="Извлечь только отмеченные галочкой файлы и папки открытого архива в выбранную папку" />
             <Button Content="Извлечь архив с диска…" Command="{Binding ExtractArchiveFileCommand}"
                     HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
                     ToolTip.Tip="Выбрать .7z на диске и извлечь потоком, без загрузки в память (в т.ч. архивы больше 2 ГиБ)" />
