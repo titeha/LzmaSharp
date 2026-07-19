@@ -38,11 +38,11 @@ public sealed class ArchiveItem : ObservableObject
   /// <summary>Является ли элемент файлом-архивом (по расширению) — для значка/действий.</summary>
   public bool IsArchiveFile => !IsDirectory && IsArchiveName(Name);
 
+  /// <summary>Обычный файл (не каталог и не архив) — для выбора векторного значка.</summary>
+  public bool IsPlainFile => !IsDirectory && !IsArchiveFile;
+
   /// <summary>Тип элемента для колонки.</summary>
   public string Kind => IsDirectory ? "папка" : IsArchiveFile ? "архив" : "файл";
-
-  /// <summary>Значок элемента (папка/архив/файл).</summary>
-  public string Icon => IsDirectory ? "📁" : IsArchiveFile ? "📦" : "📄";
 
   /// <summary>Распознаёт имя архива по расширению (.7z/.zip и первый том .7z.001).</summary>
   public static bool IsArchiveName(string name)

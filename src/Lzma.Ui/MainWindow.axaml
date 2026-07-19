@@ -13,25 +13,48 @@
         Background="{DynamicResource AppBg}"
         FontFamily="{DynamicResource AppUiFont}">
 
+    <Window.Styles>
+        <!-- Иконочные кнопки тулбара: квадратный отступ, иконка 18px (красится Foreground кнопки). -->
+        <Style Selector="Button.tool">
+            <Setter Property="Padding" Value="9" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style Selector="Button.tool PathIcon">
+            <Setter Property="Width" Value="18" />
+            <Setter Property="Height" Value="18" />
+        </Style>
+    </Window.Styles>
+
     <DockPanel>
 
         <!-- Тулбар -->
         <Border DockPanel.Dock="Top" Padding="8" BorderThickness="0,0,0,1"
                 Background="{DynamicResource AppSurface}"
                 BorderBrush="{DynamicResource AppHairline}">
-            <StackPanel Orientation="Horizontal" Spacing="8">
-                <Button Content="Открыть…" Command="{Binding OpenCommand}"
-                        ToolTip.Tip="Открыть архив 7z/ZIP: небольшой — целиком, большой (&gt;2 ГиБ / ZIP64) — потоково" />
-                <Button Content="Создать архив…" Click="OnOpenCreateWindow" Classes="accent"
+            <StackPanel Orientation="Horizontal" Spacing="6">
+                <Button Classes="tool" Command="{Binding OpenCommand}"
+                        ToolTip.Tip="Открыть архив 7z/ZIP: небольшой — целиком, большой (&gt;2 ГиБ / ZIP64) — потоково">
+                    <PathIcon Data="{StaticResource IconOpen}" />
+                </Button>
+                <Button Classes="tool accent" Click="OnOpenCreateWindow"
                         IsVisible="{Binding CanCreate}"
-                        ToolTip.Tip="Настройки сжатия и создание архива в отдельном окне" />
+                        ToolTip.Tip="Создать архив: настройки сжатия и сборка в отдельном окне">
+                    <PathIcon Data="{StaticResource IconCreate}" />
+                </Button>
                 <!-- Настройки сжатия (метод/потоки/словарь/тома) переехали в окно «Создать архив».
                      Извлечение (открытый архив / архив с диска) — в окне «Извлечь…». -->
-                <Button Content="Извлечь…" Click="OnOpenExtractWindow"
-                        ToolTip.Tip="Извлечь открытый архив или архив с диска в отдельном окне" />
-                <Button Content="Вверх" Command="{Binding NavigateUpCommand}" />
-                <Button Content="◐" Click="OnToggleTheme" VerticalAlignment="Center"
-                        ToolTip.Tip="Переключить тему (тёмная/светлая)" />
+                <Button Classes="tool" Click="OnOpenExtractWindow"
+                        ToolTip.Tip="Извлечь открытый архив или архив с диска в отдельном окне">
+                    <PathIcon Data="{StaticResource IconExtract}" />
+                </Button>
+                <Button Classes="tool" Command="{Binding NavigateUpCommand}"
+                        ToolTip.Tip="Вверх — на уровень выше (или выход из архива)">
+                    <PathIcon Data="{StaticResource IconUp}" />
+                </Button>
+                <Button Classes="tool" Click="OnToggleTheme"
+                        ToolTip.Tip="Переключить тему (тёмная/светлая)">
+                    <PathIcon Data="{StaticResource IconTheme}" />
+                </Button>
                 <!-- Хлебные крошки текущего пути: каждый сегмент кликабелен для перехода на его уровень.
                      Последний сегмент (IsCurrent) подсвечен медью, разделитель после него скрыт. -->
                 <ItemsControl ItemsSource="{Binding Breadcrumbs}" VerticalAlignment="Center"
@@ -173,7 +196,14 @@
                                     <CheckBox Grid.Column="0" IsChecked="{Binding IsSelected, Mode=TwoWay}"
                                               VerticalAlignment="Center" Padding="0" MinWidth="0"
                                               ToolTip.Tip="Отметить для действий (создать архив, …)" />
-                                    <TextBlock Grid.Column="1" Text="{Binding Icon}" VerticalAlignment="Center" />
+                                    <Panel Grid.Column="1" VerticalAlignment="Center">
+                                        <PathIcon Data="{StaticResource IconFolder}" Width="16" Height="16"
+                                                  Foreground="{DynamicResource AppSteel}" IsVisible="{Binding IsDirectory}" />
+                                        <PathIcon Data="{StaticResource IconArchive}" Width="16" Height="16"
+                                                  Foreground="{DynamicResource AppCopper}" IsVisible="{Binding IsArchiveFile}" />
+                                        <PathIcon Data="{StaticResource IconFile}" Width="16" Height="16"
+                                                  Foreground="{DynamicResource AppInkSecondary}" IsVisible="{Binding IsPlainFile}" />
+                                    </Panel>
                                     <TextBlock Grid.Column="2" Text="{Binding Name}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
                                     <TextBlock Grid.Column="3" Text="{Binding DisplaySize}" Foreground="{DynamicResource AppInkSecondary}"
                                                FontFamily="{DynamicResource AppMonoFont}" VerticalAlignment="Center" />
