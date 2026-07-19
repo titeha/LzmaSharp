@@ -1,0 +1,64 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="440" d:DesignHeight="360"
+        x:Class="Lzma.Ui.AboutWindow"
+        Title="О программе"
+        Width="440" SizeToContent="Height"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False"
+        Background="{DynamicResource AppBg}"
+        FontFamily="{DynamicResource AppUiFont}">
+
+    <StackPanel Margin="24" Spacing="16">
+
+        <!-- Логотип + название -->
+        <StackPanel Orientation="Horizontal" Spacing="16">
+            <!-- Логотип «сжатие»: медный+стальные бруски, сужающиеся книзу, в рамке-бейдже. -->
+            <Border Width="64" Height="64" CornerRadius="14" VerticalAlignment="Top"
+                    Background="{DynamicResource AppSurfaceRaised}"
+                    BorderBrush="{DynamicResource AppCopper}" BorderThickness="2">
+                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="3">
+                    <Border Width="32" Height="5" CornerRadius="2.5" Background="{DynamicResource AppCopper}" />
+                    <Border Width="24" Height="5" CornerRadius="2.5" Background="{DynamicResource AppSteel}" />
+                    <Border Width="16" Height="5" CornerRadius="2.5" Background="{DynamicResource AppSteel}" />
+                </StackPanel>
+            </Border>
+            <StackPanel VerticalAlignment="Center" Spacing="2">
+                <TextBlock Text="LzmaSharp" FontSize="22" FontWeight="SemiBold"
+                           Foreground="{DynamicResource AppInk}" />
+                <TextBlock Text="Управляемый архиватор 7z · LZMA/LZMA2 · ZIP"
+                           Foreground="{DynamicResource AppInkSecondary}" />
+                <TextBlock x:Name="VersionText" FontFamily="{DynamicResource AppMonoFont}"
+                           Foreground="{DynamicResource AppCopper}" />
+            </StackPanel>
+        </StackPanel>
+
+        <Border Height="1" Background="{DynamicResource AppHairline}" />
+
+        <!-- Описание -->
+        <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource AppInkSecondary}" LineHeight="20"
+                   Text="100% управляемая реализация 7-Zip / LZMA / ZIP — без нативных зависимостей, без P/Invoke. Кодеки: LZMA, LZMA2, PPMd, фильтр BCJ2, Copy; шифрование 7zAES и WinZip-AES; многотомные архивы; потоковые API для файлов и архивов больше 2 ГиБ." />
+
+        <!-- Метаданные -->
+        <StackPanel Spacing="4">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <TextBlock Text="Движок:" Width="72" Foreground="{DynamicResource AppInkSecondary}" />
+                <TextBlock Text="Ti-Soft.LzmaSharp" FontFamily="{DynamicResource AppMonoFont}"
+                           Foreground="{DynamicResource AppInk}" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <TextBlock Text="Лицензия:" Width="72" Foreground="{DynamicResource AppInkSecondary}" />
+                <TextBlock Text="MIT" Foreground="{DynamicResource AppInk}" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <TextBlock Text="Автор:" Width="72" Foreground="{DynamicResource AppInkSecondary}" />
+                <TextBlock Text="Artemy Sobolev" Foreground="{DynamicResource AppInk}" />
+            </StackPanel>
+        </StackPanel>
+
+        <Button Content="Закрыть" Click="OnClose" HorizontalAlignment="Right" MinWidth="90" />
+    </StackPanel>
+</Window>

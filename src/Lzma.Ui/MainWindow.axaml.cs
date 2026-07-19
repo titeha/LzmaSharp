@@ -37,6 +37,10 @@ public partial class MainWindow : Window
         _ = window.ShowDialog(this);
     }
 
+    // Окно «О программе» (логотип, версия, кодеки, лицензия).
+    private void OnOpenAbout(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        => new AboutWindow().ShowDialog(this);
+
     // Переключение тёмная/светлая тема на лету.
     private void OnToggleTheme(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {

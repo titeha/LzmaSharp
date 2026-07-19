@@ -19,6 +19,11 @@ public partial class App : Application
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             var window = new MainWindow();
+
+            // Иконка окна/задачи — логотип, отрисованный в bitmap (без внешних ассетов).
+            if (AppLogo.TryCreateWindowIcon() is { } icon)
+                window.Icon = icon;
+
             var picker = new AvaloniaArchivePicker(window);
             var passwordPrompt = new AvaloniaPasswordPrompt(window);
             var folderPicker = new AvaloniaFolderPicker(window);

@@ -55,6 +55,10 @@
                         ToolTip.Tip="Переключить тему (тёмная/светлая)">
                     <PathIcon Data="{StaticResource IconTheme}" />
                 </Button>
+                <Button Classes="tool" Click="OnOpenAbout"
+                        ToolTip.Tip="О программе">
+                    <PathIcon Data="{StaticResource IconInfo}" />
+                </Button>
                 <!-- Адресная строка: крошки + карандаш (браузер ФС) ↔ поле ввода пути (как в проводнике).
                      Весь блок скрыт во время операции (IsBusy). -->
                 <Panel VerticalAlignment="Center" IsVisible="{Binding !IsBusy}">
