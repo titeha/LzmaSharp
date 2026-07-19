@@ -756,7 +756,8 @@ public static partial class SevenZipArchiveDecoder
       out int bytesConsumed,
       IProgress<SevenZipProgress>? progress = null,
       System.Threading.CancellationToken token = default,
-      IProgress<string>? currentFile = null)
+      IProgress<string>? currentFile = null,
+      Func<string, bool>? shouldExtract = null)
   {
     ArgumentNullException.ThrowIfNull(options);
     bytesConsumed = 0;
@@ -792,7 +793,7 @@ public static partial class SevenZipArchiveDecoder
               streamsInfo!, packed.Span, folder, options, routing, out long w, folderProgress, tok);
           return (r, w);
         },
-        progress, token, currentFile);
+        progress, token, currentFile, shouldExtract);
   }
 
   // Делегат декода одного folder-а в маршрутизатор: span- и stream-пути извлечения отличаются
@@ -814,7 +815,8 @@ public static partial class SevenZipArchiveDecoder
       DecodeFolderToRouting decodeFolder,
       IProgress<SevenZipProgress>? progress,
       System.Threading.CancellationToken token,
-      IProgress<string>? currentFile)
+      IProgress<string>? currentFile,
+      Func<string, bool>? shouldExtract = null)
   {
     if (destinationDirectory is null)
       return SevenZipArchiveDecodeResult.InvalidData;
@@ -830,6 +832,21 @@ public static partial class SevenZipArchiveDecoder
     var entries = new SevenZipDecodedEntry[plan.Length];
     for (int pi = 0; pi < plan.Length; pi++)
       entries[pi] = new SevenZipDecodedEntry(plan[pi].Name, [], plan[pi].Kind == ExtractEntryKind.Directory);
+
+    // Частичное извлечение: shouldExtract != null → пишем на диск только записи, для которых предикат
+    // истинен. Folder с солид-подпотоками ДЕКОДИРУЕТСЯ ЦЕЛИКОМ (нельзя вытащить один файл из склейки),
+    // но невыбранные подпотоки маршрутизируются в Stream.Null; folder без единого выбранного файла
+    // не декодируется вовсе. Структурная валидация архива идёт по ВСЕМ записям, ФС-эффекты
+    // (конфликты/создание/метаданные) — только для выбранных.
+    bool filterActive = shouldExtract is not null;
+    bool[] selected = new bool[plan.Length];
+    bool[] folderHasSelected = new bool[folderCount];
+    for (int pi = 0; pi < plan.Length; pi++)
+    {
+      selected[pi] = !filterActive || shouldExtract!(entries[pi].Name);
+      if (selected[pi] && plan[pi].Kind == ExtractEntryKind.DataFile)
+        folderHasSelected[plan[pi].FolderIndex] = true;
+    }
 
     int fileCount = entries.Length;
     if (filesInfo.FileCount != (ulong)fileCount)
@@ -975,6 +992,9 @@ public static partial class SevenZipArchiveDecoder
       // чтобы не получить частичное извлечение после записи ранних файлов.
       for (int i = 0; i < entries.Length; i++)
       {
+        if (filterActive && !selected[i])
+          continue; // невыбранное на диск не пишем — ФС-конфликты для него не проверяем
+
         string fullPath = fullPaths[i];
         if (fullPath.Length == 0)
           return SevenZipArchiveDecodeResult.InvalidData;
@@ -1035,6 +1055,9 @@ public static partial class SevenZipArchiveDecoder
         // а сами данные пишем потоково ниже.
         for (int i = 0; i < entries.Length; i++)
         {
+          if (filterActive && !selected[i])
+            continue; // невыбранное не создаём
+
           string fullPath = fullPaths[i];
           if (fullPath.Length == 0)
             return SevenZipArchiveDecodeResult.InvalidData;
@@ -1081,7 +1104,15 @@ public static partial class SevenZipArchiveDecoder
         // маршрутизируется по его файлам (SubstreamRoutingWriter) с проверкой CRC на лету.
         long totalUnpackedBytes = 0;
         for (int i = 0; i < plan.Length; i++)
+        {
+          // При частичном извлечении учитываем только folder-ы, которые будут декодированы
+          // (включая их невыбранные подпотоки — folder декодируется целиком).
+          if (filterActive && plan[i].Kind == ExtractEntryKind.DataFile
+              && !folderHasSelected[plan[i].FolderIndex])
+            continue;
+
           totalUnpackedBytes += plan[i].Size;
+        }
 
         progress?.Report(new SevenZipProgress(0, totalUnpackedBytes));
 
@@ -1090,6 +1121,10 @@ public static partial class SevenZipArchiveDecoder
         for (int folder = 0; folder < folderCount; folder++)
         {
           token.ThrowIfCancellationRequested();
+
+          // Folder без единого выбранного файла не декодируем вовсе.
+          if (filterActive && !folderHasSelected[folder])
+            continue;
 
           var openStreams = new List<FileStream>();
           var segments = new List<SubstreamRoutingWriter.Segment>();
@@ -1102,11 +1137,21 @@ public static partial class SevenZipArchiveDecoder
               if (plan[i].Kind != ExtractEntryKind.DataFile || plan[i].FolderIndex != folder)
                 continue;
 
-              folderFirstName ??= plan[i].Name;
-              var fs = new FileStream(fullPaths[i], FileMode.Create, FileAccess.Write);
-              openStreams.Add(fs);
-              createdFiles.Add(fullPaths[i]);
-              segments.Add(new SubstreamRoutingWriter.Segment(fs, plan[i].Size, plan[i].HasCrc, plan[i].ExpectedCrc));
+              // Выбранный подпоток → файл на диск; невыбранный → Stream.Null (folder всё равно
+              // декодируется целиком, но невыбранные данные отбрасываются). Все подпотоки folder-а
+              // ОБЯЗАНЫ присутствовать в сегментах по порядку, иначе раскладка не сойдётся.
+              if (!filterActive || selected[i])
+              {
+                folderFirstName ??= plan[i].Name;
+                var fs = new FileStream(fullPaths[i], FileMode.Create, FileAccess.Write);
+                openStreams.Add(fs);
+                createdFiles.Add(fullPaths[i]);
+                segments.Add(new SubstreamRoutingWriter.Segment(fs, plan[i].Size, plan[i].HasCrc, plan[i].ExpectedCrc));
+              }
+              else
+              {
+                segments.Add(new SubstreamRoutingWriter.Segment(Stream.Null, plan[i].Size, plan[i].HasCrc, plan[i].ExpectedCrc));
+              }
             }
 
             if (folderFirstName is not null)
@@ -1169,6 +1214,9 @@ public static partial class SevenZipArchiveDecoder
 
       for (int i = 0; i < fileCount; i++)
       {
+        if (filterActive && !selected[i])
+          continue; // метаданные применяем только к извлечённым записям
+
         string fullPath = fullPaths[i];
         if (fullPath.Length == 0)
           return SevenZipArchiveDecodeResult.InvalidData;
@@ -1319,7 +1367,8 @@ public static partial class SevenZipArchiveDecoder
       bool overwrite = false,
       IProgress<SevenZipProgress>? progress = null,
       System.Threading.CancellationToken token = default,
-      IProgress<string>? currentFile = null)
+      IProgress<string>? currentFile = null,
+      Func<string, bool>? shouldExtract = null)
   {
     ArgumentNullException.ThrowIfNull(archive);
     ArgumentNullException.ThrowIfNull(options);
@@ -1342,7 +1391,7 @@ public static partial class SevenZipArchiveDecoder
               streamsInfo!, archive, packedBaseOffset, folder, options, routing, out long w, folderProgress, tok);
           return (r, w);
         },
-        progress, token, currentFile);
+        progress, token, currentFile, shouldExtract);
   }
 
   private static SevenZipArchiveDecodeResult TryGetFolderFinalOutSize(
