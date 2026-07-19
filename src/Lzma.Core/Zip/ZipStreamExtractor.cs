@@ -202,22 +202,20 @@ public static class ZipStreamExtractor
       Stream archive, ZipStreamEntry entry, Stream file,
       IProgress<SevenZipProgress>? progress, long total, long[] processed)
   {
-    // Потоковый ВХОД (сжатый член >2 ГиБ) пока не поддержан — следующий шаг инкр. Deflate.
-    if (entry.CompressedSize > int.MaxValue)
-      return ZipExtractResult.InvalidData;
-
-    byte[] compressed = new byte[entry.CompressedSize];
+    // Потоковый ВХОД: читаем ровно CompressedSize байт прямо из архива (позиция уже на начале данных),
+    // выход пишем через окно. Ни сжатые, ни распакованные данные целиком в памяти не держим → член
+    // любого размера, в т.ч. >2 ГиБ.
+    var crcStream = new Crc32WriteStream(file, progress, total, processed);
+    DeflateDecodeResult result;
+    long written;
     try
     {
-      archive.ReadExactly(compressed, 0, (int)entry.CompressedSize);
+      result = DeflateDecoder.Decode(archive, entry.CompressedSize, crcStream, deflate64: false, out written);
     }
     catch (EndOfStreamException)
     {
       return ZipExtractResult.InvalidData;
     }
-
-    var crcStream = new Crc32WriteStream(file, progress, total, processed);
-    DeflateDecodeResult result = DeflateDecoder.Decode(compressed, crcStream, deflate64: false, out long written);
 
     if (result != DeflateDecodeResult.Ok || written != entry.UncompressedSize)
       return ZipExtractResult.InvalidData;
