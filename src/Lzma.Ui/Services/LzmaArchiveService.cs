@@ -261,15 +261,18 @@ public sealed class LzmaArchiveService : IArchiveService
       string destinationPath,
       System.IProgress<SevenZipProgress>? progress = null,
       System.Threading.CancellationToken token = default,
-      System.IProgress<string>? currentFile = null)
+      System.IProgress<string>? currentFile = null,
+      string? password = null)
   {
     return Task.Run(() =>
     {
+      // Пароль (если задан) → UTF-8 байты (WinZip-AES, совместимо с 7-Zip).
+      byte[]? passwordBytes = password is null ? null : System.Text.Encoding.UTF8.GetBytes(password);
       try
       {
         // Пишем ZIP прямо в целевой файл потоком — ни файлы, ни архив в памяти не держим.
         using var output = new System.IO.FileStream(destinationPath, System.IO.FileMode.Create, System.IO.FileAccess.ReadWrite);
-        return ZipStreamWriter.Write(entries, output, progress, token, currentFile);
+        return ZipStreamWriter.Write(entries, output, progress, token, currentFile, maxDegreeOfParallelism: 0, passwordBytes);
       }
       catch (System.IO.IOException)
       {
@@ -278,6 +281,11 @@ public sealed class LzmaArchiveService : IArchiveService
       catch (System.UnauthorizedAccessException)
       {
         return ZipWriteResult.InvalidData;
+      }
+      finally
+      {
+        if (passwordBytes is not null)
+          System.Security.Cryptography.CryptographicOperations.ZeroMemory(passwordBytes);
       }
     }, token);
   }
@@ -311,10 +319,13 @@ public sealed class LzmaArchiveService : IArchiveService
       string destination,
       System.Threading.CancellationToken token = default,
       System.IProgress<string>? currentFile = null,
-      System.IProgress<SevenZipProgress>? progress = null)
+      System.IProgress<SevenZipProgress>? progress = null,
+      string? password = null)
   {
     return Task.Run(() =>
     {
+      // Пароль (если задан) → UTF-8 байты (совместимо с 7-Zip WinZip-AES).
+      byte[]? passwordBytes = password is null ? null : System.Text.Encoding.UTF8.GetBytes(password);
       try
       {
         // Читаем архив прямо из файла потоком — в память его не грузим (поддержка > 2 ГиБ / ZIP64).
@@ -324,7 +335,7 @@ public sealed class LzmaArchiveService : IArchiveService
         if (read != ZipReadResult.Ok)
           return ZipExtractResult.InvalidData; // повреждён / шифрование / неизвестный метод
 
-        return ZipStreamExtractor.ExtractToDirectory(archive, entries, destination, overwrite: false, currentFile, token, progress);
+        return ZipStreamExtractor.ExtractToDirectory(archive, entries, destination, overwrite: false, currentFile, token, progress, passwordBytes);
       }
       catch (System.IO.IOException)
       {
@@ -334,7 +345,40 @@ public sealed class LzmaArchiveService : IArchiveService
       {
         return ZipExtractResult.IOError;
       }
+      finally
+      {
+        if (passwordBytes is not null)
+          System.Security.Cryptography.CryptographicOperations.ZeroMemory(passwordBytes);
+      }
     }, token);
+  }
+
+  /// <inheritdoc />
+  public Task<bool> IsZipEncryptedAsync(string archivePath)
+  {
+    return Task.Run(() =>
+    {
+      try
+      {
+        using System.IO.Stream archive = OpenArchiveReadStream(archivePath);
+        if (ZipStreamReader.ReadCentralDirectory(archive, out ZipStreamEntry[] entries) != ZipReadResult.Ok)
+          return false;
+
+        foreach (ZipStreamEntry e in entries)
+          if (e.IsEncrypted)
+            return true;
+
+        return false;
+      }
+      catch (System.IO.IOException)
+      {
+        return false;
+      }
+      catch (System.UnauthorizedAccessException)
+      {
+        return false;
+      }
+    });
   }
 
   /// <inheritdoc />

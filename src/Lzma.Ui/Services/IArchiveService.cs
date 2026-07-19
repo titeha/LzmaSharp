@@ -176,8 +176,16 @@ public interface IArchiveService
       string destinationPath,
       System.IProgress<SevenZipProgress>? progress = null,
       System.Threading.CancellationToken token = default,
-      System.IProgress<string>? currentFile = null)
+      System.IProgress<string>? currentFile = null,
+      string? password = null)
       => Task.FromResult(ZipWriteResult.InvalidData);
+
+  /// <summary>
+  /// Зашифрован ли ZIP по пути (любой член WinZip-AES) — для запроса пароля перед извлечением.
+  /// По умолчанию — <see langword="false"/>.
+  /// </summary>
+  Task<bool> IsZipEncryptedAsync(string archivePath)
+      => Task.FromResult(false);
 
   /// <summary>
   /// ПОТОКОВЫЙ обзор ZIP по пути: читает центральный каталог (имена/каталоги/размеры) БЕЗ загрузки
@@ -195,7 +203,8 @@ public interface IArchiveService
       string destination,
       System.Threading.CancellationToken token = default,
       System.IProgress<string>? currentFile = null,
-      System.IProgress<SevenZipProgress>? progress = null)
+      System.IProgress<SevenZipProgress>? progress = null,
+      string? password = null)
       => Task.FromResult(ZipExtractResult.IOError);
 
   /// <summary>

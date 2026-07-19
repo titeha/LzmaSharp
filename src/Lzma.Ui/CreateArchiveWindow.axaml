@@ -44,6 +44,11 @@
         <CheckBox Content="Формат ZIP (вместо 7z)" IsChecked="{Binding UseZipFormat}"
                   ToolTip.Tip="Создать .zip (Store/Deflate). Настройки 7z — метод/потоки/словарь/тома — не применяются." />
 
+        <!-- Шифрование ZIP паролем (WinZip-AES, AES-256) — только при формате ZIP. -->
+        <CheckBox Content="Шифровать паролем (AES-256)" IsChecked="{Binding EncryptZip}"
+                  IsVisible="{Binding UseZipFormat}" Margin="18,0,0,0"
+                  ToolTip.Tip="Зашифровать ZIP паролем (WinZip-AES). Пароль спросим перед созданием." />
+
         <Grid ColumnDefinitions="120,*" RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="8" ColumnSpacing="10"
               IsEnabled="{Binding !UseZipFormat}">
             <TextBlock Grid.Row="0" Grid.Column="0" Text="Метод" VerticalAlignment="Center"

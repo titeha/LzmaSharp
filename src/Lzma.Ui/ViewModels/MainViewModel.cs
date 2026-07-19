@@ -427,6 +427,15 @@ public sealed class MainViewModel : ObservableObject
     set => Set(ref _useZipFormat, value);
   }
 
+  private bool _encryptZip;
+
+  /// <summary>Шифровать создаваемый ZIP паролем (WinZip-AES, AES-256). Применяется только при <see cref="UseZipFormat"/>.</summary>
+  public bool EncryptZip
+  {
+    get => _encryptZip;
+    set => Set(ref _encryptZip, value);
+  }
+
   /// <summary>Доступное число потоков сжатия (Авто + степени двойки до числа ядер).</summary>
   public IReadOnlyList<ThreadCountOption> ThreadCountOptions { get; } = BuildThreadCountOptions();
 
@@ -1125,6 +1134,18 @@ public sealed class MainViewModel : ObservableObject
     if (destination is null)
       return; // выбор папки отменён
 
+    // Зашифрованный ZIP (WinZip-AES) — спрашиваем пароль ДО начала; отмена — не извлекаем.
+    string? password = null;
+    if (await _archiveService.IsZipEncryptedAsync(archivePath))
+    {
+      password = await _passwordPrompt.RequestAsync(Path.GetFileName(archivePath), previousAttemptFailed: false);
+      if (password is null)
+      {
+        StatusMessage = "Извлечение отменено: для зашифрованного архива нужен пароль.";
+        return;
+      }
+    }
+
     IProgress<SevenZipProgress> progress = CreateProgress();
     var currentFile = new Progress<string>(name => CurrentFileStatus = FormatExtractingFileStatus(name));
 
@@ -1132,8 +1153,10 @@ public sealed class MainViewModel : ObservableObject
     {
       try
       {
-        ZipExtractResult result = await _archiveService.ExtractZipFileAsync(archivePath, destination, token, currentFile, progress);
-        StatusMessage = ZipExtractStatus(result, destination);
+        ZipExtractResult result = await _archiveService.ExtractZipFileAsync(archivePath, destination, token, currentFile, progress, password);
+        StatusMessage = result == ZipExtractResult.WrongPassword
+            ? "Неверный пароль для зашифрованного ZIP."
+            : ZipExtractStatus(result, destination);
       }
       finally { CurrentFileStatus = null; }
     });
@@ -1487,6 +1510,18 @@ public sealed class MainViewModel : ObservableObject
   // Потоковое создание ZIP из отсканированных ссылок на файлы (Store/Deflate, ZIP64 при переполнении).
   private async Task CreateZipStreamingAsync(IReadOnlyList<PickedFileRef> files, string path)
   {
+    // Шифрование ZIP (WinZip-AES): спрашиваем пароль ДО начала операции; отмена — не создаём.
+    string? password = null;
+    if (EncryptZip)
+    {
+      password = _createPasswordPrompt is null ? null : await _createPasswordPrompt.RequestNewPasswordAsync();
+      if (password is null)
+      {
+        StatusMessage = "Создание отменено: для шифрования нужен пароль.";
+        return;
+      }
+    }
+
     IProgress<SevenZipProgress> progress = CreateProgress();
     var currentFile = new Progress<string>(name => CurrentFileStatus = $"Сжатие: {name}");
 
@@ -1504,7 +1539,7 @@ public sealed class MainViewModel : ObservableObject
       ZipWriteResult result;
       try
       {
-        result = await _archiveService.CreateZipToFileAsync(entries, path, progress, token, currentFile);
+        result = await _archiveService.CreateZipToFileAsync(entries, path, progress, token, currentFile, password);
       }
       finally
       {
