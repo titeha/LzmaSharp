@@ -53,7 +53,7 @@
                     <PathIcon Data="{StaticResource IconUp}" />
                 </Button>
                 <Button Classes="tool" Click="OnOpenArchiveInfo"
-                        IsVisible="{Binding HasArchive}"
+                        IsVisible="{Binding CanShowArchiveInfo}"
                         ToolTip.Tip="Информация об архиве: коэффициент сжатия, размеры, число файлов">
                     <PathIcon Data="{StaticResource IconStats}" />
                 </Button>

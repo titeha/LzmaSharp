@@ -202,6 +202,7 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(CanExtractSelected));
         OnPropertyChanged(nameof(CanEditPath));
         OnPropertyChanged(nameof(ShowAddressField));
+        OnPropertyChanged(nameof(CanShowArchiveInfo));
         IsEditingPath = false; // смена режима гасит ввод пути
       }
     }
@@ -410,9 +411,15 @@ public sealed class MainViewModel : ObservableObject
     set
     {
       if (Set(ref _selectedTreeNode, value))
+      {
         OnPropertyChanged(nameof(AddressText));
+        OnPropertyChanged(nameof(CanShowArchiveInfo));
+      }
     }
   }
+
+  /// <summary>Доступна ли «Информация об архиве»: открыт архив ИЛИ в дереве выбран файл-архив.</summary>
+  public bool CanShowArchiveInfo => HasArchive || SelectedTreeNode is { IsArchiveFile: true };
 
   /// <summary>«Хлебные крошки» текущего пути (корень → текущая папка). Каждая крошка кликабельна.</summary>
   public ObservableCollection<PathCrumb> Breadcrumbs { get; } = [];
@@ -2185,6 +2192,50 @@ public sealed class MainViewModel : ObservableObject
     string name = Title.EndsWith(suffix, StringComparison.Ordinal) ? Title[..^suffix.Length] : Title;
 
     return new ArchiveInfo(name, files, folders, uncompressed, _archiveCompressedSize);
+  }
+
+  /// <summary>
+  /// Сводка по архиву для окна «Информация»: если архив ОТКРЫТ — из его дерева; иначе, если в дереве ФС
+  /// ВЫБРАН файл-архив — читаем его листинг (метаданные, без распаковки) по пути. null — недоступно.
+  /// </summary>
+  public async Task<ArchiveInfo?> BuildArchiveInfoAsync()
+  {
+    if (HasArchive)
+      return BuildArchiveInfo();
+
+    if (SelectedTreeNode is not { IsArchiveFile: true, FullPath: { } path } node)
+      return null;
+
+    long compressed = node.Size; // размер файла-архива на диске
+    Node? root = null;
+
+    try
+    {
+      if (await _archiveService.IsZipFileAsync(path))
+      {
+        ZipListOutcome zip = await _archiveService.OpenZipFromFileAsync(path);
+        if (zip.Result == ZipReadResult.Ok)
+          root = BuildTree(zip.Entries);
+      }
+      else
+      {
+        ArchiveListOutcome seven = await _archiveService.OpenFromFileAsync(path);
+        if (seven.Result == SevenZipArchiveDecodeResult.Ok)
+          root = BuildTree(seven.Entries);
+      }
+    }
+    catch (Exception)
+    {
+      root = null; // содержимое недоступно (шифрование / закодированный заголовок / ошибка чтения)
+    }
+
+    if (root is null)
+      return new ArchiveInfo(node.Name, 0, 0, 0, compressed); // покажем хотя бы имя и размер
+
+    int files = 0, folders = 0;
+    long uncompressed = 0;
+    CountTree(root, ref files, ref folders, ref uncompressed);
+    return new ArchiveInfo(node.Name, files, folders, uncompressed, compressed);
   }
 
   // Рекурсивно считает файлы/папки и суммарный исходный размер по узловому дереву архива.
