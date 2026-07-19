@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Security.Cryptography;
 using System.Text;
 
 using Lzma.Core.Checksums;
@@ -85,9 +86,6 @@ public static class ZipStreamWriter
     {
       if (e is null || string.IsNullOrEmpty(e.Name) || e.Name.Contains('\0'))
         return ZipWriteResult.InvalidData;
-
-      if (!e.IsDirectory && e.Length > largeThreshold && encrypt)
-        return ZipWriteResult.NotSupported; // шифрование члена > 2 ГиБ пока не поддержано (потоковый AES — отдельный шаг)
     }
 
     long total = 0;
@@ -117,14 +115,16 @@ public static class ZipStreamWriter
         continue;
       }
 
-      // Большой файл (> 2 ГиБ) — отдельный потоковый путь (в память не читаем). Шифрование отложено:
-      // такие члены отсеяны выше как NotSupported, поэтому здесь encrypt для большого файла невозможен.
+      // Большой файл (> 2 ГиБ) — отдельный потоковый путь (в память не читаем): без шифрования —
+      // Deflate прямо в выход; с шифрованием — Deflate → потоковый WinZip-AES (CTR+HMAC) в выход.
       if (entries[i].Length > largeThreshold)
       {
         ZipStreamingEntry big = entries[i];
         currentFile?.Report(big.Name.Replace('\\', '/'));
 
-        ZipWriteResult r = WriteLargeEntryStreaming(output, central, big, zip64SizeThreshold, token);
+        ZipWriteResult r = encrypt
+            ? WriteLargeEncryptedEntryStreaming(output, central, big, password!, zip64SizeThreshold, token)
+            : WriteLargeEntryStreaming(output, central, big, zip64SizeThreshold, token);
         if (r != ZipWriteResult.Ok)
           return r;
 
@@ -318,6 +318,124 @@ public static class ZipStreamWriter
 
     central.Add(new CentralRecord(nameBytes, method, crc, compSize, uncompSize, localOffset, false, zip64Offset, zip64Sizes, Encrypted: false));
     return ZipWriteResult.Ok;
+  }
+
+  /// <summary>
+  /// Пишет большой ЗАШИФРОВАННЫЙ файл (> 2 ГиБ) потоково: local header (метод 99, extra 0x9901, заглушки
+  /// CRC/compSize) → salt+pwVerify → Deflate прямо в потоковый WinZip-AES (CTR+HMAC) в выход → authCode →
+  /// seek назад и патч CRC(AE-1, несжатых)/compSize. Ни файл, ни сжатые/шифрованные данные в памяти не
+  /// держим. Формат члена: <c>[salt][pwVerify][ciphertext][authCode]</c>, метод всегда Deflate.
+  /// </summary>
+  private static ZipWriteResult WriteLargeEncryptedEntryStreaming(
+      Stream output, List<CentralRecord> central, ZipStreamingEntry e, byte[] password, long zip64SizeThreshold, CancellationToken token)
+  {
+    string name = e.Name.Replace('\\', '/');
+    byte[] nameBytes = Encoding.UTF8.GetBytes(name);
+    long uncompSize = e.Length;
+    long localOffset = output.Position;
+    bool zip64Sizes = uncompSize >= zip64SizeThreshold;
+    bool zip64Offset = localOffset >= Zip64Sentinel32;
+    const ushort actualMethod = MethodDeflate;
+
+    const WinZipAes.Strength strength = WinZipAes.Strength.Aes256;
+    int saltSize = WinZipAes.SaltSize(strength);
+    byte[] salt = new byte[saltSize];
+    RandomNumberGenerator.Fill(salt);
+    WinZipAes.DeriveKeys(password, salt, strength, out byte[] aesKey, out byte[] macKey, out byte[] pwVerify);
+
+    try
+    {
+      // --- local header (метод 99, шифрование, extra 0x9901) ---
+      ushort extraLen = (ushort)((zip64Sizes ? 4 + 16 : 0) + AesExtraTotalSize);
+
+      WriteU32(output, LocalFileSignature);
+      WriteU16(output, VersionAes);
+      WriteU16(output, (ushort)(FlagUtf8 | FlagEncrypted));
+      WriteU16(output, WinZipAes.EncryptionMethod); // 99
+      WriteU16(output, 0);           // mod time
+      WriteU16(output, DosDate1980); // mod date
+      WriteU32(output, 0);                                                // crc (AE-1, несжатых) — патчим
+      WriteU32(output, zip64Sizes ? Zip64Sentinel32 : 0);                 // compSize — патчим
+      WriteU32(output, zip64Sizes ? Zip64Sentinel32 : (uint)uncompSize);  // uncompSize
+      WriteU16(output, (ushort)nameBytes.Length);
+      WriteU16(output, extraLen);
+      output.Write(nameBytes, 0, nameBytes.Length);
+
+      long compU64Pos = -1;
+      if (zip64Sizes)
+      {
+        WriteU16(output, Zip64ExtraId);
+        WriteU16(output, 16);
+        WriteU64(output, (ulong)uncompSize);
+        compU64Pos = output.Position;
+        WriteU64(output, 0); // comp — патчим
+      }
+
+      WriteAesExtra(output, actualMethod); // 0x9901
+
+      long dataStart = output.Position;
+
+      // Член: [salt][pwVerify][ciphertext][authCode].
+      output.Write(salt, 0, salt.Length);
+      output.Write(pwVerify, 0, pwVerify.Length);
+
+      uint crc;
+      byte[] authCode;
+      try
+      {
+        using Stream source = e.OpenRead();
+        var crcSource = new Crc32ReadStream(source);
+        using (var aesStream = new WinZipAesEncryptWriteStream(output, aesKey, macKey))
+        {
+          DeflateEncoder.Encode(crcSource, uncompSize, aesStream);
+          authCode = aesStream.GetAuthenticationCode();
+        }
+
+        if (crcSource.BytesRead != uncompSize)
+          return ZipWriteResult.InvalidData; // источник короче заявленной длины
+        crc = crcSource.Crc;
+      }
+      catch (OperationCanceledException)
+      {
+        throw;
+      }
+      catch (Exception)
+      {
+        return ZipWriteResult.InvalidData; // ошибка чтения источника
+      }
+
+      token.ThrowIfCancellationRequested();
+
+      output.Write(authCode, 0, authCode.Length);
+
+      long dataEnd = output.Position;
+      long compSize = dataEnd - dataStart; // salt + pwVerify + ciphertext + authCode
+
+      // --- патч CRC + compSize ---
+      output.Position = localOffset + 14;
+      WriteU32(output, crc);
+
+      if (zip64Sizes)
+      {
+        output.Position = compU64Pos;
+        WriteU64(output, (ulong)compSize);
+      }
+      else
+      {
+        output.Position = localOffset + 18;
+        WriteU32(output, (uint)compSize);
+      }
+
+      output.Position = dataEnd;
+
+      central.Add(new CentralRecord(nameBytes, actualMethod, crc, compSize, uncompSize, localOffset, false, zip64Offset, zip64Sizes, Encrypted: true));
+      return ZipWriteResult.Ok;
+    }
+    finally
+    {
+      CryptographicOperations.ZeroMemory(aesKey);
+      CryptographicOperations.ZeroMemory(macKey);
+    }
   }
 
   // Read-through поток: считает CRC-32 прочитанных байт и их число. Позволяет получить CRC входа,
