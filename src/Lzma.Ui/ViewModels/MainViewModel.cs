@@ -48,6 +48,9 @@ public sealed class MainViewModel : ObservableObject
   private byte[]? _archiveBytes;
   private string? _archivePassword;
 
+  // Сжатый размер открытого архива (байты in-memory либо размер файла) — для окна «Информация».
+  private long _archiveCompressedSize;
+
   // Распакованные элементы открытого ZIP-архива (in-memory); null — открыт не-ZIP либо архив не
   // открыт. Если задан — источник для распаковки ZIP на диск.
   private Lzma.Core.Zip.ZipEntry[]? _zipEntries;
@@ -1136,6 +1139,7 @@ public sealed class MainViewModel : ObservableObject
       _archivePath = null;
       _zipEntries = outcome.Entries; // источник для распаковки ZIP на диск
       _zipArchivePath = null;
+      _archiveCompressedSize = picked.Bytes.LongLength;
       StatusMessage = outcome.Entries.Length == 0 ? "Архив пуст." : null;
       return;
     }
@@ -1182,6 +1186,7 @@ public sealed class MainViewModel : ObservableObject
       _archivePath = archivePath; // источник для потокового извлечения
       _zipEntries = null;
       _zipArchivePath = null;
+      _archiveCompressedSize = TryFileLength(archivePath);
       StatusMessage = outcome.Entries.Length == 0 ? "Архив пуст." : null;
       return;
     }
@@ -1211,6 +1216,7 @@ public sealed class MainViewModel : ObservableObject
       _archivePath = null;
       _zipEntries = null;
       _zipArchivePath = archivePath; // источник для потокового ZIP-извлечения
+      _archiveCompressedSize = TryFileLength(archivePath);
       StatusMessage = outcome.Entries.Length == 0 ? "Архив пуст." : null;
       return;
     }
@@ -1237,6 +1243,15 @@ public sealed class MainViewModel : ObservableObject
     _archivePath = null; // in-memory открытие — потоковый источник не используем
     _zipEntries = null;  // открыт 7z — сбрасываем возможное состояние ZIP
     _zipArchivePath = null;
+    _archiveCompressedSize = bytes.LongLength;
+  }
+
+  // Размер файла в байтах (для сжатого размера при потоковом открытии); при ошибке — 0.
+  private static long TryFileLength(string path)
+  {
+    try { return new System.IO.FileInfo(path).Length; }
+    catch (System.IO.IOException) { return 0; }
+    catch (System.UnauthorizedAccessException) { return 0; }
   }
 
   // Извлечение содержимого открытого архива в выбранную папку.
@@ -2154,6 +2169,40 @@ public sealed class MainViewModel : ObservableObject
         : "Не удалось открыть: файл повреждён, не является поддерживаемым 7z-архивом "
           + "либо использует неподдерживаемое шифрование/фильтр (например, .exe под AES). "
           + "Такой архив можно открыть в 7-Zip.";
+  }
+
+  /// <summary>Сводка по открытому архиву для окна «Информация» (null — архив не открыт).</summary>
+  public ArchiveInfo? BuildArchiveInfo()
+  {
+    if (!HasArchive)
+      return null;
+
+    int files = 0, folders = 0;
+    long uncompressed = 0;
+    CountTree(_root, ref files, ref folders, ref uncompressed);
+
+    const string suffix = " — LzmaSharp";
+    string name = Title.EndsWith(suffix, StringComparison.Ordinal) ? Title[..^suffix.Length] : Title;
+
+    return new ArchiveInfo(name, files, folders, uncompressed, _archiveCompressedSize);
+  }
+
+  // Рекурсивно считает файлы/папки и суммарный исходный размер по узловому дереву архива.
+  private static void CountTree(Node node, ref int files, ref int folders, ref long size)
+  {
+    foreach (Node child in node.Children.Values)
+    {
+      if (child.IsDirectory)
+      {
+        folders++;
+        CountTree(child, ref files, ref folders, ref size);
+      }
+      else
+      {
+        files++;
+        size += child.Size;
+      }
+    }
   }
 
   // Строит виртуальное дерево из декодированных записей (in-memory открытие).

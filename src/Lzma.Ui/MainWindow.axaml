@@ -52,6 +52,11 @@
                         ToolTip.Tip="Вверх — на уровень выше (или выход из архива)">
                     <PathIcon Data="{StaticResource IconUp}" />
                 </Button>
+                <Button Classes="tool" Click="OnOpenArchiveInfo"
+                        IsVisible="{Binding HasArchive}"
+                        ToolTip.Tip="Информация об архиве: коэффициент сжатия, размеры, число файлов">
+                    <PathIcon Data="{StaticResource IconStats}" />
+                </Button>
                 <Button Classes="tool" Click="OnToggleTheme"
                         ToolTip.Tip="Переключить тему (тёмная/светлая)">
                     <PathIcon Data="{StaticResource IconTheme}" />

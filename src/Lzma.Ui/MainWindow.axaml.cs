@@ -41,6 +41,13 @@ public partial class MainWindow : Window
     private void OnOpenAbout(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         => new AboutWindow().ShowDialog(this);
 
+    // Окно «Информация об архиве»: сводка по открытому архиву (коэффициент/размеры/счётчики).
+    private void OnOpenArchiveInfo(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (DataContext is MainViewModel viewModel && viewModel.BuildArchiveInfo() is { } info)
+            _ = new ArchiveInfoWindow { DataContext = info }.ShowDialog(this);
+    }
+
     // Переключение тёмная/светлая тема на лету.
     private void OnToggleTheme(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {

@@ -1,0 +1,85 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:models="using:Lzma.Ui.Models"
+        mc:Ignorable="d" d:DesignWidth="440" d:DesignHeight="440"
+        x:Class="Lzma.Ui.ArchiveInfoWindow"
+        x:DataType="models:ArchiveInfo"
+        Title="Информация об архиве"
+        Width="440" SizeToContent="Height"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False"
+        Background="{DynamicResource AppBg}"
+        FontFamily="{DynamicResource AppUiFont}">
+
+    <StackPanel Margin="24" Spacing="18">
+
+        <!-- Заголовок: значок архива + имя -->
+        <StackPanel Orientation="Horizontal" Spacing="12">
+            <PathIcon Data="{StaticResource IconArchive}" Width="26" Height="26"
+                      Foreground="{DynamicResource AppCopper}" VerticalAlignment="Center" />
+            <TextBlock Text="{Binding Name}" FontSize="18" FontWeight="SemiBold"
+                       Foreground="{DynamicResource AppInk}" VerticalAlignment="Center"
+                       TextTrimming="CharacterEllipsis" />
+        </StackPanel>
+
+        <!-- Главные метрики: коэффициент + экономия -->
+        <UniformGrid Columns="2" >
+            <Border Background="{DynamicResource AppSurfaceRaised}" CornerRadius="10" Padding="16,12" Margin="0,0,6,0">
+                <StackPanel Spacing="2">
+                    <TextBlock Text="{Binding RatioDisplay}" FontSize="30" FontWeight="SemiBold"
+                               Foreground="{DynamicResource AppCopper}" FontFamily="{DynamicResource AppMonoFont}" />
+                    <TextBlock Text="коэффициент сжатия" FontSize="12" Foreground="{DynamicResource AppInkSecondary}" />
+                </StackPanel>
+            </Border>
+            <Border Background="{DynamicResource AppSurfaceRaised}" CornerRadius="10" Padding="16,12" Margin="6,0,0,0">
+                <StackPanel Spacing="2">
+                    <TextBlock Text="{Binding SavedDisplay}" FontSize="30" FontWeight="SemiBold"
+                               Foreground="{DynamicResource AppSteel}" FontFamily="{DynamicResource AppMonoFont}" />
+                    <TextBlock Text="экономия места" FontSize="12" Foreground="{DynamicResource AppInkSecondary}" />
+                </StackPanel>
+            </Border>
+        </UniformGrid>
+
+        <!-- Полоса: доля архива от оригинала -->
+        <StackPanel Spacing="6">
+            <ProgressBar Minimum="0" Maximum="100" Value="{Binding PercentOfOriginal}" Height="10"
+                         Foreground="{DynamicResource AppCopper}" />
+            <TextBlock FontSize="12" Foreground="{DynamicResource AppInkSecondary}">
+                <Run Text="Архив занимает" />
+                <Run Text="{Binding PercentOfOriginalDisplay}" Foreground="{DynamicResource AppCopper}" FontWeight="SemiBold" />
+                <Run Text="от исходного размера" />
+            </TextBlock>
+        </StackPanel>
+
+        <Border Height="1" Background="{DynamicResource AppHairline}" />
+
+        <!-- Детали -->
+        <StackPanel Spacing="8">
+            <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Text="Исходный размер" Foreground="{DynamicResource AppInkSecondary}" />
+                <TextBlock Grid.Column="1" Text="{Binding UncompressedDisplay}" Foreground="{DynamicResource AppInk}"
+                           FontFamily="{DynamicResource AppMonoFont}" />
+            </Grid>
+            <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Text="Размер архива" Foreground="{DynamicResource AppInkSecondary}" />
+                <TextBlock Grid.Column="1" Text="{Binding CompressedDisplay}" Foreground="{DynamicResource AppInk}"
+                           FontFamily="{DynamicResource AppMonoFont}" />
+            </Grid>
+            <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Text="Файлов" Foreground="{DynamicResource AppInkSecondary}" />
+                <TextBlock Grid.Column="1" Text="{Binding FileCountDisplay}" Foreground="{DynamicResource AppInk}"
+                           FontFamily="{DynamicResource AppMonoFont}" />
+            </Grid>
+            <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Text="Папок" Foreground="{DynamicResource AppInkSecondary}" />
+                <TextBlock Grid.Column="1" Text="{Binding FolderCountDisplay}" Foreground="{DynamicResource AppInk}"
+                           FontFamily="{DynamicResource AppMonoFont}" />
+            </Grid>
+        </StackPanel>
+
+        <Button Content="Закрыть" Click="OnClose" HorizontalAlignment="Right" MinWidth="90" />
+    </StackPanel>
+</Window>
