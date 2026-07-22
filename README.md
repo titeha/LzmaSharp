@@ -11,6 +11,7 @@
 - этап 1 — базовый decoder-path 7z без AES;
 - этап 1.5 — AES / 7zAES decoder-path;
 - этап 1.6 — экспериментальный GOST decoder-path;
+  (writer для internal LzmaSharp GOST-format добавлен позже);
 - этап 2 — запись данных и архивов; развитие собственного LZMA/LZMA2 энкодера.
 
 Полная карта этапов — в [`docs/ROADMAP.md`](docs/ROADMAP.md). Текущий статус writer/encoder —
@@ -23,7 +24,14 @@
 Decoder-path поддерживает методы и фильтры: `Copy`, `LZMA`, `LZMA2`, `Delta`, `Swap2`,
 `Swap4`, BCJ-фильтры (`x86`, `ARM`, `ARMT`, `ARM64`, `PPC`, `SPARC`, `IA64`), `BCJ2`,
 `BZip2`, `PPMd`, `Deflate`, `Deflate64`. Также поддержаны AES-сценарии чтения и
-экспериментальная GOST-ветка (только чтение).
+экспериментальная GOST-ветка (чтение и запись; private format LzmaSharp).
+
+> GOST-формат LzmaSharp является экспериментальным и предназначен для использования
+> внутри LzmaSharp. Внутренний LzmaSharp GOST-format **не совместим** со стандартным
+> 7-Zip и использует project-private method id. Ciphertext и существенные метаданные
+> не содержат cryptographic authentication tag; CRC применяется только для integrity-
+> проверки, а не как криптографический MAC. Не рекомендуется для production или
+> защищённого долговременного хранения.
 
 Контур распаковки валидирует пути вывода до записи на диск: отклоняются абсолютные и
 небезопасные пути, выход за пределы целевой директории, зарезервированные имена Windows,
@@ -43,12 +51,15 @@ mixed-сценарии, безопасные вложенные `/`-paths, а т
 (см. [`docs/STAGE2_WRITER_STATUS.md`](docs/STAGE2_WRITER_STATUS.md) и
 [`docs/ENCODER_MVP_PLAN.md`](docs/ENCODER_MVP_PLAN.md)).
 
-**Потоковая запись больших архивов** (`SevenZipArchiveWriter.Build*ArchiveToStream(...)`): пишет
-прямо в `Stream`, не держа файл/архив в памяти (поддержка **> 2 ГиБ**). LZMA2 — **многопоточно**
-(параллельно по блокам и по файлам-волнам), результат байт-в-байт с последовательным; PPMd/Copy —
-пофайлово. **`Auto`** выбирает кодек пофайлово (текст → PPMd, несжимаемое по энтропии → Copy-store,
-иначе → LZMA2); архивы со смешанными кодерами читаются настоящим 7-Zip. Прикладной слой (UI) —
-в [`docs/STAGE4_UI_STATUS.md`](docs/STAGE4_UI_STATUS.md).
+**Запись в поток** (`SevenZipArchiveWriter.Build*ArchiveToStream(...)`): архив
+побайтово записывается в `Stream` (архивный output streaming). Для вывода требуется
+seekable Stream. Отдельные файлы: LZMA2 large files — block-by-block напрямую в output;
+small LZMA2 files — могут буферизоваться параллельными волнами; PPMd — отдельный
+large-file streaming path; Copy, Auto и ряд других путей — буферизуют entry per file
+и имеют method-specific size limits. Output streaming не является универсальной
+гарантией bounded-memory.
+
+Прикладной слой (UI) — в [`docs/STAGE4_UI_STATUS.md`](docs/STAGE4_UI_STATUS.md).
 
 ## Принципы разработки
 
