@@ -1,5 +1,7 @@
 using System;
 using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace Lzma.Core.Tests.Helpers;
 
@@ -101,6 +103,66 @@ internal sealed class ThrowBeforeCrossingWriteStream : Stream
 
         _inner.WriteByte(value);
         BytesWrittenToInner++;
+    }
+
+    public override async Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(buffer);
+
+        if ((uint)offset > (uint)buffer.Length)
+            throw new ArgumentOutOfRangeException(nameof(offset));
+
+        if ((uint)count > (uint)(buffer.Length - offset))
+            throw new ArgumentOutOfRangeException(nameof(count));
+
+        if (cancellationToken.IsCancellationRequested)
+        {
+            throw new OperationCanceledException(cancellationToken);
+        }
+
+        if (count == 0)
+        {
+            await _inner.WriteAsync(buffer, offset, count, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        if (HasInjectedFailure)
+            throw new IOException("Injected output-stream write failure.");
+
+        if ((long)count > ByteLimit - BytesWrittenToInner)
+        {
+            HasInjectedFailure = true;
+            throw new IOException("Injected output-stream write failure.");
+        }
+
+        await _inner.WriteAsync(buffer, offset, count, cancellationToken).ConfigureAwait(false);
+        BytesWrittenToInner += count;
+    }
+
+    public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+    {
+        if (cancellationToken.IsCancellationRequested)
+        {
+            throw new OperationCanceledException(cancellationToken);
+        }
+
+        if (buffer.Length == 0)
+        {
+            await _inner.WriteAsync(buffer, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        if (HasInjectedFailure)
+            throw new IOException("Injected output-stream write failure.");
+
+        if ((long)buffer.Length > ByteLimit - BytesWrittenToInner)
+        {
+            HasInjectedFailure = true;
+            throw new IOException("Injected output-stream write failure.");
+        }
+
+        await _inner.WriteAsync(buffer, cancellationToken).ConfigureAwait(false);
+        BytesWrittenToInner += buffer.Length;
     }
 
     protected override void Dispose(bool disposing)
