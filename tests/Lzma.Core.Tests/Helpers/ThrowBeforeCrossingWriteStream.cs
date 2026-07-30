@@ -67,6 +67,27 @@ internal sealed class ThrowBeforeCrossingWriteStream : Stream
         BytesWrittenToInner += count;
     }
 
+    public override void Write(ReadOnlySpan<byte> buffer)
+    {
+        if (buffer.Length == 0)
+        {
+            _inner.Write(buffer);
+            return;
+        }
+
+        if (HasInjectedFailure)
+            throw new IOException("Injected output-stream write failure.");
+
+        if ((long)buffer.Length > ByteLimit - BytesWrittenToInner)
+        {
+            HasInjectedFailure = true;
+            throw new IOException("Injected output-stream write failure.");
+        }
+
+        _inner.Write(buffer);
+        BytesWrittenToInner += buffer.Length;
+    }
+
     protected override void Dispose(bool disposing)
     {
         if (disposing && !_leaveOpen)

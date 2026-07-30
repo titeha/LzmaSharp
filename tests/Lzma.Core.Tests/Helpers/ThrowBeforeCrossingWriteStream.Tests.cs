@@ -129,4 +129,47 @@ public sealed class ThrowBeforeCrossingWriteStreamTests
         Assert.Equal(0L, stream.BytesWrittenToInner);
         Assert.Equal(0L, inner.Length);
     }
+
+    [Fact]
+    public void WriteSpan_ExactlyToBoundary_WritesAllBytes()
+    {
+        using var inner = new MemoryStream();
+        using var stream = new ThrowBeforeCrossingWriteStream(
+            inner,
+            byteLimit: 5,
+            leaveOpen: true);
+
+        byte[] data = { 1, 2, 3, 4, 5 };
+
+        stream.Write(data.AsSpan());
+
+        Assert.Equal(5L, stream.BytesWrittenToInner);
+        Assert.False(stream.HasInjectedFailure);
+        Assert.Equal(data, inner.ToArray());
+    }
+
+    [Fact]
+    public void WriteSpan_CrossingBoundary_ThrowsWithoutChangingInnerOrCounter()
+    {
+        using var inner = new MemoryStream();
+        using var stream = new ThrowBeforeCrossingWriteStream(
+            inner,
+            byteLimit: 5,
+            leaveOpen: true);
+
+        byte[] initial = { 1, 2, 3 };
+        stream.Write(initial.AsSpan());
+
+        byte[] crossing = { 4, 5, 6, 7 };
+        byte[] innerBeforeFailure = inner.ToArray();
+        long positionBeforeFailure = inner.Position;
+
+        Assert.Throws<IOException>(
+            () => stream.Write(crossing.AsSpan()));
+
+        Assert.True(stream.HasInjectedFailure);
+        Assert.Equal(3L, stream.BytesWrittenToInner);
+        Assert.Equal(positionBeforeFailure, inner.Position);
+        Assert.Equal(innerBeforeFailure, inner.ToArray());
+    }
 }
