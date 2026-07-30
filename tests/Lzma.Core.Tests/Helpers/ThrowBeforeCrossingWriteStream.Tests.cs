@@ -331,4 +331,111 @@ public sealed class ThrowBeforeCrossingWriteStreamTests
         Assert.Equal(0L, inner.Length);
         Assert.Equal(0L, inner.Position);
     }
+
+    [Fact]
+    public async Task WriteAsyncMemory_ExactlyToBoundary_WritesAllBytes()
+    {
+        using var inner = new MemoryStream();
+        using var stream = new ThrowBeforeCrossingWriteStream(
+            inner,
+            byteLimit: 5,
+            leaveOpen: true);
+
+        byte[] data = { 1, 2, 3, 4, 5 };
+
+        await stream.WriteAsync(
+            data.AsMemory(),
+            CancellationToken.None);
+
+        Assert.Equal(5L, stream.BytesWrittenToInner);
+        Assert.False(stream.HasInjectedFailure);
+        Assert.Equal(data, inner.ToArray());
+    }
+
+    [Fact]
+    public async Task WriteAsyncMemory_CrossingBoundary_ThrowsWithoutChangingInnerOrCounter()
+    {
+        using var inner = new MemoryStream();
+        using var stream = new ThrowBeforeCrossingWriteStream(
+            inner,
+            byteLimit: 5,
+            leaveOpen: true);
+
+        byte[] initial = { 1, 2, 3 };
+
+        await stream.WriteAsync(
+            initial.AsMemory(),
+            CancellationToken.None);
+
+        byte[] crossing = { 4, 5, 6, 7 };
+        byte[] innerBeforeFailure = inner.ToArray();
+        long positionBeforeFailure = inner.Position;
+
+        await Assert.ThrowsAsync<IOException>(
+            () => stream
+                .WriteAsync(
+                    crossing.AsMemory(),
+                    CancellationToken.None)
+            .AsTask());
+
+        Assert.True(stream.HasInjectedFailure);
+        Assert.Equal(3L, stream.BytesWrittenToInner);
+        Assert.Equal(positionBeforeFailure, inner.Position);
+        Assert.Equal(innerBeforeFailure, inner.ToArray());
+    }
+
+    [Fact]
+    public async Task WriteAsyncMemory_PreCanceledToken_ChangesNothing()
+    {
+        using var inner = new MemoryStream();
+        using var stream = new ThrowBeforeCrossingWriteStream(
+            inner,
+            byteLimit: 0,
+            leaveOpen: true);
+
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        byte[] data = { 1 };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => stream
+                .WriteAsync(
+                    data.AsMemory(),
+                    cancellation.Token)
+                .AsTask());
+
+        Assert.False(stream.HasInjectedFailure);
+        Assert.Equal(0L, stream.BytesWrittenToInner);
+        Assert.Equal(0L, inner.Length);
+        Assert.Equal(0L, inner.Position);
+    }
+
+    [Fact]
+    public async Task WriteAsyncMemory_ZeroLengthAfterFailure_Succeeds()
+    {
+        using var inner = new MemoryStream();
+        using var stream = new ThrowBeforeCrossingWriteStream(
+            inner,
+            byteLimit: 0,
+            leaveOpen: true);
+
+        byte[] nonEmpty = { 1 };
+
+        await Assert.ThrowsAsync<IOException>(
+            () => stream
+                .WriteAsync(
+                    nonEmpty.AsMemory(),
+                    CancellationToken.None)
+            .AsTask());
+
+        await stream.WriteAsync(
+            ReadOnlyMemory<byte>.Empty,
+            CancellationToken.None);
+
+        Assert.True(stream.HasInjectedFailure);
+        Assert.Equal(0L, stream.BytesWrittenToInner);
+        Assert.Equal(0L, inner.Length);
+        Assert.Equal(0L, inner.Position);
+    }
 }

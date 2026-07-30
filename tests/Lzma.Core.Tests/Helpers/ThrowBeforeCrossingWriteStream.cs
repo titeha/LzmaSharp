@@ -157,29 +157,39 @@ internal sealed class ThrowBeforeCrossingWriteStream : Stream
         BytesWrittenToInner += count;
     }
 
-    public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+    public override ValueTask WriteAsync(
+        ReadOnlyMemory<byte> buffer,
+        CancellationToken cancellationToken = default)
     {
         if (cancellationToken.IsCancellationRequested)
-        {
-            throw new OperationCanceledException(cancellationToken);
-        }
+            return ValueTask.FromCanceled(cancellationToken);
 
-        if (buffer.Length == 0)
-        {
-            await _inner.WriteAsync(buffer, cancellationToken).ConfigureAwait(false);
-            return;
-        }
+        if (buffer.IsEmpty)
+            return _inner.WriteAsync(buffer, cancellationToken);
 
         if (HasInjectedFailure)
-            throw new IOException("Injected output-stream write failure.");
+            return ValueTask.FromException(
+                new IOException("Injected output-stream write failure."));
 
-        if ((long)buffer.Length > ByteLimit - BytesWrittenToInner)
+        if (buffer.Length > ByteLimit - BytesWrittenToInner)
         {
             HasInjectedFailure = true;
-            throw new IOException("Injected output-stream write failure.");
+
+            return ValueTask.FromException(
+                new IOException("Injected output-stream write failure."));
         }
 
-        await _inner.WriteAsync(buffer, cancellationToken).ConfigureAwait(false);
+        return WriteMemoryAsyncCore(buffer, cancellationToken);
+    }
+
+    private async ValueTask WriteMemoryAsyncCore(
+        ReadOnlyMemory<byte> buffer,
+        CancellationToken cancellationToken)
+    {
+        await _inner
+            .WriteAsync(buffer, cancellationToken)
+            .ConfigureAwait(false);
+
         BytesWrittenToInner += buffer.Length;
     }
 
