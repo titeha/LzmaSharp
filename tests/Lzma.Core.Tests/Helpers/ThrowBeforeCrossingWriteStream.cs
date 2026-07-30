@@ -105,7 +105,11 @@ internal sealed class ThrowBeforeCrossingWriteStream : Stream
         BytesWrittenToInner++;
     }
 
-    public override async Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+    public override Task WriteAsync(
+        byte[] buffer,
+        int offset,
+        int count,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(buffer);
 
@@ -116,26 +120,40 @@ internal sealed class ThrowBeforeCrossingWriteStream : Stream
             throw new ArgumentOutOfRangeException(nameof(count));
 
         if (cancellationToken.IsCancellationRequested)
-        {
-            throw new OperationCanceledException(cancellationToken);
-        }
+            return Task.FromCanceled(cancellationToken);
 
         if (count == 0)
-        {
-            await _inner.WriteAsync(buffer, offset, count, cancellationToken).ConfigureAwait(false);
-            return;
-        }
+            return _inner.WriteAsync(buffer, offset, count, cancellationToken);
 
         if (HasInjectedFailure)
-            throw new IOException("Injected output-stream write failure.");
+            return Task.FromException(
+                new IOException("Injected output-stream write failure."));
 
         if ((long)count > ByteLimit - BytesWrittenToInner)
         {
             HasInjectedFailure = true;
-            throw new IOException("Injected output-stream write failure.");
+
+            return Task.FromException(
+                new IOException("Injected output-stream write failure."));
         }
 
-        await _inner.WriteAsync(buffer, offset, count, cancellationToken).ConfigureAwait(false);
+        return WriteArrayAsyncCore(
+            buffer,
+            offset,
+            count,
+            cancellationToken);
+    }
+
+    private async Task WriteArrayAsyncCore(
+        byte[] buffer,
+        int offset,
+        int count,
+        CancellationToken cancellationToken)
+    {
+        await _inner
+            .WriteAsync(buffer, offset, count, cancellationToken)
+            .ConfigureAwait(false);
+
         BytesWrittenToInner += count;
     }
 
