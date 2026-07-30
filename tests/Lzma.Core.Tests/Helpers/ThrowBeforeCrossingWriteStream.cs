@@ -88,6 +88,21 @@ internal sealed class ThrowBeforeCrossingWriteStream : Stream
         BytesWrittenToInner += buffer.Length;
     }
 
+    public override void WriteByte(byte value)
+    {
+        if (HasInjectedFailure)
+            throw new IOException("Injected output-stream write failure.");
+
+        if (1L > ByteLimit - BytesWrittenToInner)
+        {
+            HasInjectedFailure = true;
+            throw new IOException("Injected output-stream write failure.");
+        }
+
+        _inner.WriteByte(value);
+        BytesWrittenToInner++;
+    }
+
     protected override void Dispose(bool disposing)
     {
         if (disposing && !_leaveOpen)
