@@ -475,4 +475,11 @@ public sealed class ThrowBeforeCrossingWriteStreamTests
         Assert.Throws<ArgumentNullException>(
             () => new ThrowBeforeCrossingWriteStream(null!, byteLimit: 5));
     }
+
+    [Fact]
+    public void Constructor_NegativeByteLimit_ThrowsArgumentOutOfRangeException()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => new ThrowBeforeCrossingWriteStream(new MemoryStream(), byteLimit: -1));
+    }
 }
