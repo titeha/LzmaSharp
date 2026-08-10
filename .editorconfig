@@ -14,6 +14,12 @@ trim_trailing_whitespace = false
 [*.cs]
 dotnet_sort_system_directives_first = true
 
+# Предпочитать отсутствие скобок у одного простого оператора.
+csharp_prefer_braces = false:suggestion
+
+# Неиспользуемые using.
+dotnet_diagnostic.IDE0005.severity = warning
+
 # Мягкие правила стиля (без “ломания” билда)
 dotnet_diagnostic.IDE0005.severity = warning   # unused usings
 dotnet_diagnostic.IDE0065.severity = warning   # using placement
