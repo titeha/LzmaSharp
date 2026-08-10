@@ -6,10 +6,10 @@
 Не исследуй весь репозиторий.
 
 Цель шага:
-<GOAL>
+тест Dispose_WithLeaveOpenFalse_ClosesInner: при leaveOpen=false inner закрыт после Dispose wrapper'а
 
 Разрешённые файлы:
-<ALLOWLIST>
+tests/Lzma.Core.Tests/Helpers/ThrowBeforeCrossingWriteStream.Tests.cs
 
 Проверь:
 1. Diff строго в allowlist.
@@ -24,7 +24,7 @@
 Разрешены:
 - `git diff --check`;
 - `git diff --name-only`;
-- `git diff -- <ALLOWLIST>`;
+- `git diff -- tests/Lzma.Core.Tests/Helpers/ThrowBeforeCrossingWriteStream.Tests.cs`;
 - один targeted test command.
 
 Верни строго:

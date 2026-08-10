@@ -453,4 +453,19 @@ public sealed class ThrowBeforeCrossingWriteStreamTests
         inner.WriteByte(0xFF);
         Assert.Equal(1L, inner.Length);
     }
+
+    [Fact]
+    public void Dispose_WithLeaveOpenFalse_ClosesInner()
+    {
+        using var inner = new MemoryStream();
+        var stream = new ThrowBeforeCrossingWriteStream(inner, byteLimit: 5, leaveOpen: false);
+
+        stream.WriteByte(0xAB);
+        Assert.Equal(1L, stream.BytesWrittenToInner);
+        Assert.False(stream.HasInjectedFailure);
+
+        stream.Dispose();
+
+        Assert.Throws<ObjectDisposedException>(() => inner.WriteByte(0xFF));
+    }
 }
