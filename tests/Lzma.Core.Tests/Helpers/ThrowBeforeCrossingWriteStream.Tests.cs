@@ -468,4 +468,11 @@ public sealed class ThrowBeforeCrossingWriteStreamTests
 
         Assert.Throws<ObjectDisposedException>(() => inner.WriteByte(0xFF));
     }
+
+    [Fact]
+    public void Constructor_NullInner_ThrowsArgumentNullException()
+    {
+        Assert.Throws<ArgumentNullException>(
+            () => new ThrowBeforeCrossingWriteStream(null!, byteLimit: 5));
+    }
 }
