@@ -500,6 +500,24 @@ public sealed class ThrowBeforeCrossingWriteStreamTests
         Assert.Equal("ThrowingWriteStream.Write", ex.Message);
         Assert.False(stream.HasInjectedFailure);
     }
+
+    [Fact]
+    public void Write_WhenInnerStreamThrows_DoesNotIncrementCounter()
+    {
+        using var inner = new ThrowingWriteStream();
+        using var stream = new ThrowBeforeCrossingWriteStream(
+            inner,
+            byteLimit: 1000,
+            leaveOpen: true);
+
+        byte[] data = { 1, 2, 3 };
+
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => stream.Write(data, 0, data.Length));
+
+        Assert.Equal("ThrowingWriteStream.Write", ex.Message);
+        Assert.Equal(0L, stream.BytesWrittenToInner);
+    }
 }
 
 internal sealed class ThrowingWriteStream : Stream
