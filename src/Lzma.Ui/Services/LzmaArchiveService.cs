@@ -374,11 +374,26 @@ public sealed class LzmaArchiveService : IArchiveService
     {
       // Пароль (если задан) → UTF-8 байты (WinZip-AES, совместимо с 7-Zip).
       byte[]? passwordBytes = password is null ? null : System.Text.Encoding.UTF8.GetBytes(password);
+      // SEC-002 шаг 9: пишем в staged-файл рядом с назначением, ни файлы, ни архив в памяти не держим;
+      // назначение публикуется только через Commit() после Ok.
+      var staged = new StagedDestination(destinationPath);
       try
       {
-        // Пишем ZIP прямо в целевой файл потоком — ни файлы, ни архив в памяти не держим.
-        using var output = new System.IO.FileStream(destinationPath, System.IO.FileMode.Create, System.IO.FileAccess.ReadWrite);
-        return ZipStreamWriter.Write(entries, output, progress, token, currentFile, maxDegreeOfParallelism: 0, passwordBytes);
+        ZipWriteResult result;
+
+        // Выходной поток должен быть закрыт до Commit: открытый файл перенести нельзя.
+        using (System.IO.Stream output = staged.OpenWrite())
+        {
+          result = ZipStreamWriter.Write(entries, output, progress, token, currentFile, maxDegreeOfParallelism: 0, passwordBytes);
+        }
+
+        // Публикуем результат только после полной записи архива.
+        if (result == ZipWriteResult.Ok)
+        {
+          staged.Commit();
+        }
+
+        return result;
       }
       catch (System.IO.IOException)
       {
@@ -390,6 +405,8 @@ public sealed class LzmaArchiveService : IArchiveService
       }
       finally
       {
+        // При неудаче (или Ok без публикации) убираем staged-файл без остатка.
+        staged.Dispose();
         if (passwordBytes is not null)
           System.Security.Cryptography.CryptographicOperations.ZeroMemory(passwordBytes);
       }
