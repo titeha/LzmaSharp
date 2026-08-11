@@ -470,6 +470,18 @@ public sealed class ThrowBeforeCrossingWriteStreamTests
     }
 
     [Fact]
+    public void Write_AfterDispose_ThrowsObjectDisposedException()
+    {
+        using var inner = new MemoryStream();
+        var stream = new ThrowBeforeCrossingWriteStream(inner, byteLimit: 5);
+
+        stream.Dispose();
+
+        Assert.Throws<ObjectDisposedException>(
+            () => stream.Write(new byte[] { 1 }, 0, 1));
+    }
+
+    [Fact]
     public void Constructor_NullInner_ThrowsArgumentNullException()
     {
         Assert.Throws<ArgumentNullException>(
