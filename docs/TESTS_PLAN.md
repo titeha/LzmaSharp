@@ -83,3 +83,16 @@ GOST-поддержка экспериментальная, использует
 на эталонных данных; roundtrip-тесты при наличии encoder-а; тесты совместимости на реальных
 архивах; negative-тесты на повреждённый поток; тесты на граничные размеры; проверка, что
 внешний контракт `SevenZipFolderDecoder` не меняется при замене реализации.
+
+### Fault-injection harness (test-only)
+
+Test-only помощники fault injection живут в `tests/Lzma.Core.Tests/Helpers` и используются
+в security-фазах regression harness:
+
+- `ThrowBeforeCrossingWriteStream` — test-only поток, бросающий исключение до пересекающей
+  лимит записи, со sticky injected failure; не моделирует physical partial write внутри
+  одного вызова;
+- контракт helper-а закреплён targeted-тестами синхронных/асинхронных сценариев
+  (перечень — в коде);
+- это test-harness-статус: он не означает, что transactional создание архивов (SEC-002)
+  реализовано.
