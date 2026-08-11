@@ -482,4 +482,49 @@ public sealed class ThrowBeforeCrossingWriteStreamTests
         Assert.Throws<ArgumentOutOfRangeException>(
             () => new ThrowBeforeCrossingWriteStream(new MemoryStream(), byteLimit: -1));
     }
+
+    [Fact]
+    public void Write_WhenInnerStreamThrows_PropagatesException()
+    {
+        using var inner = new ThrowingWriteStream();
+        using var stream = new ThrowBeforeCrossingWriteStream(
+            inner,
+            byteLimit: 1000,
+            leaveOpen: true);
+
+        byte[] data = { 1, 2, 3 };
+
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => stream.Write(data, 0, data.Length));
+
+        Assert.Equal("ThrowingWriteStream.Write", ex.Message);
+        Assert.False(stream.HasInjectedFailure);
+    }
+}
+
+internal sealed class ThrowingWriteStream : Stream
+{
+    public override bool CanRead => false;
+    public override bool CanSeek => false;
+    public override bool CanWrite => true;
+    public override long Length => throw new NotSupportedException();
+    public override long Position
+    {
+        get => throw new NotSupportedException();
+        set => throw new NotSupportedException();
+    }
+
+    public override void Flush() { }
+
+    public override int Read(byte[] buffer, int offset, int count)
+        => throw new NotSupportedException();
+
+    public override long Seek(long offset, SeekOrigin origin)
+        => throw new NotSupportedException();
+
+    public override void SetLength(long value)
+        => throw new NotSupportedException();
+
+    public override void Write(byte[] buffer, int offset, int count)
+        => throw new InvalidOperationException("ThrowingWriteStream.Write");
 }
