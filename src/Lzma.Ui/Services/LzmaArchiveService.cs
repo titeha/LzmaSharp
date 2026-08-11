@@ -198,32 +198,46 @@ public sealed class LzmaArchiveService : IArchiveService
   {
     return Task.Run(() =>
     {
+      // SEC-002: для одного файла (volumeSize <= 0) пишем в staged-файл рядом с назначением,
+      // назначение публикуется только через Commit() после Ok. Ни файлы, ни архив в памяти не держим.
+      // Тома по-прежнему пишутся прямо — multi-volume остаётся отдельной поздней фазой (§4.4 шаг 10).
+      StagedDestination? staged = volumeSize > 0 ? null : new StagedDestination(destinationPath);
       try
       {
-        // Пишем прямо в целевой файл потоком — ни файлы, ни архив в памяти не держим.
-        // volumeSize > 0 → режем на тома destinationPath.001/.002/… на лету.
-        using System.IO.Stream output = volumeSize > 0
-            ? new VolumeSpanningWriteStream(destinationPath, volumeSize)
-            : new System.IO.FileStream(destinationPath, System.IO.FileMode.Create, System.IO.FileAccess.ReadWrite);
+        SevenZipArchiveWriteResult result;
 
-        // Диспетчер по методу: LZMA2/Auto — многопоточно; PPMd/Copy — пофайлово (PPMd последователен).
-        return method switch
+        // Выходной поток должен быть закрыт до Commit: открытый файл перенести нельзя.
+        using (System.IO.Stream output = volumeSize > 0
+            ? new VolumeSpanningWriteStream(destinationPath, volumeSize)
+            : staged!.OpenWrite())
         {
-          SevenZipWriterCompressionMethod.Lzma2 =>
-              SevenZipArchiveWriter.BuildLzma2ArchiveToStream(
-                  entries, output, dictionarySize, maxDegreeOfParallelism, progress, token, currentFile),
-          SevenZipWriterCompressionMethod.Auto =>
-              SevenZipArchiveWriter.BuildAutoSolidArchiveToStream(entries, output, dictionarySize, maxDegreeOfParallelism, progress, token, currentFile),
-          SevenZipWriterCompressionMethod.Bcj2 =>
-              SevenZipArchiveWriter.BuildBcj2ArchiveToStream(entries, output, progress, token, currentFile, maxDegreeOfParallelism),
-          SevenZipWriterCompressionMethod.Aes =>
-              BuildAesToStream(entries, output, password, dictionarySize, progress, token, currentFile),
-          SevenZipWriterCompressionMethod.Ppmd =>
-              SevenZipArchiveWriter.BuildPpmdArchiveToStream(entries, output, progress, token, currentFile, maxDegreeOfParallelism),
-          SevenZipWriterCompressionMethod.Copy =>
-              SevenZipArchiveWriter.BuildCopyArchiveToStream(entries, output, progress, token, currentFile, maxDegreeOfParallelism),
-          _ => SevenZipArchiveWriteResult.NotSupported,
-        };
+          // Диспетчер по методу: LZMA2/Auto — многопоточно; PPMd/Copy — пофайлово (PPMd последователен).
+          result = method switch
+          {
+            SevenZipWriterCompressionMethod.Lzma2 =>
+                SevenZipArchiveWriter.BuildLzma2ArchiveToStream(
+                    entries, output, dictionarySize, maxDegreeOfParallelism, progress, token, currentFile),
+            SevenZipWriterCompressionMethod.Auto =>
+                SevenZipArchiveWriter.BuildAutoSolidArchiveToStream(entries, output, dictionarySize, maxDegreeOfParallelism, progress, token, currentFile),
+            SevenZipWriterCompressionMethod.Bcj2 =>
+                SevenZipArchiveWriter.BuildBcj2ArchiveToStream(entries, output, progress, token, currentFile, maxDegreeOfParallelism),
+            SevenZipWriterCompressionMethod.Aes =>
+                BuildAesToStream(entries, output, password, dictionarySize, progress, token, currentFile),
+            SevenZipWriterCompressionMethod.Ppmd =>
+                SevenZipArchiveWriter.BuildPpmdArchiveToStream(entries, output, progress, token, currentFile, maxDegreeOfParallelism),
+            SevenZipWriterCompressionMethod.Copy =>
+                SevenZipArchiveWriter.BuildCopyArchiveToStream(entries, output, progress, token, currentFile, maxDegreeOfParallelism),
+            _ => SevenZipArchiveWriteResult.NotSupported,
+          };
+        }
+
+        // Публикуем результат только после полной записи архива и закрытия потока.
+        if (result == SevenZipArchiveWriteResult.Ok && staged is not null)
+        {
+          staged.Commit();
+        }
+
+        return result;
       }
       catch (System.IO.IOException)
       {
@@ -232,6 +246,11 @@ public sealed class LzmaArchiveService : IArchiveService
       catch (System.UnauthorizedAccessException)
       {
         return SevenZipArchiveWriteResult.InternalError;
+      }
+      finally
+      {
+        // При неудаче (или Ok без публикации) убираем staged-файл без остатка.
+        staged?.Dispose();
       }
     }, token);
   }
