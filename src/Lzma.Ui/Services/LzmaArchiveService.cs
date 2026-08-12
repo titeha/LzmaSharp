@@ -199,16 +199,18 @@ public sealed class LzmaArchiveService : IArchiveService
     return Task.Run(() =>
     {
       // SEC-002: для одного файла (volumeSize <= 0) пишем в staged-файл рядом с назначением,
-      // назначение публикуется только через Commit() после Ok. Ни файлы, ни архив в памяти не держим.
-      // Тома по-прежнему пишутся прямо — multi-volume остаётся отдельной поздней фазой (§4.4 шаг 10).
+      // для многотомного — в staged-тома (§4.4 шаг 10); назначение публикуется только после Ok.
+      // Ни файлы, ни архив в памяти не держим.
       StagedDestination? staged = volumeSize > 0 ? null : new StagedDestination(destinationPath);
+      StagedVolumeSet? stagedVolumes = volumeSize > 0 ? new StagedVolumeSet(destinationPath) : null;
       try
       {
         SevenZipArchiveWriteResult result;
+        VolumeSpanningWriteStream? spanning = null;
 
         // Выходной поток должен быть закрыт до Commit: открытый файл перенести нельзя.
         using (System.IO.Stream output = volumeSize > 0
-            ? new VolumeSpanningWriteStream(destinationPath, volumeSize)
+            ? spanning = new VolumeSpanningWriteStream(stagedVolumes!.StagedBasePath, volumeSize)
             : staged!.OpenWrite())
         {
           // Диспетчер по методу: LZMA2/Auto — многопоточно; PPMd/Copy — пофайлово (PPMd последователен).
@@ -232,9 +234,20 @@ public sealed class LzmaArchiveService : IArchiveService
         }
 
         // Публикуем результат только после полной записи архива и закрытия потока.
-        if (result == SevenZipArchiveWriteResult.Ok && staged is not null)
+        if (result == SevenZipArchiveWriteResult.Ok)
         {
-          staged.Commit();
+          if (stagedVolumes is not null)
+          {
+            // Тома уже записаны под staged-базой: фиксируем manifest из потока записи
+            // (VolumePaths() — чистая арифметика путей, безопасна после Dispose)
+            // и переносим в конечные имена.
+            stagedVolumes.SetVolumes(spanning!.VolumePaths());
+            stagedVolumes.Commit();
+          }
+          else
+          {
+            staged!.Commit();
+          }
         }
 
         return result;
@@ -249,8 +262,9 @@ public sealed class LzmaArchiveService : IArchiveService
       }
       finally
       {
-        // При неудаче (или Ok без публикации) убираем staged-файл без остатка.
+        // При неудаче (или Ok без публикации) убираем staged-файл/тома без остатка.
         staged?.Dispose();
+        stagedVolumes?.Dispose();
       }
     }, token);
   }
