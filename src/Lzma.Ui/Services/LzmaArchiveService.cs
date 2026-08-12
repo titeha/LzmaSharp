@@ -167,9 +167,17 @@ public sealed class LzmaArchiveService : IArchiveService
   {
     return Task.Run(() =>
     {
+      // SEC-002: пишем в staged-файл рядом с назначением; назначение
+      // публикуется переносом только после полной записи байтов.
+      var staged = new StagedDestination(path);
       try
       {
-        System.IO.File.WriteAllBytes(path, archive);
+        using (System.IO.Stream output = staged.OpenWrite())
+        {
+          output.Write(archive, 0, archive.Length);
+        }
+
+        staged.Commit();
         return true;
       }
       catch (System.IO.IOException)
@@ -179,6 +187,11 @@ public sealed class LzmaArchiveService : IArchiveService
       catch (System.UnauthorizedAccessException)
       {
         return false;
+      }
+      finally
+      {
+        // При неудаче убираем staged-файл без остатка.
+        staged.Dispose();
       }
     });
   }
