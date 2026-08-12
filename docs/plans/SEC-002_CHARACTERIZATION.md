@@ -1,6 +1,10 @@
 # LzmaSharp: SEC-002 characterization — создание архива (read-only)
 
-> Статус: characterization завершён, код не изменялся.
+> Статус: characterization завершён; описанный ниже дефект устранён staged-записью
+> (HEAD `10377e2`, коммиты `63186c8`, `baf4768`, `0cb44de`, `10377e2`).
+> Текущий статус реализации и known limitations — в
+> `SECURITY_REMEDIATION_PLAN.md` §4.5. Разделы 1–6 ниже оставлены как историческая
+> фиксация дефекта и не редактируются.
 >
 > Дата: 2026-08-11. HEAD: `680b1b8` (ветка `main`).
 >

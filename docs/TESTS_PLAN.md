@@ -94,5 +94,6 @@ Test-only помощники fault injection живут в `tests/Lzma.Core.Test
   одного вызова;
 - контракт helper-а закреплён targeted-тестами синхронных/асинхронных сценариев
   (перечень — в коде);
-- это test-harness-статус: он не означает, что transactional создание архивов (SEC-002)
-  реализовано.
+- это test-harness-статус: сам по себе он не означает, что transactional создание архивов
+  (SEC-002) реализовано; production-статус SEC-002 отслеживается отдельно в
+  `docs/plans/SECURITY_REMEDIATION_PLAN.md` §4.5.
