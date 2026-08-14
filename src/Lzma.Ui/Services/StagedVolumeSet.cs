@@ -17,6 +17,9 @@ namespace Lzma.Ui.Services;
 /// </remarks>
 internal sealed class StagedVolumeSet : System.IDisposable
 {
+  /// <summary>Seam файловых операций (инъекция для тестов/детерминированных отказов).</summary>
+  private readonly IStagedVolumeFileOperations _fileOperations;
+
   /// <summary>Базовый путь назначения; тома получают суффиксы .001/.002/…</summary>
   private readonly string _destinationBasePath;
 
@@ -36,12 +39,27 @@ internal sealed class StagedVolumeSet : System.IDisposable
   /// <param name="destinationBasePath">Базовый путь назначения многотомного архива.</param>
   /// <exception cref="ArgumentException">Базовый путь пуст или состоит из пробелов.</exception>
   public StagedVolumeSet(string destinationBasePath)
+      : this(destinationBasePath, new StagedVolumeFileOperations())
   {
+  }
+
+  /// <summary>
+  /// Конструктор для тестовой инъекции seam файловых операций.
+  /// </summary>
+  /// <param name="destinationBasePath">Базовый путь назначения многотомного архива.</param>
+  /// <param name="fileOperations">Seam файловых операций (не может быть null).</param>
+  /// <exception cref="ArgumentNullException">fileOperations равен null.</exception>
+  /// <exception cref="ArgumentException">Базовый путь пуст или состоит из пробелов.</exception>
+  internal StagedVolumeSet(string destinationBasePath, IStagedVolumeFileOperations fileOperations)
+  {
+    ArgumentNullException.ThrowIfNull(fileOperations);
+
     if (string.IsNullOrWhiteSpace(destinationBasePath))
     {
       throw new ArgumentException("Базовый путь томов не может быть пустым.", nameof(destinationBasePath));
     }
 
+    _fileOperations = fileOperations;
     _destinationBasePath = destinationBasePath;
     _stagedBasePath = BuildStagedBasePath(destinationBasePath);
   }
@@ -91,7 +109,7 @@ internal sealed class StagedVolumeSet : System.IDisposable
     // Перенос staged-томов в конечные имена с заменой существующих.
     for (int i = 0; i < _manifest.Count; i++)
     {
-      File.Move(_manifest[i], VolumeSpanningWriteStream.VolumePath(_destinationBasePath, i), overwrite: true);
+      _fileOperations.Move(_manifest[i], VolumeSpanningWriteStream.VolumePath(_destinationBasePath, i), overwrite: true);
     }
 
     // Устаревшие тома: старый набор мог быть длиннее нового. Имена томов идут
@@ -99,12 +117,12 @@ internal sealed class StagedVolumeSet : System.IDisposable
     for (int i = _manifest.Count; ; i++)
     {
       string stale = VolumeSpanningWriteStream.VolumePath(_destinationBasePath, i);
-      if (!File.Exists(stale))
+      if (!_fileOperations.Exists(stale))
       {
         break;
       }
 
-      File.Delete(stale);
+      _fileOperations.Delete(stale);
     }
 
     _committed = true;
@@ -135,7 +153,7 @@ internal sealed class StagedVolumeSet : System.IDisposable
     {
       try
       {
-        File.Delete(path);
+        _fileOperations.Delete(path);
       }
       catch (IOException)
       {
@@ -157,7 +175,7 @@ internal sealed class StagedVolumeSet : System.IDisposable
     for (int i = 0; ; i++)
     {
       string path = VolumeSpanningWriteStream.VolumePath(_stagedBasePath, i);
-      if (!File.Exists(path))
+      if (!_fileOperations.Exists(path))
       {
         break;
       }
