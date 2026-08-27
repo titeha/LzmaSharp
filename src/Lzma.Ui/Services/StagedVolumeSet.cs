@@ -106,10 +106,70 @@ internal sealed class StagedVolumeSet : System.IDisposable
       throw new InvalidOperationException("Manifest staged-томов не заполнен.");
     }
 
-    // Перенос staged-томов в конечные имена с заменой существующих.
-    for (int i = 0; i < _manifest.Count; i++)
+    // Резервная фаза: до публикации ни одного нового тома переносим все существующие
+    // управляемые конечные тома в уникальные backup-пути (в том же каталоге).
+    var backups = new List<(string FinalPath, string BackupPath)>();
+    try
     {
-      _fileOperations.Move(_manifest[i], VolumeSpanningWriteStream.VolumePath(_destinationBasePath, i), overwrite: true);
+      BackupFinalVolumes(backups);
+    }
+    catch (Exception backupFailure)
+    {
+      // Сбой внутри backup-фазы: новые тома ещё не публиковались, откатываем уже
+      // созданные резервные копии в обратном порядке и сохраняем исходное исключение
+      // как первичное. Откат не должен молча глотать собственные ошибки.
+      Exception? restoreFailure = null;
+      try
+      {
+        RestoreBackups(backups);
+      }
+      catch (Exception ex)
+      {
+        restoreFailure = ex;
+      }
+
+      if (restoreFailure is not null)
+      {
+        throw new AggregateException(
+            "Ошибка backup-фазы с последующим сбоем отката резервных копий.",
+            backupFailure,
+            restoreFailure);
+      }
+
+      throw;
+    }
+
+    // Публикация: перенос staged-томов в конечные имена. После успешной резервной
+    // фазы управляемые конечные имена уже освобождены, поэтому используем
+    // overwrite:false — не затираем неожиданно появившийся объект.
+    var published = new List<string>();
+    try
+    {
+      for (int i = 0; i < _manifest.Count; i++)
+      {
+        string finalPath = VolumeSpanningWriteStream.VolumePath(_destinationBasePath, i);
+        _fileOperations.Move(_manifest[i], finalPath, overwrite: false);
+        published.Add(finalPath);
+      }
+    }
+    catch (Exception publishFailure) when (IsControlledFailure(publishFailure))
+    {
+      // Сбой публикации: удаляем уже опубликованные новые конечные тома (в обратном
+      // порядке), восстанавливаем все успешные backup и чистим staged-файлы best-effort.
+      // Первичное исключение публикации сохраняется; ошибки отката не глотаются.
+      var rollbackErrors = new List<Exception>();
+      RollbackPublish(published, backups, rollbackErrors);
+
+      _committed = false;
+
+      if (rollbackErrors.Count == 0)
+      {
+        throw;
+      }
+
+      throw new AggregateException(
+          "Ошибка публикации томов с последующим сбоем отката.",
+          [publishFailure, .. rollbackErrors]);
     }
 
     // Устаревшие тома: старый набор мог быть длиннее нового. Имена томов идут
@@ -126,6 +186,116 @@ internal sealed class StagedVolumeSet : System.IDisposable
     }
 
     _committed = true;
+  }
+
+  /// <summary>
+  /// Откатывает сбой публикации в фиксированном порядке: удаляет опубликованные новые
+  /// конечные тома в обратном порядке публикации, затем восстанавливает backup-копии в
+  /// обратном порядке резервирования, затем best-effort чистит staged-файлы manifest.
+  /// Ошибки каждой операции собираются в <paramref name="errors"/> без проброса.
+  /// </summary>
+  private void RollbackPublish(
+      List<string> published,
+      List<(string FinalPath, string BackupPath)> backups,
+      List<Exception> errors)
+  {
+    // 1. Удаляем только успешно опубликованные новые конечные тома, в обратном порядке.
+    for (int i = published.Count - 1; i >= 0; i--)
+    {
+      TryDelete(published[i], errors);
+    }
+
+    // 2. Восстанавливаем все успешно созданные backup-копии в обратном порядке.
+    for (int i = backups.Count - 1; i >= 0; i--)
+    {
+      (string finalPath, string backupPath) = backups[i];
+      try
+      {
+        _fileOperations.Move(backupPath, finalPath, overwrite: false);
+      }
+      catch (Exception ex) when (IsControlledFailure(ex))
+      {
+        errors.Add(ex);
+      }
+    }
+
+    // 3. Best-effort чистим оставшиеся staged-файлы текущего manifest.
+    foreach (string staged in _manifest)
+    {
+      TryDelete(staged, errors);
+    }
+  }
+
+  /// <summary>
+  /// Удаляет файл, собирая контролируемые ошибки файловой системы в <paramref name="errors"/>.
+  /// </summary>
+  private void TryDelete(string path, List<Exception> errors)
+  {
+    try
+    {
+      _fileOperations.Delete(path);
+    }
+    catch (Exception ex) when (IsControlledFailure(ex))
+    {
+      errors.Add(ex);
+    }
+  }
+
+  /// <summary>
+  /// Контролируемые отказы файловой системы, для которых выполняется rollback.
+  /// Фатальные ошибки процесса (OOM/StackOverflow/AccessViolation и т.п.) не перехватываются.
+  /// </summary>
+  private static bool IsControlledFailure(Exception ex)
+      => ex is IOException or UnauthorizedAccessException;
+
+  /// <summary>
+  /// Переносит все существующие управляемые конечные тома (по числу записей staged
+  /// manifest) в уникальные backup-пути в том же каталоге. Успешно созданная резервная
+  /// копия регистрируется в <paramref name="backups"/> сразу после каждого Move.
+  /// </summary>
+  private void BackupFinalVolumes(List<(string FinalPath, string BackupPath)> backups)
+  {
+    for (int i = 0; i < _manifest.Count; i++)
+    {
+      string finalPath = VolumeSpanningWriteStream.VolumePath(_destinationBasePath, i);
+      if (!_fileOperations.Exists(finalPath))
+      {
+        continue;
+      }
+
+      string backupPath = BuildBackupPath(finalPath);
+      _fileOperations.Move(finalPath, backupPath, overwrite: false);
+      backups.Add((finalPath, backupPath));
+    }
+  }
+
+  /// <summary>
+  /// Откатывает созданные резервные копии в обратном порядке: backup → исходный конечный
+  /// путь. Конечные пути, для которых backup не был создан, и посторонние файлы не
+  /// затрагиваются.
+  /// </summary>
+  private void RestoreBackups(List<(string FinalPath, string BackupPath)> backups)
+  {
+    for (int i = backups.Count - 1; i >= 0; i--)
+    {
+      (string finalPath, string backupPath) = backups[i];
+      _fileOperations.Move(backupPath, finalPath, overwrite: false);
+    }
+  }
+
+  /// <summary>
+  /// Строит уникальный backup-путь в том же каталоге, что и конечный том.
+  /// </summary>
+  private static string BuildBackupPath(string finalPath)
+  {
+    string? directory = Path.GetDirectoryName(finalPath);
+    if (string.IsNullOrEmpty(directory))
+    {
+      directory = ".";
+    }
+
+    string fileName = Path.GetFileName(finalPath);
+    return Path.Combine(directory, $"{fileName}.{Guid.NewGuid():N}.bak");
   }
 
   /// <summary>
