@@ -186,6 +186,21 @@ internal sealed class StagedVolumeSet : System.IDisposable
     }
 
     _committed = true;
+
+    // Коммит-поинт пройден: удаляем только backups текущей операции (журнал backups),
+    // best-effort. Контролируемый отказ cleanup не откатывает уже опубликованный набор
+    // и не должен делать Commit транзакционно неуспешным.
+    foreach ((string _, string backupPath) in backups)
+    {
+      try
+      {
+        _fileOperations.Delete(backupPath);
+      }
+      catch (Exception ex) when (IsControlledFailure(ex))
+      {
+        // Cleanup best-effort: отказавший backup может остаться на диске.
+      }
+    }
   }
 
   /// <summary>

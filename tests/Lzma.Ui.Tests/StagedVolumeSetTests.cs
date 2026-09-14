@@ -459,21 +459,202 @@ public sealed class StagedVolumeSetTests
   }
 
   /// <summary>
+  /// Успешный commit: все три новых тома опубликованы байт-в-байт, staged-файлы
+  /// перенесены, все journaled operation backups удалены, а Dispose не трогает новый набор.
+  /// </summary>
+  [Fact]
+  public void Commit_Success_DeletesAllOperationBackups()
+  {
+    string dir = Path.Combine(Path.GetTempPath(), "lzmasharp-sec002-staged-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(dir);
+
+    var fake = new StagedFileOperationsFake();
+
+    try
+    {
+      string destinationBase = Path.Combine(dir, "archive");
+
+      string final001 = destinationBase + ".001";
+      string final002 = destinationBase + ".002";
+      string final003 = destinationBase + ".003";
+
+      byte[] old001 = Encoding.UTF8.GetBytes("old-001");
+      byte[] old002 = Encoding.UTF8.GetBytes("old-002");
+      byte[] old003 = Encoding.UTF8.GetBytes("old-003");
+
+      File.WriteAllBytes(final001, old001);
+      File.WriteAllBytes(final002, old002);
+      File.WriteAllBytes(final003, old003);
+
+      string stagedBase = Path.Combine(dir, "archive.staged");
+      string staged001 = stagedBase + ".001";
+      string staged002 = stagedBase + ".002";
+      string staged003 = stagedBase + ".003";
+
+      byte[] new001 = Encoding.UTF8.GetBytes("new-001");
+      byte[] new002 = Encoding.UTF8.GetBytes("new-002");
+      byte[] new003 = Encoding.UTF8.GetBytes("new-003");
+
+      File.WriteAllBytes(staged001, new001);
+      File.WriteAllBytes(staged002, new002);
+      File.WriteAllBytes(staged003, new003);
+
+      using var set = new StagedVolumeSet(destinationBase, fake);
+      set.SetVolumes([staged001, staged002, staged003]);
+
+      set.Commit();
+
+      // Каждый конечный том содержит точные новые байты.
+      Assert.Equal(new001, File.ReadAllBytes(final001));
+      Assert.Equal(new002, File.ReadAllBytes(final002));
+      Assert.Equal(new003, File.ReadAllBytes(final003));
+
+      // Staged-тома перенесены и не остаются.
+      Assert.False(File.Exists(staged001));
+      Assert.False(File.Exists(staged002));
+      Assert.False(File.Exists(staged003));
+
+      // Backup phase (#0–#2) + publish (#3–#5): ровно шесть Move.
+      Assert.Equal(6, fake.MoveCalls.Count);
+
+      string backupA = fake.MoveCalls[0].Destination;
+      string backupB = fake.MoveCalls[1].Destination;
+      string backupC = fake.MoveCalls[2].Destination;
+
+      // Cleanup удалил все три journaled backups и не удалял ничего другого.
+      Assert.Equal(3, fake.DeleteCalls.Count);
+      Assert.Contains(backupA, fake.DeleteCalls);
+      Assert.Contains(backupB, fake.DeleteCalls);
+      Assert.Contains(backupC, fake.DeleteCalls);
+
+      Assert.False(File.Exists(backupA));
+      Assert.False(File.Exists(backupB));
+      Assert.False(File.Exists(backupC));
+
+      // После dispose опубликованный новый набор остаётся байт-в-байт.
+      set.Dispose();
+
+      Assert.True(File.Exists(final001));
+      Assert.True(File.Exists(final002));
+      Assert.True(File.Exists(final003));
+      Assert.Equal(new001, File.ReadAllBytes(final001));
+      Assert.Equal(new002, File.ReadAllBytes(final002));
+      Assert.Equal(new003, File.ReadAllBytes(final003));
+    }
+    finally
+    {
+      try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+      catch (UnauthorizedAccessException) { }
+    }
+  }
+
+  /// <summary>
+  /// Controlled отказ Delete при cleanup backups после commit: новый набор не откатывается,
+  /// cleanup продолжается для остальных backups, Dispose не удаляет опубликованный набор.
+  /// </summary>
+  [Fact]
+  public void Commit_BackupCleanupDeleteFailure_DoesNotRollbackPublishedSet()
+  {
+    string dir = Path.Combine(Path.GetTempPath(), "lzmasharp-sec002-staged-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(dir);
+
+    // Первый cleanup-Delete (первый backup в журнале) выбрасывает IOException.
+    var fake = new StagedFileOperationsFake(failDeleteIndex: 0);
+
+    try
+    {
+      string destinationBase = Path.Combine(dir, "archive");
+
+      string final001 = destinationBase + ".001";
+      string final002 = destinationBase + ".002";
+      string final003 = destinationBase + ".003";
+
+      byte[] old001 = Encoding.UTF8.GetBytes("old-001");
+      byte[] old002 = Encoding.UTF8.GetBytes("old-002");
+      byte[] old003 = Encoding.UTF8.GetBytes("old-003");
+
+      File.WriteAllBytes(final001, old001);
+      File.WriteAllBytes(final002, old002);
+      File.WriteAllBytes(final003, old003);
+
+      string stagedBase = Path.Combine(dir, "archive.staged");
+      string staged001 = stagedBase + ".001";
+      string staged002 = stagedBase + ".002";
+      string staged003 = stagedBase + ".003";
+
+      byte[] new001 = Encoding.UTF8.GetBytes("new-001");
+      byte[] new002 = Encoding.UTF8.GetBytes("new-002");
+      byte[] new003 = Encoding.UTF8.GetBytes("new-003");
+
+      File.WriteAllBytes(staged001, new001);
+      File.WriteAllBytes(staged002, new002);
+      File.WriteAllBytes(staged003, new003);
+
+      using var set = new StagedVolumeSet(destinationBase, fake);
+      set.SetVolumes([staged001, staged002, staged003]);
+
+      // Cleanup failure — best-effort: Commit не сообщает транзакционный сбой.
+      set.Commit();
+
+      // Новый набор опубликован и не откачен.
+      Assert.Equal(new001, File.ReadAllBytes(final001));
+      Assert.Equal(new002, File.ReadAllBytes(final002));
+      Assert.Equal(new003, File.ReadAllBytes(final003));
+
+      // Старые байты не восстановлены ни в одном конечном томе.
+      Assert.DoesNotContain("old-", Encoding.UTF8.GetString(File.ReadAllBytes(final001)));
+      Assert.DoesNotContain("old-", Encoding.UTF8.GetString(File.ReadAllBytes(final002)));
+      Assert.DoesNotContain("old-", Encoding.UTF8.GetString(File.ReadAllBytes(final003)));
+
+      string backupA = fake.MoveCalls[0].Destination;
+      string backupB = fake.MoveCalls[1].Destination;
+      string backupC = fake.MoveCalls[2].Destination;
+
+      // Cleanup продолжился после контролируемого отказа: Delete вызван для всех трёх backups.
+      Assert.Equal(3, fake.DeleteCalls.Count);
+
+      // Остальные backups удалены; инжектированный backupA может остаться на диске.
+      Assert.False(File.Exists(backupB));
+      Assert.False(File.Exists(backupC));
+
+      // Dispose не удаляет опубликованный новый набор.
+      set.Dispose();
+
+      Assert.True(File.Exists(final001));
+      Assert.True(File.Exists(final002));
+      Assert.True(File.Exists(final003));
+      Assert.Equal(new001, File.ReadAllBytes(final001));
+      Assert.Equal(new002, File.ReadAllBytes(final002));
+      Assert.Equal(new003, File.ReadAllBytes(final003));
+    }
+    finally
+    {
+      try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+      catch (UnauthorizedAccessException) { }
+    }
+  }
+
+  /// <summary>
   /// Fake файловых операций: по умолчанию делегирует <see cref="File"/>, детерминированно
-  /// считает вызовы Move и выбрасывает IOException на точно заданном номере Move (нумерация
-  /// с нуля). Исключение возникает только в Move, не в Exists/Delete.
+  /// считает вызовы Move/Delete и выбрасывает IOException на точно заданном номере
+  /// (нумерация с нуля) в Move или Delete.
   /// </summary>
   private sealed class StagedFileOperationsFake : IStagedVolumeFileOperations
   {
     private readonly int _failMoveIndex;
+    private readonly int _failDeleteIndex;
     private int _moveCallCount;
+    private int _deleteCallCount;
 
-    public StagedFileOperationsFake(int failMoveIndex)
+    public StagedFileOperationsFake(int failMoveIndex = -1, int failDeleteIndex = -1)
     {
       _failMoveIndex = failMoveIndex;
+      _failDeleteIndex = failDeleteIndex;
     }
 
     public List<(string Source, string Destination)> MoveCalls { get; } = [];
+
+    public List<string> DeleteCalls { get; } = [];
 
     public bool Exists(string path) => File.Exists(path);
 
@@ -492,6 +673,19 @@ public sealed class StagedVolumeSetTests
       File.Move(sourcePath, destinationPath, overwrite);
     }
 
-    public void Delete(string path) => File.Delete(path);
+    public void Delete(string path)
+    {
+      DeleteCalls.Add(path);
+
+      int current = _deleteCallCount;
+      _deleteCallCount++;
+
+      if (current == _failDeleteIndex)
+      {
+        throw new IOException($"Injected failure on Delete #{current}.");
+      }
+
+      File.Delete(path);
+    }
   }
 }
