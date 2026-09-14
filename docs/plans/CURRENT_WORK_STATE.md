@@ -2,12 +2,12 @@
 doc_kind: current-work-plan
 status: active
 project: LzmaSharp
-last_verified_date: 2026-09-14
+last_verified_date: 2026-09-15
 main_branch: main
 main_commit: 3a55297106e6a978b460faa5bfe3b1a1b85b1041
 active_work_branch: fix/sec002-multivolume-transaction
-active_work_commit: fd5904a34881dd90655715503581d8f50a1d894f
-next_task: SEC002-M5
+active_work_commit: e9712dde37f8dff974a7d2d38deb8768d01b542e
+next_task: SEC002-M6
 ---
 
 # LzmaSharp: текущее состояние работ и ближайший план
@@ -138,6 +138,37 @@ controlled publish failure
 - ошибки rollback;
 - crash/power-loss recovery;
 - платформенная CI-матрица.
+
+### SEC002-M5 — завершён
+
+Реализовано:
+
+- удалён successful-path delete-by-scan дополнительных `{base}.NNN`;
+- immediate numbered path за новым manifest проверяется до первой мутации;
+- при недоказанном ownership операция возвращает существующий `InternalError`;
+- существующий многотомный набор сохраняется байт-в-байт;
+- файлы после разрыва нумерации не обнаруживаются и не изменяются;
+- публичный API не изменён.
+
+Проверки:
+
+- `StagedVolumeSetTests`: 9 passed;
+- preservation tests: 2 passed;
+- `Lzma.Ui.Tests`: 207 passed;
+- full solution: 1906 passed, 0 failed;
+- independent reviewer: `APPROVE`.
+
+Остаточные риски:
+
+- numbered path как каталог;
+- публичный `DestinationConflict`;
+- orphan-файлы после разрыва;
+- repeated `Commit`;
+- transaction state;
+- manifest validation;
+- rollback-failure tests;
+- crash/power-loss recovery;
+- platform CI matrix.
 
 ## 5. Почему SEC-002 ещё не закрыт
 
