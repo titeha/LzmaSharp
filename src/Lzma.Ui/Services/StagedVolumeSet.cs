@@ -92,18 +92,36 @@ internal sealed class StagedVolumeSet : System.IDisposable
   }
 
   /// <summary>
-  /// Коммитит staged-тома в конечные имена <c>{DestinationBasePath}.NNN</c> с заменой
-  /// существующих и удаляет лишние старые тома, если новый набор короче.
+  /// Коммитит staged-тома в конечные имена <c>{DestinationBasePath}.NNN</c>.
   /// Вызывать только после успешного завершения операции и <see cref="SetVolumes"/>.
-  /// Ошибки переноса/удаления пробрасываются: частичная публикация или лишний старый
-  /// том делают многотомный набор нечитаемым.
+  /// Перед первой мутацией назначения проверяет, существует ли первый нумерованный
+  /// путь вне нового manifest (<c>{base}.{N+1:D3}</c>, где <c>N</c> = число staged-томов).
+  /// Если такой файл существует, операция отклоняется с
+  /// <see cref="StagedVolumeConflictException"/> до создания backup, публикации или
+  /// удаления. Файлы за разрывом нумерации не обнаруживаются и не модифицируются.
+  /// Мутируются только пути, журналированные текущей операцией (manifest + backup +
+  /// опубликованные тома). Ошибки переноса пробрасываются: частичная публикация
+  /// делает многотомный набор нечитаемым.
   /// </summary>
   /// <exception cref="InvalidOperationException">Manifest не заполнен.</exception>
+  /// <exception cref="StagedVolumeConflictException">
+  /// Непосредственно за новым manifest существует дополнительный нумерованный файл
+  /// с недоказанным ownership.
+  /// </exception>
   public void Commit()
   {
     if (_manifest.Count == 0)
     {
       throw new InvalidOperationException("Manifest staged-томов не заполнен.");
+    }
+
+    // SEC002-M5.2: pre-mutation conflict check. Проверяем только первый нумерованный
+    // путь за новым manifest. Если он существует — это дополнительный файл с
+    // недоказанным ownership; отклоняем до первой мутации назначения.
+    string firstAdditional = VolumeSpanningWriteStream.VolumePath(_destinationBasePath, _manifest.Count);
+    if (_fileOperations.Exists(firstAdditional))
+    {
+      throw new StagedVolumeConflictException(firstAdditional);
     }
 
     // Резервная фаза: до публикации ни одного нового тома переносим все существующие
@@ -170,19 +188,6 @@ internal sealed class StagedVolumeSet : System.IDisposable
       throw new AggregateException(
           "Ошибка публикации томов с последующим сбоем отката.",
           [publishFailure, .. rollbackErrors]);
-    }
-
-    // Устаревшие тома: старый набор мог быть длиннее нового. Имена томов идут
-    // без пропусков (.001/.002/…), поэтому чистим подряд до первого отсутствующего.
-    for (int i = _manifest.Count; ; i++)
-    {
-      string stale = VolumeSpanningWriteStream.VolumePath(_destinationBasePath, i);
-      if (!_fileOperations.Exists(stale))
-      {
-        break;
-      }
-
-      _fileOperations.Delete(stale);
     }
 
     _committed = true;
@@ -387,5 +392,25 @@ internal sealed class StagedVolumeSet : System.IDisposable
 
     string fileName = Path.GetFileName(destinationBasePath);
     return Path.Combine(directory, $"{fileName}.{Guid.NewGuid():N}.volumes.tmp");
+  }
+}
+
+/// <summary>
+/// Конфликт назначения: дополнительный нумерованный файл существует непосредственно
+/// за новым manifest, но его ownership не может быть доказан текущим контрактом.
+/// Исключение выбрасывается ДО первой мутации назначения; никакие файлы не
+/// создаются, не перемещаются и не удаляются. Наследует <see cref="IOException"/>,
+/// чтобы существующая граница ошибок сервиса продолжала маппить его в
+/// <c>SevenZipArchiveWriteResult.InternalError</c>.
+/// </summary>
+internal sealed class StagedVolumeConflictException : IOException
+{
+  /// <summary>Путь конфликтующего нумерованного файла.</summary>
+  public string ConflictingPath { get; }
+
+  internal StagedVolumeConflictException(string conflictingPath)
+      : base($"Дополнительный нумерованный файл существует и его ownership не доказан: {conflictingPath}")
+  {
+    ConflictingPath = conflictingPath;
   }
 }

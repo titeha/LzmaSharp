@@ -635,6 +635,200 @@ public sealed class StagedVolumeSetTests
   }
 
   /// <summary>
+  /// SEC002-M5: если первый нумерованный путь сразу за новым manifest
+  /// (<c>archive.002</c>) уже существует, его ownership не доказан, и
+  /// <see cref="StagedVolumeSet.Commit"/> отклоняет операцию контролируемым
+  /// исключением (производное от <see cref="IOException"/>) ДО первой мутации
+  /// назначения. Существующие конечные файлы остаются байт-в-байт неизменными;
+  /// очистке <see cref="StagedVolumeSet.Dispose"/> подлежат только staged-файлы,
+  /// принадлежащие текущей операции.
+  /// </summary>
+  [Fact]
+  public void Commit_AdditionalNumberedFileWithoutOwnershipProof_RejectsBeforeMutation()
+  {
+    string dir = Path.Combine(Path.GetTempPath(), "lzmasharp-sec002-staged-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(dir);
+
+    // Без инъекций отказов Move/Delete: ожидается, что мутаций вообще не будет.
+    var fake = new StagedFileOperationsFake();
+
+    try
+    {
+      string destinationBase = Path.Combine(dir, "archive");
+
+      string final001 = destinationBase + ".001";
+      string final002 = destinationBase + ".002";
+      string final003 = destinationBase + ".003";
+
+      byte[] old001 = Encoding.UTF8.GetBytes("old-001");
+      byte[] old002 = Encoding.UTF8.GetBytes("old-002");
+      byte[] old003 = Encoding.UTF8.GetBytes("old-003");
+
+      File.WriteAllBytes(final001, old001);
+      File.WriteAllBytes(final002, old002);
+      File.WriteAllBytes(final003, old003);
+
+      // Посторонний файл: не должен затрагиваться ни отказом, ни очисткой.
+      string unrelatedPath = Path.Combine(dir, "unrelated.txt");
+      byte[] unrelated = Encoding.UTF8.GetBytes("unrelated-data");
+      File.WriteAllBytes(unrelatedPath, unrelated);
+
+      // Ровно один staged-том: manifest = [staged.001], значит archive.002 —
+      // первый нумерованный путь вне manifest с неизвестным ownership.
+      string stagedBase = Path.Combine(dir, "staged");
+      string staged001 = stagedBase + ".001";
+      byte[] new001 = Encoding.UTF8.GetBytes("new-001");
+      File.WriteAllBytes(staged001, new001);
+
+      using var set = new StagedVolumeSet(destinationBase, fake);
+      set.SetVolumes([staged001]);
+
+      // Будущий контракт: контролируемый конфликт до первой мутации.
+      // Production-исключение будет производным от IOException; конкретный тип
+      // здесь не называется, чтобы не менять production-код в этом микрошаге.
+      Assert.ThrowsAny<IOException>(() => set.Commit());
+
+      // Доказательства «до первой мутации» (проверяются до Dispose).
+      Assert.Empty(fake.MoveCalls);
+      Assert.Empty(fake.DeleteCalls);
+
+      Assert.Equal(old001, File.ReadAllBytes(final001));
+      Assert.Equal(old002, File.ReadAllBytes(final002));
+      Assert.Equal(old003, File.ReadAllBytes(final003));
+
+      // Staged-том ещё существует: отказ не чистит staging — это делает Dispose.
+      Assert.True(File.Exists(staged001));
+
+      // Backup-файлы не создавались.
+      Assert.Empty(Directory.GetFiles(dir, "*.bak"));
+
+      // В каталоге назначения нет новых финальных данных и лишних файлов:
+      // 3 final + 1 staged + 1 посторонний.
+      Assert.Equal(5, Directory.GetFiles(dir).Length);
+
+      set.Dispose();
+
+      // После Dispose: staged очищен, существующий набор байт-в-байт цел.
+      Assert.False(File.Exists(staged001));
+
+      Assert.True(File.Exists(final001));
+      Assert.True(File.Exists(final002));
+      Assert.True(File.Exists(final003));
+      Assert.Equal(old001, File.ReadAllBytes(final001));
+      Assert.Equal(old002, File.ReadAllBytes(final002));
+      Assert.Equal(old003, File.ReadAllBytes(final003));
+
+      // Backup-файлов нет; посторонний файл не удалён.
+      Assert.Empty(Directory.GetFiles(dir, "*.bak"));
+      Assert.Equal(unrelated, File.ReadAllBytes(unrelatedPath));
+    }
+    finally
+    {
+      try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+      catch (UnauthorizedAccessException) { }
+    }
+  }
+
+  /// <summary>
+  /// SEC002-M5.4 (characterization): если нумерованный файл существует только
+  /// после разрыва нумерации (<c>archive.003</c> при отсутствии <c>archive.002</c>),
+  /// он не детектируется pre-mutation probe и не блокирует успешный commit. Такие
+  /// файлы остаются байт-в-байт неизменными; ownership не доказывается и не
+  /// требуется. Scan за разрывом не выполняется.
+  /// </summary>
+  [Fact]
+  public void Commit_ExtraVolumeAfterGap_IsPreservedAndCommitSucceeds()
+  {
+    string dir = Path.Combine(Path.GetTempPath(), "lzmasharp-sec002-staged-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(dir);
+
+    var fake = new StagedFileOperationsFake();
+
+    try
+    {
+      string destinationBase = Path.Combine(dir, "archive");
+
+      // archive.001 — в управляемом диапазоне manifest (заменяется).
+      // archive.002 — НЕ создаётся (разрыв нумерации).
+      // archive.003 — существует после разрыва (orphan, ownership недоказан).
+      string final001 = destinationBase + ".001";
+      string final002 = destinationBase + ".002";
+      string final003 = destinationBase + ".003";
+
+      byte[] old001 = Encoding.UTF8.GetBytes("old-001");
+      byte[] orphan003 = Encoding.UTF8.GetBytes("orphan-003");
+
+      File.WriteAllBytes(final001, old001);
+      // final002 намеренно не создаётся.
+      File.WriteAllBytes(final003, orphan003);
+
+      // Посторонний файл: не должен затрагиваться операцией.
+      string unrelatedPath = Path.Combine(dir, "unrelated.txt");
+      byte[] unrelated = Encoding.UTF8.GetBytes("unrelated-data");
+      File.WriteAllBytes(unrelatedPath, unrelated);
+
+      // Ровно один staged-том: manifest = [staged.001].
+      string stagedBase = Path.Combine(dir, "staged");
+      string staged001 = stagedBase + ".001";
+      byte[] new001 = Encoding.UTF8.GetBytes("new-001");
+      File.WriteAllBytes(staged001, new001);
+
+      using var set = new StagedVolumeSet(destinationBase, fake);
+      set.SetVolumes([staged001]);
+
+      // Commit должен успешно завершиться: archive.002 отсутствует → конфликта нет.
+      set.Commit();
+
+      // archive.001 заменён на new-001.
+      Assert.True(File.Exists(final001));
+      Assert.Equal(new001, File.ReadAllBytes(final001));
+
+      // archive.002 по-прежнему не существует.
+      Assert.False(File.Exists(final002));
+
+      // archive.003 байт-в-байт сохранён (orphan не тронут).
+      Assert.True(File.Exists(final003));
+      Assert.Equal(orphan003, File.ReadAllBytes(final003));
+
+      // Посторонний файл неизменён.
+      Assert.Equal(unrelated, File.ReadAllBytes(unrelatedPath));
+
+      // Staged-том удалён (перенесён в final).
+      Assert.False(File.Exists(staged001));
+
+      // Backup-файлов не осталось.
+      Assert.Empty(Directory.GetFiles(dir, "*.bak"));
+
+      // Состав каталога: ровно 3 файла: final001, final003 и unrelated
+      // (staged-том перенесён в final и отсутствует).
+      string[] expectedFiles = [final001, final003, unrelatedPath];
+      Assert.Equal(expectedFiles.OrderBy(p => p), Directory.GetFiles(dir).OrderBy(p => p));
+
+      // Через журнал операций доказываем, что archive.003 никогда не был:
+      // - источником Move;
+      // - назначением Move;
+      // - целью Delete.
+      Assert.DoesNotContain(final003, fake.MoveCalls.Select(c => c.Source));
+      Assert.DoesNotContain(final003, fake.MoveCalls.Select(c => c.Destination));
+      Assert.DoesNotContain(final003, fake.DeleteCalls);
+
+      // Dispose: финалы остаются байт-в-байт, артефактов нет.
+      set.Dispose();
+
+      Assert.Equal(new001, File.ReadAllBytes(final001));
+      Assert.Equal(orphan003, File.ReadAllBytes(final003));
+      Assert.Equal(unrelated, File.ReadAllBytes(unrelatedPath));
+      Assert.Empty(Directory.GetFiles(dir, "*.bak"));
+      Assert.Empty(Directory.GetFiles(dir, "staged.*"));
+    }
+    finally
+    {
+      try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+      catch (UnauthorizedAccessException) { }
+    }
+  }
+
+  /// <summary>
   /// Fake файловых операций: по умолчанию делегирует <see cref="File"/>, детерминированно
   /// считает вызовы Move/Delete и выбрасывает IOException на точно заданном номере
   /// (нумерация с нуля) в Move или Delete.
