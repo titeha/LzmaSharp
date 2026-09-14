@@ -1011,6 +1011,181 @@ public sealed class StagedVolumeSetTests
   }
 
   /// <summary>
+  /// SEC002-M6.2A (красный): пустой список staged-путей должен отклоняться
+  /// <see cref="ArgumentException"/> до любых файловых операций. Текущая реализация
+  /// принимает пустой список (Count остаётся 0), поэтому тест доказуемо падает.
+  /// </summary>
+  [Fact]
+  public void SetVolumes_Empty_ThrowsArgumentException()
+  {
+    string dir = Path.Combine(Path.GetTempPath(), "lzmasharp-sec002-staged-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(dir);
+
+    var fake = new StagedFileOperationsFake();
+
+    try
+    {
+      string destinationBase = Path.Combine(dir, "archive");
+
+      using var set = new StagedVolumeSet(destinationBase, fake);
+
+      // Пустой список: ожидается ArgumentException.
+      Assert.Throws<ArgumentException>(() => set.SetVolumes([]));
+
+      // Ни одной файловой операции.
+      Assert.Empty(fake.MoveCalls);
+      Assert.Empty(fake.DeleteCalls);
+
+      // Состояние остаётся Created: повторный вызов также отклоняется.
+      Assert.Throws<ArgumentException>(() => set.SetVolumes([]));
+    }
+    finally
+    {
+      try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+      catch (UnauthorizedAccessException) { }
+    }
+  }
+
+  /// <summary>
+  /// SEC002-M6.2A (красный): список с null или whitespace элементами должен отклоняться
+  /// <see cref="ArgumentException"/> до любых файловых операций. Текущая реализация
+  /// принимает такие пути (AddRange без валидации), что приводит к отказам mid-publish
+  /// после backup-фазы, поэтому тест доказуемо падает.
+  /// </summary>
+  [Fact]
+  public void SetVolumes_NullOrWhitespacePath_ThrowsArgumentException()
+  {
+    string dir = Path.Combine(Path.GetTempPath(), "lzmasharp-sec002-staged-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(dir);
+
+    var fake = new StagedFileOperationsFake();
+
+    try
+    {
+      string destinationBase = Path.Combine(dir, "archive");
+
+      // Тест 1: null-элемент в списке.
+      {
+        using var set = new StagedVolumeSet(destinationBase, fake);
+        Assert.Throws<ArgumentException>(() => set.SetVolumes([null!]));
+        Assert.Empty(fake.MoveCalls);
+        Assert.Empty(fake.DeleteCalls);
+      }
+
+      // Тест 2: пустая строка.
+      {
+        using var set = new StagedVolumeSet(destinationBase, fake);
+        Assert.Throws<ArgumentException>(() => set.SetVolumes([""]));
+        Assert.Empty(fake.MoveCalls);
+        Assert.Empty(fake.DeleteCalls);
+      }
+
+      // Тест 3: whitespace.
+      {
+        using var set = new StagedVolumeSet(destinationBase, fake);
+        Assert.Throws<ArgumentException>(() => set.SetVolumes(["   "]));
+        Assert.Empty(fake.MoveCalls);
+        Assert.Empty(fake.DeleteCalls);
+      }
+    }
+    finally
+    {
+      try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+      catch (UnauthorizedAccessException) { }
+    }
+  }
+
+  /// <summary>
+  /// SEC002-M6.2A (красный): дубликаты staged-путей (точная копия и лексически
+  /// эквивалентные с разным написанием) должны отклоняться <see cref="ArgumentException"/>
+  /// до любых файловых операций. Текущая реализация не проверяет уникальность,
+  /// что приводит к повторным Move одного staged-файла mid-publish (после backup),
+  /// поэтому тест доказуемо падает.
+  /// </summary>
+  [Fact]
+  public void SetVolumes_DuplicatePaths_ThrowsArgumentException()
+  {
+    string dir = Path.Combine(Path.GetTempPath(), "lzmasharp-sec002-staged-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(dir);
+
+    var fake = new StagedFileOperationsFake();
+
+    try
+    {
+      string destinationBase = Path.Combine(dir, "archive");
+
+      // Тест 1: точный дубликат.
+      {
+        using var set = new StagedVolumeSet(destinationBase, fake);
+        string staged001 = Path.Combine(dir, "staged.001");
+        Assert.Throws<ArgumentException>(() => set.SetVolumes([staged001, staged001]));
+        Assert.Empty(fake.MoveCalls);
+        Assert.Empty(fake.DeleteCalls);
+      }
+
+      // Тест 2: лексически эквивалентные пути с разным написанием.
+      {
+        using var set = new StagedVolumeSet(destinationBase, fake);
+        string staged001 = Path.Combine(dir, "staged.001");
+        string staged001Dot = Path.Combine(dir, ".", "staged.001");
+        Assert.Throws<ArgumentException>(() => set.SetVolumes([staged001, staged001Dot]));
+        Assert.Empty(fake.MoveCalls);
+        Assert.Empty(fake.DeleteCalls);
+      }
+    }
+    finally
+    {
+      try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+      catch (UnauthorizedAccessException) { }
+    }
+  }
+
+  /// <summary>
+  /// SEC002-M6.2A (красный): staged-путь, совпадающий с одним из финальных путей
+  /// (вычисляемых из destinationBase и manifest count), должен отклоняться
+  /// <see cref="ArgumentException"/> до любых файловых операций. Текущая реализация
+  /// не проверяет коллизии, что приводит к исчезновению staged-источника после backup
+  /// (backup уводит final = staged в .bak), поэтому тест доказуемо падает.
+  /// </summary>
+  [Fact]
+  public void SetVolumes_PathCollidesWithFinal_ThrowsArgumentException()
+  {
+    string dir = Path.Combine(Path.GetTempPath(), "lzmasharp-sec002-staged-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(dir);
+
+    var fake = new StagedFileOperationsFake();
+
+    try
+    {
+      string destinationBase = Path.Combine(dir, "archive");
+
+      // Тест 1: staged-путь совпадает с final.001 (первый финальный путь).
+      {
+        using var set = new StagedVolumeSet(destinationBase, fake);
+        string final001 = destinationBase + ".001";
+        Assert.Throws<ArgumentException>(() => set.SetVolumes([final001]));
+        Assert.Empty(fake.MoveCalls);
+        Assert.Empty(fake.DeleteCalls);
+      }
+
+      // Тест 2: staged-путь совпадает с final.002 (второй финальный путь при 2 томах).
+      {
+        using var set = new StagedVolumeSet(destinationBase, fake);
+        string staged001 = Path.Combine(dir, "staged.001");
+        string final002 = destinationBase + ".002";
+        Assert.Throws<ArgumentException>(() => set.SetVolumes([staged001, final002]));
+        Assert.Empty(fake.MoveCalls);
+        Assert.Empty(fake.DeleteCalls);
+      }
+    }
+    finally
+    {
+      try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+      catch (UnauthorizedAccessException) { }
+    }
+  }
+
+  /// <summary>
   /// Fake файловых операций: по умолчанию делегирует <see cref="File"/>, детерминированно
   /// считает вызовы Move/Delete и выбрасывает IOException на точно заданном номере
   /// (нумерация с нуля) в Move или Delete.

@@ -34,6 +34,14 @@ internal sealed class StagedVolumeSet : System.IDisposable
     Failed,
     Disposed
   }
+  /// <summary>
+  /// SEC002-M6.2B: platform-specific comparer для нормализованных путей.
+  /// Windows: OrdinalIgnoreCase (NTFS case-insensitive по умолчанию).
+  /// Other: Ordinal (POSIX case-sensitive).
+  /// </summary>
+  private static readonly StringComparer PathComparer =
+      OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
   /// <summary>Seam файловых операций (инъекция для тестов/детерминированных отказов).</summary>
   private readonly IStagedVolumeFileOperations _fileOperations;
 
@@ -97,6 +105,10 @@ internal sealed class StagedVolumeSet : System.IDisposable
   /// <param name="stagedVolumePaths">Пути созданных staged-томов в порядке .001, .002, …</param>
   /// <exception cref="ObjectDisposedException">Объект уже диспозирован.</exception>
   /// <exception cref="InvalidOperationException">Manifest уже заполнен или Commit уже выполнен/отклонён.</exception>
+  /// <exception cref="ArgumentException">
+  /// Список пуст, содержит null/empty/whitespace элементы, дубликаты (после нормализации),
+  /// или staged-путь коллидирует с финальным путём.
+  /// </exception>
   public void SetVolumes(IReadOnlyList<string> stagedVolumePaths)
   {
     ArgumentNullException.ThrowIfNull(stagedVolumePaths);
@@ -113,14 +125,56 @@ internal sealed class StagedVolumeSet : System.IDisposable
           $"SetVolumes разрешён только в состоянии Created (текущее: {_state}).");
     }
 
-    _manifest.AddRange(stagedVolumePaths);
-
-    // Переход в Ready только при непустом manifest (пустой остаётся Created;
-    // shape-валидация пустого списка — задача M6.2).
-    if (_manifest.Count > 0)
+    // SEC002-M6.2B: shape validation — reject empty list.
+    if (stagedVolumePaths.Count == 0)
     {
-      _state = State.Ready;
+      throw new ArgumentException("Список staged-путей не может быть пустым.", nameof(stagedVolumePaths));
     }
+
+    // SEC002-M6.2B: shape validation — reject null/empty/whitespace, duplicates, collisions.
+    var normalizedPaths = new HashSet<string>(PathComparer);
+
+    for (int i = 0; i < stagedVolumePaths.Count; i++)
+    {
+      string path = stagedVolumePaths[i];
+
+      // Reject null/empty/whitespace.
+      if (string.IsNullOrWhiteSpace(path))
+      {
+        throw new ArgumentException(
+            $"Staged-путь не может быть null/empty/whitespace (индекс {i}).",
+            nameof(stagedVolumePaths));
+      }
+
+      // Normalize for comparison.
+      string normalized = Path.GetFullPath(path);
+
+      // Reject duplicates.
+      if (!normalizedPaths.Add(normalized))
+      {
+        throw new ArgumentException(
+            $"Staged-путь дублируется после нормализации: {path} (индекс {i}).",
+            nameof(stagedVolumePaths));
+      }
+
+      // Reject collision with final paths.
+      for (int j = 0; j < stagedVolumePaths.Count; j++)
+      {
+        string finalPath = VolumeSpanningWriteStream.VolumePath(_destinationBasePath, j);
+        string normalizedFinal = Path.GetFullPath(finalPath);
+
+        if (PathComparer.Equals(normalized, normalizedFinal))
+        {
+          throw new ArgumentException(
+              $"Staged-путь коллидирует с финальным путём: {path} (индекс {i}) == {finalPath}.",
+              nameof(stagedVolumePaths));
+        }
+      }
+    }
+
+    // Все проверки пройдены: сохраняем оригинальные строки и переходим в Ready.
+    _manifest.AddRange(stagedVolumePaths);
+    _state = State.Ready;
   }
 
   /// <summary>
