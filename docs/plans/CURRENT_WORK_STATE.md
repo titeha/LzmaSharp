@@ -6,8 +6,8 @@ last_verified_date: 2026-09-14
 main_branch: main
 main_commit: 3a55297106e6a978b460faa5bfe3b1a1b85b1041
 active_work_branch: fix/sec002-multivolume-transaction
-active_work_commit: fa0313dcef1f39febcc80cb600612fd52f4ad87d
-next_task: SEC002-M4B
+active_work_commit: fd5904a34881dd90655715503581d8f50a1d894f
+next_task: SEC002-M5
 ---
 
 # LzmaSharp: текущее состояние работ и ближайший план
@@ -111,6 +111,33 @@ controlled publish failure
 → restore journaled backups
 → clean staged files best-effort
 ```
+
+### 4.4 SEC002-M4B — завершён
+
+Реализованы:
+
+- commit point после полной публикации нового набора и текущей stale-фазы;
+- best-effort cleanup только operation-owned backup-файлов;
+- отсутствие rollback после commit point;
+- сохранение опубликованного нового набора при ошибке удаления backup;
+- отсутствие backup-файлов после обычного успешного commit.
+
+Проверки:
+
+- `StagedVolumeSetTests`: 7 passed;
+- `CreateVolumes_SuccessOverLargerOldSet_PublishesAndRemovesStaleVolumes`:
+  1 passed;
+- `Lzma.Ui.Tests`: 205 passed;
+- независимый reviewer: `APPROVE`.
+
+Остаточные риски:
+
+- ownership дополнительных `{base}.NNN`;
+- повторный `Commit`;
+- manifest validation;
+- ошибки rollback;
+- crash/power-loss recovery;
+- платформенная CI-матрица.
 
 ## 5. Почему SEC-002 ещё не закрыт
 
