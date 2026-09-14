@@ -829,6 +829,188 @@ public sealed class StagedVolumeSetTests
   }
 
   /// <summary>
+  /// SEC002-M6.1A (красный): повторный <see cref="StagedVolumeSet.Commit"/> после
+  /// успешного первого commit обязан отклонить операцию с
+  /// <see cref="InvalidOperationException"/> и не выполнить ни одной дополнительной
+  /// файловой операции. На текущей реализации второй Commit вызывает backup+publish
+  /// (с отказом и rollback), тратя Move/Delete-вызовы и создавая окно, в котором
+  /// finals временно отсутствуют, поэтому тест доказуемо падает.
+  /// </summary>
+  [Fact]
+  public void Commit_Twice_SecondCallThrowsWithoutFileMutation()
+  {
+    string dir = Path.Combine(Path.GetTempPath(), "lzmasharp-sec002-staged-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(dir);
+
+    var fake = new StagedFileOperationsFake();
+
+    try
+    {
+      string destinationBase = Path.Combine(dir, "archive");
+      string final001 = destinationBase + ".001";
+      byte[] old001 = Encoding.UTF8.GetBytes("old-001");
+      File.WriteAllBytes(final001, old001);
+
+      string stagedBase = Path.Combine(dir, "staged");
+      string staged001 = stagedBase + ".001";
+      byte[] new001 = Encoding.UTF8.GetBytes("new-001");
+      File.WriteAllBytes(staged001, new001);
+
+      using var set = new StagedVolumeSet(destinationBase, fake);
+      set.SetVolumes([staged001]);
+
+      set.Commit();
+
+      // Снимок после первого успешного commit.
+      int moveCallsAfterFirst = fake.MoveCalls.Count;
+      int deleteCallsAfterFirst = fake.DeleteCalls.Count;
+      byte[] finalBytesAfterFirst = File.ReadAllBytes(final001);
+      string[] filesAfterFirst = Directory.GetFiles(dir).OrderBy(p => p).ToArray();
+
+      // Повторный Commit: ожидается InvalidOperationException, без файловых мутаций.
+      Assert.Throws<InvalidOperationException>(() => set.Commit());
+
+      Assert.Equal(moveCallsAfterFirst, fake.MoveCalls.Count);
+      Assert.Equal(deleteCallsAfterFirst, fake.DeleteCalls.Count);
+      Assert.Equal(finalBytesAfterFirst, File.ReadAllBytes(final001));
+      Assert.Equal(filesAfterFirst, Directory.GetFiles(dir).OrderBy(p => p).ToArray());
+    }
+    finally
+    {
+      try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+      catch (UnauthorizedAccessException) { }
+    }
+  }
+
+  /// <summary>
+  /// SEC002-M6.1A (красный): после контролируемого отказа publish и rollback
+  /// повторный <see cref="StagedVolumeSet.Commit"/> обязан отклонить операцию с
+  /// <see cref="InvalidOperationException"/> и не выполнить ни одной дополнительной
+  /// файловой операции. Транзакция one-shot: даже чистый rollback не открывает
+  /// повтор. На текущей реализации retry разрешён — test доказуемо падает.
+  /// </summary>
+  [Fact]
+  public void Commit_AfterControlledFailure_SecondCallThrowsWithoutFileMutation()
+  {
+    string dir = Path.Combine(Path.GetTempPath(), "lzmasharp-sec002-staged-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(dir);
+
+    // backup Move = index 0 (успех), publish Move = index 1 (сбой IOException).
+    var fake = new StagedFileOperationsFake(failMoveIndex: 1);
+
+    try
+    {
+      string destinationBase = Path.Combine(dir, "archive");
+      string final001 = destinationBase + ".001";
+      byte[] old001 = Encoding.UTF8.GetBytes("old-001");
+      File.WriteAllBytes(final001, old001);
+
+      string stagedBase = Path.Combine(dir, "staged");
+      string staged001 = stagedBase + ".001";
+      byte[] new001 = Encoding.UTF8.GetBytes("new-001");
+      File.WriteAllBytes(staged001, new001);
+
+      using var set = new StagedVolumeSet(destinationBase, fake);
+      set.SetVolumes([staged001]);
+
+      // Первый Commit падает контролируемо (IOException из publish Move).
+      Assert.Throws<IOException>(() => set.Commit());
+
+      // Существующий rollback обязан восстановить исходные байты.
+      Assert.Equal(old001, File.ReadAllBytes(final001));
+
+      // Снимок после первого отказа и rollback.
+      int moveCallsAfterFailure = fake.MoveCalls.Count;
+      int deleteCallsAfterFailure = fake.DeleteCalls.Count;
+
+      // Повторный Commit: ожидается InvalidOperationException, без файловых мутаций.
+      Assert.Throws<InvalidOperationException>(() => set.Commit());
+
+      Assert.Equal(moveCallsAfterFailure, fake.MoveCalls.Count);
+      Assert.Equal(deleteCallsAfterFailure, fake.DeleteCalls.Count);
+      Assert.Equal(old001, File.ReadAllBytes(final001));
+    }
+    finally
+    {
+      try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+      catch (UnauthorizedAccessException) { }
+    }
+  }
+
+  /// <summary>
+  /// SEC002-M6.1A (красный): после <see cref="StagedVolumeSet.Dispose"/> любые
+  /// мутающие операции (<see cref="StagedVolumeSet.Commit"/> и
+  /// <see cref="StagedVolumeSet.SetVolumes"/>) обязаны отклонять вызов с
+  /// <see cref="ObjectDisposedException"/>, не выполняя ни одной файловой операции.
+  /// Read-only свойства (DestinationBasePath, StagedBasePath, Manifest) остаются
+  /// читаемыми. На текущей реализации disposed-флага нет, поэтому тест доказуемо
+  /// падает: Commit бросает IOException, SetVolumes проходит без исключения.
+  /// </summary>
+  [Fact]
+  public void Operations_AfterDispose_ThrowObjectDisposedException()
+  {
+    string dir = Path.Combine(Path.GetTempPath(), "lzmasharp-sec002-staged-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(dir);
+
+    try
+    {
+      // Instance A: Dispose после SetVolumes; Commit обязан бросить ODE
+      // без дополнительных Move/Delete.
+      {
+        var fakeA = new StagedFileOperationsFake();
+        string destinationBaseA = Path.Combine(dir, "archiveA");
+        string stagedBaseA = Path.Combine(dir, "stagedA");
+        string staged001A = stagedBaseA + ".001";
+        File.WriteAllBytes(staged001A, Encoding.UTF8.GetBytes("new-a-001"));
+
+        var setA = new StagedVolumeSet(destinationBaseA, fakeA);
+        setA.SetVolumes([staged001A]);
+        setA.Dispose();
+
+        int moveA = fakeA.MoveCalls.Count;
+        int deleteA = fakeA.DeleteCalls.Count;
+
+        Assert.Throws<ObjectDisposedException>(() => setA.Commit());
+
+        Assert.Equal(moveA, fakeA.MoveCalls.Count);
+        Assert.Equal(deleteA, fakeA.DeleteCalls.Count);
+
+        // Read-only свойства остаются читаемыми после Dispose.
+        _ = setA.DestinationBasePath;
+        _ = setA.StagedBasePath;
+        _ = setA.Manifest;
+      }
+
+      // Instance B: Dispose до SetVolumes; SetVolumes обязан бросить ODE
+      // без единой Move/Delete-операции.
+      {
+        var fakeB = new StagedFileOperationsFake();
+        string destinationBaseB = Path.Combine(dir, "archiveB");
+        string stagedBaseB = Path.Combine(dir, "stagedB");
+        string staged001B = stagedBaseB + ".001";
+        File.WriteAllBytes(staged001B, Encoding.UTF8.GetBytes("new-b-001"));
+
+        var setB = new StagedVolumeSet(destinationBaseB, fakeB);
+        setB.Dispose();
+
+        Assert.Throws<ObjectDisposedException>(() => setB.SetVolumes([staged001B]));
+
+        Assert.Empty(fakeB.MoveCalls);
+        Assert.Empty(fakeB.DeleteCalls);
+
+        _ = setB.DestinationBasePath;
+        _ = setB.StagedBasePath;
+        _ = setB.Manifest;
+      }
+    }
+    finally
+    {
+      try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+      catch (UnauthorizedAccessException) { }
+    }
+  }
+
+  /// <summary>
   /// Fake файловых операций: по умолчанию делегирует <see cref="File"/>, детерминированно
   /// считает вызовы Move/Delete и выбрасывает IOException на точно заданном номере
   /// (нумерация с нуля) в Move или Delete.

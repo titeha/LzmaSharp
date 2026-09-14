@@ -10,13 +10,30 @@ namespace Lzma.Ui.Services;
 /// <see cref="Commit"/> после успешного завершения операции.
 /// </summary>
 /// <remarks>
-/// Шаги 10.1–10.3: staged-база вычисляется рядом с назначением, manifest
+/// <para>Шаги 10.1–10.3: staged-база вычисляется рядом с назначением, manifest
 /// заполняется через <see cref="SetVolumes"/>, <see cref="Commit"/> переносит
 /// тома в конечные имена, <see cref="Dispose"/> убирает staged-тома без
-/// публикации. Подключение к сервису — шаг 10.4.
+/// публикации. Подключение к сервису — шаг 10.4.</para>
+/// <para>SEC002-M6.1B: тип управляет lifecycle через внутреннее состояние
+/// (Created → Ready → Committing → Committed/Failed → Disposed). Commit —
+/// one-shot: любой выход кроме успеха фиксирует Failed и запрещает повтор.
+/// <b>Не является потокобезопасным</b>: единственный владелец, без локов.</para>
 /// </remarks>
 internal sealed class StagedVolumeSet : System.IDisposable
 {
+  /// <summary>
+  /// SEC002-M6.1B: внутреннее состояние транзакции. Commit — one-shot;
+  /// любой выход кроме успеха запрещает повторный Commit/SetVolumes.
+  /// </summary>
+  private enum State
+  {
+    Created,
+    Ready,
+    Committing,
+    Committed,
+    Failed,
+    Disposed
+  }
   /// <summary>Seam файловых операций (инъекция для тестов/детерминированных отказов).</summary>
   private readonly IStagedVolumeFileOperations _fileOperations;
 
@@ -29,8 +46,8 @@ internal sealed class StagedVolumeSet : System.IDisposable
   /// <summary>Manifest: staged-тома, зафиксированные для commit/cleanup.</summary>
   private readonly List<string> _manifest = [];
 
-  /// <summary>Была ли успешная публикация staged-томов в назначение.</summary>
-  private bool _committed;
+  /// <summary>Текущее состояние транзакции (SEC002-M6.1B).</summary>
+  private State _state;
 
   /// <summary>
   /// Инициализирует новый экземпляр класса <see cref="StagedVolumeSet"/>
@@ -78,17 +95,32 @@ internal sealed class StagedVolumeSet : System.IDisposable
   /// завершения записи, до <see cref="Commit"/>.
   /// </summary>
   /// <param name="stagedVolumePaths">Пути созданных staged-томов в порядке .001, .002, …</param>
-  /// <exception cref="InvalidOperationException">Manifest уже заполнен.</exception>
+  /// <exception cref="ObjectDisposedException">Объект уже диспозирован.</exception>
+  /// <exception cref="InvalidOperationException">Manifest уже заполнен или Commit уже выполнен/отклонён.</exception>
   public void SetVolumes(IReadOnlyList<string> stagedVolumePaths)
   {
     ArgumentNullException.ThrowIfNull(stagedVolumePaths);
 
-    if (_manifest.Count > 0)
+    // SEC002-M6.1B: lifecycle guards.
+    if (_state == State.Disposed)
     {
-      throw new InvalidOperationException("Manifest staged-томов уже заполнен.");
+      throw new ObjectDisposedException(nameof(StagedVolumeSet));
+    }
+
+    if (_state != State.Created)
+    {
+      throw new InvalidOperationException(
+          $"SetVolumes разрешён только в состоянии Created (текущее: {_state}).");
     }
 
     _manifest.AddRange(stagedVolumePaths);
+
+    // Переход в Ready только при непустом manifest (пустой остаётся Created;
+    // shape-валидация пустого списка — задача M6.2).
+    if (_manifest.Count > 0)
+    {
+      _state = State.Ready;
+    }
   }
 
   /// <summary>
@@ -103,17 +135,36 @@ internal sealed class StagedVolumeSet : System.IDisposable
   /// опубликованные тома). Ошибки переноса пробрасываются: частичная публикация
   /// делает многотомный набор нечитаемым.
   /// </summary>
-  /// <exception cref="InvalidOperationException">Manifest не заполнен.</exception>
+  /// <exception cref="ObjectDisposedException">Объект уже диспозирован.</exception>
+  /// <exception cref="InvalidOperationException">
+  /// Commit уже был выполнен/отклонён, или manifest не заполнен.
+  /// Транзакция one-shot: повторный Commit запрещён в любом состоянии кроме Ready.
+  /// </exception>
   /// <exception cref="StagedVolumeConflictException">
   /// Непосредственно за новым manifest существует дополнительный нумерованный файл
   /// с недоказанным ownership.
   /// </exception>
   public void Commit()
   {
-    if (_manifest.Count == 0)
+    // SEC002-M6.1B: lifecycle guards. Disposed и «не Ready» отклоняются до
+    // любых файловых операций; one-shot Commit запрещает retry даже после
+    // чистого rollback.
+    if (_state == State.Disposed)
     {
-      throw new InvalidOperationException("Manifest staged-томов не заполнен.");
+      throw new ObjectDisposedException(nameof(StagedVolumeSet));
     }
+
+    if (_state != State.Ready)
+    {
+      throw new InvalidOperationException(
+          _manifest.Count == 0
+              ? "Manifest staged-томов не заполнен."
+              : $"Commit разрешён только в состоянии Ready (текущее: {_state}). Повторный Commit запрещён.");
+    }
+
+    _state = State.Committing;
+    try
+    {
 
     // SEC002-M5.2: pre-mutation conflict check. Проверяем только первый нумерованный
     // путь за новым manifest. Если он существует — это дополнительный файл с
@@ -178,8 +229,6 @@ internal sealed class StagedVolumeSet : System.IDisposable
       var rollbackErrors = new List<Exception>();
       RollbackPublish(published, backups, rollbackErrors);
 
-      _committed = false;
-
       if (rollbackErrors.Count == 0)
       {
         throw;
@@ -190,7 +239,9 @@ internal sealed class StagedVolumeSet : System.IDisposable
           [publishFailure, .. rollbackErrors]);
     }
 
-    _committed = true;
+    // Commit point (SEC002-M4B + SEC002-M6.1B): состояние фиксируется ДО
+    // backup cleanup; отказ cleanup не откатывает Committed.
+    _state = State.Committed;
 
     // Коммит-поинт пройден: удаляем только backups текущей операции (журнал backups),
     // best-effort. Контролируемый отказ cleanup не откатывает уже опубликованный набор
@@ -204,6 +255,17 @@ internal sealed class StagedVolumeSet : System.IDisposable
       catch (Exception ex) when (IsControlledFailure(ex))
       {
         // Cleanup best-effort: отказавший backup может остаться на диске.
+      }
+    }
+    }
+    finally
+    {
+      // SEC002-M6.1B: любой нештатный выход из Commit (контролируемый отказ,
+      // rollback-failure, non-controlled exception) фиксирует Failed и
+      // запрещает повторный Commit. Успех уже зафиксировал Committed выше.
+      if (_state == State.Committing)
+      {
+        _state = State.Failed;
       }
     }
   }
@@ -319,16 +381,28 @@ internal sealed class StagedVolumeSet : System.IDisposable
   }
 
   /// <summary>
-  /// Rollback/cleanup: если <see cref="Commit"/> не было, удаляет staged-тома.
-  /// Кроме manifest сканирует диск: запись могла прерваться до <see cref="SetVolumes"/>.
-  /// Ошибки удаления глотаются — очистка не должна маскировать исходную ошибку операции.
+  /// Rollback/cleanup: удаляет staged-тома best-effort, если транзакция не
+  /// завершилась успешно. После Committed не выполняет файловых
+  /// операций (опубликованный набор не затрагивается). Идемпотентен.
+  /// Read-only свойства остаются читаемыми после Dispose.
   /// </summary>
   public void Dispose()
   {
-    if (_committed)
+    // SEC002-M6.1B: идемпотентность.
+    if (_state == State.Disposed)
     {
       return;
     }
+
+    // SEC002-M6.1B: после успешного commit файловых операций нет.
+    if (_state == State.Committed)
+    {
+      _state = State.Disposed;
+      return;
+    }
+
+    // Created/Ready/Committing/Failed: существующая best-effort staged cleanup.
+    // Committing — только при concurrent misuse (не thread-safe, документировано).
 
     var victims = new List<string>(_manifest);
     foreach (string path in ProbeStagedVolumes())
@@ -354,6 +428,8 @@ internal sealed class StagedVolumeSet : System.IDisposable
         // Очистка best-effort: нет доступа к staged-тому.
       }
     }
+
+    _state = State.Disposed;
   }
 
   /// <summary>
