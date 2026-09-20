@@ -251,11 +251,15 @@ internal sealed class StagedVolumeSet : System.IDisposable
     {
       BackupFinalVolumes(backups);
     }
-    catch (Exception backupFailure)
+    catch (Exception backupFailure) when (IsControlledFailure(backupFailure))
     {
       // Сбой внутри backup-фазы: новые тома ещё не публиковались, откатываем уже
       // созданные резервные копии в обратном порядке и сохраняем исходное исключение
       // как первичное. Откат не должен молча глотать собственные ошибки.
+      // SEC002-M6.4B: откат выполняется только для контролируемых отказов файловой
+      // системы. Не-контролируемое исключение (OOM/AccessViolation и т.п.) не
+      // перехватывается и не заворачивается: оно пробрасывается как есть, а M6.1
+      // finally фиксирует Failed — повторный Commit запрещён.
       Exception? restoreFailure = null;
       try
       {

@@ -1255,21 +1255,113 @@ public sealed class StagedVolumeSetTests
   }
 
   /// <summary>
+  /// SEC002-M6.4A (красный): не-контролируемое исключение в backup-фазе обязано
+  /// пробрасываться как есть, БЕЗ попытки controlled-отката (RestoreBackups) и БЕЗ
+  /// права на повторный Commit. Тест фиксирует, что M6 запрещает retry после
+  /// не-контролируемого отказа; полное поведение восстановления — задача M7.
+  /// На текущей реализации широкий <c>catch (Exception)</c> в backup-фазе пытается
+  /// выполнить RestoreBackups, поэтому тест доказуемо падает.
+  /// </summary>
+  [Fact]
+  public void Commit_BackupNonControlledFailure_EscapesWithoutRestoreAndForbidsRetry()
+  {
+    string dir = Path.Combine(Path.GetTempPath(), "lzmasharp-sec002-staged-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(dir);
+
+    // Move #0 — backup final001 (успех); Move #1 — backup final002: не-контролируемое
+    // исключение ДО переноса.
+    var injected = new InvalidOperationException("Injected non-controlled backup failure.");
+    var fake = new StagedFileOperationsFake(failMoveIndex: 1, moveFailure: injected);
+
+    try
+    {
+      string destinationBase = Path.Combine(dir, "archive");
+
+      string final001 = destinationBase + ".001";
+      string final002 = destinationBase + ".002";
+
+      byte[] old001 = Encoding.UTF8.GetBytes("old-001");
+      byte[] old002 = Encoding.UTF8.GetBytes("old-002");
+
+      File.WriteAllBytes(final001, old001);
+      File.WriteAllBytes(final002, old002);
+
+      string stagedBase = Path.Combine(dir, "staged");
+      string staged001 = stagedBase + ".001";
+      string staged002 = stagedBase + ".002";
+
+      File.WriteAllBytes(staged001, Encoding.UTF8.GetBytes("new-001"));
+      File.WriteAllBytes(staged002, Encoding.UTF8.GetBytes("new-002"));
+
+      using var set = new StagedVolumeSet(destinationBase, fake);
+      set.SetVolumes([staged001, staged002]);
+
+      // 1. Первый Commit пробрасывает то же самое не-контролируемое исключение
+      //    (без обёртки в AggregateException).
+      Assert.Same(injected, Assert.Throws<InvalidOperationException>(() => set.Commit()));
+
+      // 2–3. Restore НЕ выполняется: в журнале ровно успешный backup #0
+      //      и неудачная попытка backup #1.
+      Assert.Equal(2, fake.MoveCalls.Count);
+      Assert.Equal(final001, fake.MoveCalls[0].Source);
+      Assert.Equal(final002, fake.MoveCalls[1].Source);
+      Assert.Equal(dir, Path.GetDirectoryName(fake.MoveCalls[0].Destination));
+      Assert.Equal(dir, Path.GetDirectoryName(fake.MoveCalls[1].Destination));
+
+      // 4. Backup, созданный Move #0, остаётся на диске (не восстановлен).
+      string backup001 = fake.MoveCalls[0].Destination;
+      Assert.True(File.Exists(backup001));
+
+      // 5. final001 отсутствует: controlled rollback не выполнялся.
+      Assert.False(File.Exists(final001));
+
+      // 6. final002 не тронут.
+      Assert.Equal(old002, File.ReadAllBytes(final002));
+
+      // Публикации не было: staged-тома на месте.
+      Assert.True(File.Exists(staged001));
+      Assert.True(File.Exists(staged002));
+
+      // 7. Повторный Commit запрещён (lifecycle Failed) и не выполняет
+      //    ни одной новой Move/Delete-операции.
+      int moveCallsAfterFailure = fake.MoveCalls.Count;
+      int deleteCallsAfterFailure = fake.DeleteCalls.Count;
+
+      Assert.Throws<InvalidOperationException>(() => set.Commit());
+
+      Assert.Equal(moveCallsAfterFailure, fake.MoveCalls.Count);
+      Assert.Equal(deleteCallsAfterFailure, fake.DeleteCalls.Count);
+    }
+    finally
+    {
+      // 8. Очистка временного каталога; ошибки очистки не маскируют падение теста.
+      try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+      catch (UnauthorizedAccessException) { }
+    }
+  }
+
+  /// <summary>
   /// Fake файловых операций: по умолчанию делегирует <see cref="File"/>, детерминированно
   /// считает вызовы Move/Delete и выбрасывает IOException на точно заданном номере
-  /// (нумерация с нуля) в Move или Delete.
+  /// (нумерация с нуля) в Move или Delete. Для Move отказ можно задать своим
+  /// исключением через <c>moveFailure</c> (по умолчанию — IOException).
   /// </summary>
   private sealed class StagedFileOperationsFake : IStagedVolumeFileOperations
   {
     private readonly int _failMoveIndex;
     private readonly int _failDeleteIndex;
+    private readonly Exception? _moveFailure;
     private int _moveCallCount;
     private int _deleteCallCount;
 
-    public StagedFileOperationsFake(int failMoveIndex = -1, int failDeleteIndex = -1)
+    public StagedFileOperationsFake(
+        int failMoveIndex = -1,
+        int failDeleteIndex = -1,
+        Exception? moveFailure = null)
     {
       _failMoveIndex = failMoveIndex;
       _failDeleteIndex = failDeleteIndex;
+      _moveFailure = moveFailure;
     }
 
     public List<(string Source, string Destination)> MoveCalls { get; } = [];
@@ -1287,7 +1379,7 @@ public sealed class StagedVolumeSetTests
 
       if (current == _failMoveIndex)
       {
-        throw new IOException($"Injected failure on Move #{current}.");
+        throw _moveFailure ?? new IOException($"Injected failure on Move #{current}.");
       }
 
       File.Move(sourcePath, destinationPath, overwrite);
