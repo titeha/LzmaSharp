@@ -1341,6 +1341,108 @@ public sealed class StagedVolumeSetTests
   }
 
   /// <summary>
+  /// SEC002-M6 pin: повторный <see cref="StagedVolumeSet.SetVolumes"/> отклоняется
+  /// <see cref="InvalidOperationException"/> без единой файловой операции, а manifest
+  /// сохраняет ровно первый список.
+  /// </summary>
+  [Fact]
+  public void SetVolumes_Twice_ThrowsWithoutFileMutation()
+  {
+    string dir = Path.Combine(Path.GetTempPath(), "lzmasharp-sec002-staged-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(dir);
+
+    var fake = new StagedFileOperationsFake();
+
+    try
+    {
+      string destinationBase = Path.Combine(dir, "archive");
+
+      using var set = new StagedVolumeSet(destinationBase, fake);
+
+      // Два различных валидных manifest: непустые, уникальные, без коллизий с finals.
+      string[] firstManifest =
+      [
+          Path.Combine(dir, "stagedA.001"),
+          Path.Combine(dir, "stagedA.002"),
+      ];
+
+      string[] secondManifest =
+      [
+          Path.Combine(dir, "stagedB.001"),
+          Path.Combine(dir, "stagedB.002"),
+      ];
+
+      set.SetVolumes(firstManifest);
+
+      int moveCallsAfterFirst = fake.MoveCalls.Count;
+      int deleteCallsAfterFirst = fake.DeleteCalls.Count;
+
+      Assert.Throws<InvalidOperationException>(() => set.SetVolumes(secondManifest));
+
+      // Число операций не изменилось.
+      Assert.Equal(moveCallsAfterFirst, fake.MoveCalls.Count);
+      Assert.Equal(deleteCallsAfterFirst, fake.DeleteCalls.Count);
+
+      // Manifest содержит ровно первый список; элементы второго не добавлены.
+      Assert.Equal(firstManifest, set.Manifest);
+
+      // В каталоге назначения ничего не создано, не перенесено и не удалено.
+      Assert.Empty(Directory.GetFiles(dir));
+    }
+    finally
+    {
+      try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+      catch (UnauthorizedAccessException) { }
+    }
+  }
+
+  /// <summary>
+  /// SEC002-M6 pin: <see cref="StagedVolumeSet.Commit"/> без
+  /// <see cref="StagedVolumeSet.SetVolumes"/> отклоняется
+  /// <see cref="InvalidOperationException"/> до любых файловых операций:
+  /// backup и конечные тома не создаются, после чего объект штатно диспозируется.
+  /// </summary>
+  [Fact]
+  public void Commit_BeforeSetVolumes_ThrowsInvalidOperationExceptionWithoutFileMutation()
+  {
+    string dir = Path.Combine(Path.GetTempPath(), "lzmasharp-sec002-staged-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(dir);
+
+    var fake = new StagedFileOperationsFake();
+
+    try
+    {
+      string destinationBase = Path.Combine(dir, "archive");
+      string final001 = destinationBase + ".001";
+
+      using var set = new StagedVolumeSet(destinationBase, fake);
+
+      int moveCallsBefore = fake.MoveCalls.Count;
+      int deleteCallsBefore = fake.DeleteCalls.Count;
+
+      Assert.Throws<InvalidOperationException>(() => set.Commit());
+
+      // Число операций не изменилось.
+      Assert.Equal(moveCallsBefore, fake.MoveCalls.Count);
+      Assert.Equal(deleteCallsBefore, fake.DeleteCalls.Count);
+
+      // Backup не создавались, конечный том не публиковался.
+      Assert.Empty(Directory.GetFiles(dir, "*.bak"));
+      Assert.False(File.Exists(final001));
+
+      // После отказа объект штатно диспозируется и ничего не создаёт.
+      set.Dispose();
+
+      Assert.Empty(Directory.GetFiles(dir));
+    }
+    finally
+    {
+      try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+      catch (UnauthorizedAccessException) { }
+    }
+  }
+
+  /// <summary>
   /// Fake файловых операций: по умолчанию делегирует <see cref="File"/>, детерминированно
   /// считает вызовы Move/Delete и выбрасывает IOException на точно заданном номере
   /// (нумерация с нуля) в Move или Delete. Для Move отказ можно задать своим
