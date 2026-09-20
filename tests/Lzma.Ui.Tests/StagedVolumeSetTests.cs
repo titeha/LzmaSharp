@@ -1186,6 +1186,75 @@ public sealed class StagedVolumeSetTests
   }
 
   /// <summary>
+  /// SEC002-M6.3A (красный): если manifest ссылается на отсутствующий staged-файл,
+  /// <see cref="StagedVolumeSet.Commit"/> обязан отклонить операцию
+  /// <see cref="FileNotFoundException"/> ДО первой мутации назначения. На текущей
+  /// реализации backup-фаза сначала уводит finals в .bak, и только затем publish
+  /// обнаруживает отсутствующий источник (с rollback), поэтому тест доказуемо падает.
+  /// </summary>
+  [Fact]
+  public void Commit_MissingStagedFile_RejectsBeforeMutation()
+  {
+    string dir = Path.Combine(Path.GetTempPath(), "lzmasharp-sec002-staged-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(dir);
+
+    var fake = new StagedFileOperationsFake();
+
+    try
+    {
+      string destinationBase = Path.Combine(dir, "archive");
+
+      // Два старых финальных тома с различающимися байтами.
+      string final001 = destinationBase + ".001";
+      string final002 = destinationBase + ".002";
+
+      byte[] old001 = Encoding.UTF8.GetBytes("old-001");
+      byte[] old002 = Encoding.UTF8.GetBytes("old-002");
+
+      File.WriteAllBytes(final001, old001);
+      File.WriteAllBytes(final002, old002);
+
+      // staged.001 существует; staged.002 включён в manifest, но НЕ создаётся.
+      string stagedBase = Path.Combine(dir, "staged");
+      string staged001 = stagedBase + ".001";
+      string staged002 = stagedBase + ".002";
+      byte[] new001 = Encoding.UTF8.GetBytes("new-001");
+      File.WriteAllBytes(staged001, new001);
+
+      using var set = new StagedVolumeSet(destinationBase, fake);
+      set.SetVolumes([staged001, staged002]);
+
+      // Будущий контракт: FileNotFoundException до первой мутации.
+      Assert.Throws<FileNotFoundException>(() => set.Commit());
+
+      // Ни одной Move/Delete-операции: назначение не затронуто.
+      Assert.Empty(fake.MoveCalls);
+      Assert.Empty(fake.DeleteCalls);
+
+      // Старые finals байт-в-байт прежние; backup не создавались.
+      Assert.Equal(old001, File.ReadAllBytes(final001));
+      Assert.Equal(old002, File.ReadAllBytes(final002));
+      Assert.Empty(Directory.GetFiles(dir, "*.bak"));
+
+      // staged.001 существует до Dispose: отказ не чистит staging.
+      Assert.True(File.Exists(staged001));
+
+      set.Dispose();
+
+      // После Dispose: staged.001 удалён; назначение байт-в-байт неизменно.
+      Assert.False(File.Exists(staged001));
+      Assert.Equal(old001, File.ReadAllBytes(final001));
+      Assert.Equal(old002, File.ReadAllBytes(final002));
+      Assert.Empty(Directory.GetFiles(dir, "*.bak"));
+    }
+    finally
+    {
+      try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+      catch (UnauthorizedAccessException) { }
+    }
+  }
+
+  /// <summary>
   /// Fake файловых операций: по умолчанию делегирует <see cref="File"/>, детерминированно
   /// считает вызовы Move/Delete и выбрасывает IOException на точно заданном номере
   /// (нумерация с нуля) в Move или Delete.

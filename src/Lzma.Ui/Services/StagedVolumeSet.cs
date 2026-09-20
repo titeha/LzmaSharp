@@ -220,6 +220,21 @@ internal sealed class StagedVolumeSet : System.IDisposable
     try
     {
 
+    // SEC002-M6.3B: pre-mutation existence check. Каждый staged-файл manifest
+    // проверяется через существующий seam до conflict probe, backup, publish и
+    // Delete: отсутствующий источник —FileNotFoundException до первой мутации
+    // назначения (каталог считается отсутствующим, т.к. File.Exists для него false).
+    // M6.1 finally фиксирует Failed — повторный Commit запрещён.
+    foreach (string stagedPath in _manifest)
+    {
+      if (!_fileOperations.Exists(stagedPath))
+      {
+        throw new FileNotFoundException(
+            "Staged-файл тома не найден; публикация отклонена до первой мутации назначения.",
+            stagedPath);
+      }
+    }
+
     // SEC002-M5.2: pre-mutation conflict check. Проверяем только первый нумерованный
     // путь за новым manifest. Если он существует — это дополнительный файл с
     // недоказанным ownership; отклоняем до первой мутации назначения.
