@@ -115,3 +115,10 @@ publish/
 .pi-lens/
 .serena/
 .claude/
+
+# SEC002-SCOPE-02: restore local publish, test and IDE ignores.
+*.publishsettings
+TestResult.xml
+nunit-*.xml
+PublishScripts/
+_ReSharper*/
