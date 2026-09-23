@@ -1443,6 +1443,88 @@ public sealed class StagedVolumeSetTests
   }
 
   /// <summary>
+  /// SEC002-M6-F1A (красный): приоритет disposed-состояния над проверкой аргумента в
+  /// <see cref="StagedVolumeSet.SetVolumes"/>. Согласованный контракт M6 (README pack,
+  /// правило после Dispose; 02_M6_1B, раздел SetVolumes: «If <c>Disposed</c>: throw
+  /// <see cref="ObjectDisposedException"/>») не делает исключения для <c>null</c>-манифеста.
+  /// На текущей реализации <c>ArgumentNullException.ThrowIfNull</c> выполняется раньше
+  /// disposed-guard, поэтому <see cref="StagedVolumeSet.SetVolumes"/>(null) после Dispose
+  /// бросает <see cref="ArgumentNullException"/> — Disposed-сценарий доказуемо падает.
+  /// Контрольный Created-блок фиксирует, что null-валидация аргумента сохраняется и не
+  /// мешает приёму последующего корректного манифеста. <see cref="StagedFileOperationsFake"/>
+  /// считает только Move/Delete; утверждения ниже не измеряют Exists.
+  /// </summary>
+  [Fact]
+  public void SetVolumes_NullAfterDispose_ThrowsObjectDisposedException()
+  {
+    string dir = Path.Combine(Path.GetTempPath(), "lzmasharp-sec002-staged-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(dir);
+
+    try
+    {
+      // Контроль Created: до Dispose null-манифест отклоняется точным
+      // ArgumentNullException, объект остаётся пригодным для корректного списка.
+      {
+        var fakeCreated = new StagedFileOperationsFake();
+        string destinationBase = Path.Combine(dir, "archiveCreated");
+        string stagedBase = Path.Combine(dir, "stagedCreated");
+        string staged001 = stagedBase + ".001";
+        File.WriteAllBytes(staged001, Encoding.UTF8.GetBytes("new-created-001"));
+
+        using var setCreated = new StagedVolumeSet(destinationBase, fakeCreated);
+
+        Assert.Throws<ArgumentNullException>(() => setCreated.SetVolumes(null!));
+
+        // Отклонённый null-вызов не выполнил ни одной Move/Delete-операции.
+        Assert.Empty(fakeCreated.MoveCalls);
+        Assert.Empty(fakeCreated.DeleteCalls);
+        Assert.Empty(setCreated.Manifest);
+
+        // Состояние осталось Created: корректный непустой манифест по-прежнему принимается.
+        // Commit намеренно не вызывается — проверяется только приём манифеста.
+        string[] createdManifest = [staged001];
+        setCreated.SetVolumes(createdManifest);
+
+        Assert.Equal(createdManifest, setCreated.Manifest);
+        Assert.Empty(fakeCreated.MoveCalls);
+        Assert.Empty(fakeCreated.DeleteCalls);
+      }
+
+      // Основной Disposed-сценарий: Dispose выполняется первым, снимки снимаются только
+      // после него, затем null-манифест обязан дать точный ObjectDisposedException.
+      {
+        var fakeDisposed = new StagedFileOperationsFake();
+        string destinationBase = Path.Combine(dir, "archiveDisposed");
+
+        var setDisposed = new StagedVolumeSet(destinationBase, fakeDisposed);
+        setDisposed.Dispose();
+
+        int moveCallsAfterDispose = fakeDisposed.MoveCalls.Count;
+        int deleteCallsAfterDispose = fakeDisposed.DeleteCalls.Count;
+        string[] manifestAfterDispose = setDisposed.Manifest.ToArray();
+        string destinationBaseAfterDispose = setDisposed.DestinationBasePath;
+        string stagedBaseAfterDispose = setDisposed.StagedBasePath;
+
+        Assert.Throws<ObjectDisposedException>(() => setDisposed.SetVolumes(null!));
+
+        // Отклонённый вызов не добавил Move/Delete-операций.
+        Assert.Equal(moveCallsAfterDispose, fakeDisposed.MoveCalls.Count);
+        Assert.Equal(deleteCallsAfterDispose, fakeDisposed.DeleteCalls.Count);
+
+        // Read-only свойства остаются читаемыми и неизменными после Dispose.
+        Assert.Equal(destinationBaseAfterDispose, setDisposed.DestinationBasePath);
+        Assert.Equal(stagedBaseAfterDispose, setDisposed.StagedBasePath);
+        Assert.Equal(manifestAfterDispose, setDisposed.Manifest);
+      }
+    }
+    finally
+    {
+      try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+      catch (UnauthorizedAccessException) { }
+    }
+  }
+
+  /// <summary>
   /// Fake файловых операций: по умолчанию делегирует <see cref="File"/>, детерминированно
   /// считает вызовы Move/Delete и выбрасывает IOException на точно заданном номере
   /// (нумерация с нуля) в Move или Delete. Для Move отказ можно задать своим

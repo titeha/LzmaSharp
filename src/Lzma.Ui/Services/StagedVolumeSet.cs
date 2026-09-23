@@ -111,13 +111,13 @@ internal sealed class StagedVolumeSet : System.IDisposable
   /// </exception>
   public void SetVolumes(IReadOnlyList<string> stagedVolumePaths)
   {
-    ArgumentNullException.ThrowIfNull(stagedVolumePaths);
-
     // SEC002-M6.1B: lifecycle guards.
     if (_state == State.Disposed)
     {
       throw new ObjectDisposedException(nameof(StagedVolumeSet));
     }
+
+    ArgumentNullException.ThrowIfNull(stagedVolumePaths);
 
     if (_state != State.Created)
     {
