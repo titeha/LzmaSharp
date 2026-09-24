@@ -2,12 +2,12 @@
 doc_kind: current-work-plan
 status: active
 project: LzmaSharp
-last_verified_date: 2026-09-15
+last_verified_date: 2026-09-24
 main_branch: main
 main_commit: 3a55297106e6a978b460faa5bfe3b1a1b85b1041
 active_work_branch: fix/sec002-multivolume-transaction
-active_work_commit: e9712dde37f8dff974a7d2d38deb8768d01b542e
-next_task: SEC002-M6
+active_work_commit: a6bc98ad3eee1cbe9f6c853687874a45fb364fff
+next_task: SEC002-M7
 ---
 
 # LzmaSharp: текущее состояние работ и ближайший план
@@ -59,8 +59,8 @@ date:   2026-08-14
 
 ```text
 branch: fix/sec002-multivolume-transaction
-commit: fa0313dcef1f39febcc80cb600612fd52f4ad87d
-date:   2026-08-27
+commit: a6bc98ad3eee1cbe9f6c853687874a45fb364fff
+date:   2026-09-24
 ```
 
 В ней сохранены:
@@ -71,7 +71,13 @@ date:   2026-08-27
 - rollback ошибок backup-фазы;
 - журнал опубликованных новых томов;
 - rollback частичной публикации;
-- тесты отказа до первого, после первого и на последнем publish.
+- тесты отказа до первого, после первого и на последнем publish;
+- M4B: commit point и cleanup operation backups;
+- M5: отказ от delete-by-scan и conflict policy для дополнительного `{base}.NNN`;
+- M6: lifecycle state machine, manifest-shape validation, staged-existence precheck,
+  controlled backup-catch;
+- M6-F1: приоритет disposed-guard над null-guard в `SetVolumes`;
+- принятый config-follow-up `.gitignore` (пять возвращённых локальных ignore-правил).
 
 Эту ветку нельзя выбрасывать или начинать заново.
 
@@ -139,6 +145,9 @@ controlled publish failure
 - crash/power-loss recovery;
 - платформенная CI-матрица.
 
+Из этого списка позже закрыто: повторный `Commit` и manifest validation — в M6.
+Crash/power-loss recovery и платформенная CI-матрица остаются открытыми.
+
 ### SEC002-M5 — завершён
 
 Реализовано:
@@ -170,23 +179,91 @@ controlled publish failure
 - crash/power-loss recovery;
 - platform CI matrix.
 
+Из этого списка позже закрыто в M6: repeated `Commit`, transaction state,
+manifest validation. Rollback-failure tests — M7; crash/power-loss recovery и
+platform CI matrix остаются открытыми.
+
+### SEC002-M6 — завершён
+
+Реализовано в `src/Lzma.Ui/Services/StagedVolumeSet.cs`:
+
+- один источник lifecycle-состояния: внутренний enum `State` и поле `_state`;
+  состояния: `Created`, `Ready`, `Committing`, `Committed`, `Failed`, `Disposed`;
+- `Commit()` — one-shot: повтор после успеха или после любой попытки отказа
+  отклоняется `InvalidOperationException` без файловых операций;
+- операции после `Dispose()` отклоняются `ObjectDisposedException`, включая
+  исправленный случай `SetVolumes(null)` (M6-F1: disposed-guard выполняется раньше
+  null-guard); в состоянии `Created` null-аргумент по-прежнему даёт точный
+  `ArgumentNullException`, экземпляр после отказа остаётся пригодным;
+- `Dispose()` идемпотентен, после `Committed` не выполняет файловых операций,
+  read-only свойства остаются читаемыми;
+- lexical manifest-shape validation в `SetVolumes()`: пустой список,
+  null/empty/whitespace, дубликаты и коллизии staged-пути с финальными путями
+  отклоняются `ArgumentException`; сравнение нормализованное, comparer OS-aware
+  (`OrdinalIgnoreCase` на Windows, `Ordinal` иначе); оригинальные строки manifest
+  сохраняются — это действующий контракт M6.2;
+- staged-file existence precheck в `Commit()` до conflict probe, backup, publish и
+  Delete (`FileNotFoundException` до первой мутации назначения);
+- controlled backup-catch ограничен `IOException` / `UnauthorizedAccessException`;
+  non-controlled исключение backup-фазы уходит без controlled rollback и без
+  обёртки, повторный `Commit` запрещён;
+- M4B commit point (до backup cleanup) и M5 conflict policy сохранены;
+  preservation-тесты остаются зелёными.
+
+Проверки на `a6bc98ad3eee1cbe9f6c853687874a45fb364fff` (2026-09-24):
+
+- `dotnet build -c Release --no-incremental`: 0 errors, 67 warnings;
+- `StagedVolumeSetTests`: 21 passed;
+- preservation tests: 2 passed;
+- `Lzma.Ui.Tests`: 219 passed;
+- full solution: 1918 passed = `Lzma.Ui.Tests` 219 + `Lzma.Core.Tests` 1699;
+- failed: 0; skipped: 0;
+- independent final review: `APPROVE` (SEC002-M6.5-FINAL).
+
+F4 disposition (принято владельцем, без преувеличений):
+
+- исторический mixed-scope коммита `bf0a14b` (M6-код + `.gitignore` + vendor)
+  принят владельцем как есть; история не переписывалась;
+- tracked `vendor/lzma-sdk/**` финальным config-follow-up не менялся;
+- `git diff --check` по полному диапазону M5→HEAD остаётся ненулевым только из-за
+  точного замороженного исторического исключения: 59 vendor-путей / 740 диагностик;
+- проверка всех неисключённых путей — PASS; проверка нового config-commit — PASS;
+- происхождение vendor (upstream identity) остаётся `UNVERIFIED`.
+
+Не заявляется (вне доказанного scope M6):
+
+- атомарность набора томов при любом отказе;
+- crash/power-loss recovery;
+- безопасное извлечение недоверенных архивов;
+- проверенная идентичность upstream/vendor;
+- завершённая platform/security CI-матрица.
+
+Открытые hardening/preflight items (в M6 не входили):
+
+- F2/AUD-004: `Manifest` возвращает mutable backing list;
+- F3/AUD-005: validate/use consistency для относительных путей;
+- M7: double-fault recovery (rollback-failure матрица);
+- SEC-003: symlink/junction/reparse/TOCTOU;
+- MNT-F4-*: deferred maintenance (vendor provenance, локальные `bin/**`,
+  output/agent-политики, GOST/RFC, evaluated build/package exclusion).
+
 ## 5. Почему SEC-002 ещё не закрыт
 
 SEC-002 считается **частично реализованным**, пока не выполнены все пункты ниже.
 
 ### Открытые пункты multi-volume
 
-1. После успешного commit backup-файлы не очищаются.
-2. Successful path всё ещё удаляет дополнительные `{base}.NNN` через scan,
-   не имея доказательства ownership.
-3. Нет полной state machine для повторного `Commit`, failed/rolled-back/disposed.
-4. Manifest валидируется недостаточно.
-5. Backup-фаза ловит слишком широкий `Exception`.
-6. Недостаточно тестов ошибок самого rollback.
-7. Не определено поведение при cleanup failure после commit.
-8. Нет crash/power-loss recovery journal. Это допустимое остаточное ограничение,
-   но оно должно быть честно документировано.
-9. Нет Windows/Linux/macOS CI matrix для файловых транзакций.
+1. Backup-файлы после успешного commit — закрыто (M4B).
+2. Delete-by-scan дополнительных `{base}.NNN` без доказательства ownership —
+   закрыто (M5).
+3. State machine для повторного `Commit`, failed/rolled-back/disposed — закрыто (M6).
+4. Manifest validation — закрыто (M6).
+5. Широкий `Exception` в backup-фазе — закрыто (M6).
+6. Недостаточно тестов ошибок самого rollback — ОТКРЫТО (M7).
+7. Поведение при cleanup failure после commit — закрыто (M4B).
+8. Нет crash/power-loss recovery journal — ОТКРЫТО. Это допустимое остаточное
+   ограничение, но оно должно быть честно документировано.
+9. Нет Windows/Linux/macOS CI matrix для файловых транзакций — ОТКРЫТО.
 
 ### Другие открытые риски
 
@@ -270,9 +347,13 @@ BLOCKED
 - остаётся в feature-ветке до минимального production-fix;
 - после исправления становится блокирующим зелёным тестом.
 
-## 8. Следующие микрошаги
+## 8. Микрошаги: статус и очередь
+
+M4B, M5 и M6 завершены (см. §4); далее — M7, затем M8/M9.
 
 ### SEC002-M4B — commit point и cleanup operation backups
+
+Статус: завершён (см. §4.4).
 
 Цель:
 
@@ -289,6 +370,8 @@ agent-prompts/SEC002_M4B_COMMIT_POINT_AND_BACKUP_CLEANUP.md
 
 ### SEC002-M5 — убрать delete-by-scan
 
+Статус: завершён (см. §4).
+
 Цель:
 
 - не удалять произвольный `{base}.NNN`;
@@ -298,6 +381,9 @@ agent-prompts/SEC002_M4B_COMMIT_POINT_AND_BACKUP_CLEANUP.md
 - изменить прежний тест удаления хвостовых томов только после явного утверждения новой политики.
 
 ### SEC002-M6 — transaction state и manifest validation
+
+Статус: завершён; independent final review `APPROVE` на
+`a6bc98ad3eee1cbe9f6c853687874a45fb364fff` (см. §4).
 
 Цель:
 
