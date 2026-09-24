@@ -1525,6 +1525,61 @@ public sealed class StagedVolumeSetTests
   }
 
   /// <summary>
+  /// SEC002-PREM7-F2A (красный): опубликованное значение <see cref="StagedVolumeSet.Manifest"/>
+  /// не должно позволять изменять фактический backing manifest через приведение к изменяемому
+  /// интерфейсу (F2/AUD-004). Контракт проверяется только через опубликованное значение:
+  /// конкретный runtime-тип не фиксируется. На базовой реализации свойство возвращает живой
+  /// <c>List&lt;string&gt;</c>, поэтому <c>Add</c> проходит без <see cref="NotSupportedException"/>
+  /// и тест доказуемо падает.
+  /// </summary>
+  [Fact]
+  public void SetVolumes_ManifestCannotBeMutatedThroughCast()
+  {
+    string dir = Path.Combine(Path.GetTempPath(), "lzmasharp-sec002-staged-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(dir);
+
+    var fake = new StagedFileOperationsFake();
+
+    try
+    {
+      string destinationBase = Path.Combine(dir, "archive");
+
+      string stagedBase = Path.Combine(dir, "staged");
+      string staged001 = stagedBase + ".001";
+      File.WriteAllBytes(staged001, Encoding.UTF8.GetBytes("new-001"));
+
+      // Второй корректный staged-путь: не дубликат и не коллизия с финальными путями.
+      string stagedExtra = Path.Combine(dir, "staged-extra.001");
+      File.WriteAllBytes(stagedExtra, Encoding.UTF8.GetBytes("extra-001"));
+
+      using var set = new StagedVolumeSet(destinationBase, fake);
+      set.SetVolumes([staged001]);
+
+      IReadOnlyList<string> manifest = set.Manifest;
+      IList<string> mutableView = Assert.IsAssignableFrom<IList<string>>(manifest);
+
+      int moveCallsBefore = fake.MoveCalls.Count;
+      int deleteCallsBefore = fake.DeleteCalls.Count;
+
+      // Мутация через опубликованное значение обязана отклоняться точным NotSupportedException.
+      Assert.Throws<NotSupportedException>(() => mutableView.Add(stagedExtra));
+
+      // Отклонённая мутация не изменила manifest и не выполнила файловых операций.
+      string[] expectedManifest = [staged001];
+      Assert.Equal(expectedManifest, set.Manifest);
+      Assert.Equal(moveCallsBefore, fake.MoveCalls.Count);
+      Assert.Equal(deleteCallsBefore, fake.DeleteCalls.Count);
+
+      // Commit намеренно не вызывается: проверяется только неизменяемость manifest.
+    }
+    finally
+    {
+      try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+      catch (UnauthorizedAccessException) { }
+    }
+  }
+
+  /// <summary>
   /// Fake файловых операций: по умолчанию делегирует <see cref="File"/>, детерминированно
   /// считает вызовы Move/Delete и выбрасывает IOException на точно заданном номере
   /// (нумерация с нуля) в Move или Delete. Для Move отказ можно задать своим

@@ -96,7 +96,7 @@ internal sealed class StagedVolumeSet : System.IDisposable
   public string StagedBasePath => _stagedBasePath;
 
   /// <summary>Manifest: staged-тома, зафиксированные для commit/cleanup.</summary>
-  public IReadOnlyList<string> Manifest => _manifest;
+  public IReadOnlyList<string> Manifest => _manifest.AsReadOnly();
 
   /// <summary>
   /// Фиксирует в manifest созданные staged-тома. Вызывается после полного
