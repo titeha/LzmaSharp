@@ -6,8 +6,8 @@ last_verified_date: 2026-10-13
 main_branch: main
 main_commit: 3a55297106e6a978b460faa5bfe3b1a1b85b1041
 active_work_branch: fix/sec002-multivolume-transaction
-active_work_commit: 042ffeb
-next_task: "A2: RED-тест F3 (frozen path identity), затем A3 fix"
+active_work_commit: c789515
+next_task: "A5: M7 design (RestoreBackups — восстановление всех backup, а не fail-fast)"
 ---
 
 # LzmaSharp: текущее состояние работ и ближайший план
@@ -220,17 +220,55 @@ platform CI matrix остаются открытыми.
 - failed: 0; skipped: 0;
 - independent final review: `APPROVE` (SEC002-M6.5-FINAL).
 
-### F3 / AUD-005 — дизайн утверждён, реализация не начата
+### F3 / AUD-005 — фикс внесён и подтверждён независимым ревью
 
 Дизайн варианта B (frozen operational path в `StagedVolumeSet.SetVolumes`) утверждён
 владельцем и независимым ревью (APPROVE_WITH_COMMENTS, без BLOCKING/MAJOR).
 
 - Дизайн зафиксирован: `docs/plans/F3_PATH_IDENTITY_DESIGN.md`.
-- Реализация не начата; SEC-002 остаётся открытым.
-- Дефект латентный (hardening контракта): в production относительных staged-путей
+- Шаг A2 выполнен: добавлен тест
+  `StagedVolumeSetTests.SetVolumes_RelativePaths_UseFrozenValidatedPathIdentity` и test-only
+  проект-проба `tests/Lzma.Ui.CwdProbe` (CWD меняется только в процессе пробы; глобальный CWD
+  тест-раннера не затрагивается). В `src/Lzma.Ui/Lzma.Ui.csproj` добавлена одна строка
+  `InternalsVisibleTo` для пробы; проект подключён к `LzmaSharp.sln`.
+- Шаг A2 (RED) выполнен: до фикса тест падал по целевой причине —
+  `Assert.Equal() Failure: Expected: "A1", Actual: "B1"`, то есть том публиковался
+  из sentinel-файла непроверенного каталога.
+- Шаг A3 (фикс) выполнен по утверждённому варианту B: в `StagedVolumeSet` добавлено поле
+  замороженных operational-путей, заполняемое в `SetVolumes` из уже вычисленного
+  `Path.GetFullPath` **только после** прохождения всех проверок; поздние файловые операции
+  (precheck `Exists` и `FileNotFoundException.FileName`, источник `Move`, cleanup staged
+  в `RollbackPublish`, `victims` в `Dispose`) используют замороженные пути. Observable
+  `Manifest` по-прежнему возвращает исходные строки (контракт M6.2 не изменён).
+  Дифф: 24 вставки, 4 удаления в одном файле `src/Lzma.Ui/Services/StagedVolumeSet.cs`.
+- Фактический прогон после фикса (независимо перепроверен тимлидом):
+  `Lzma.Ui.Tests` — **221 пройдено, 0 падений**; `Lzma.Core.Tests` — **1699 пройдено,
+  0 падений**; `dotnet build LzmaSharp.sln -c Release` — 0 ошибок; новых предупреждений
+  в изменённом файле нет (baseline полной пересборки — 67 уникальных).
+- Независимое кросс-семейное ревью диффа (ревьюер `deepseek-v4-pro`; исполнители были из
+  семьи `qwen`) дало вердикт **`APPROVE_WITH_COMMENTS`**: BLOCKING/MAJOR/MINOR нет,
+  5 NIT — все документационные или теоретические, к коду диффа не относятся. Ревьюер
+  самостоятельно воспроизвёл сборку и прогоны и сверил более 40 line-ссылок.
+- Статус: ограничение устранено **в пределах решения F3-Q3** — «validate/use consistency для
+  staged-путей manifest». SEC-002 в целом остаётся открытым (впереди M7, global gate,
+  doc sync, merge). Заявлять закрытие SEC-002 или атомарность оснований нет.
+- Остаточные ограничения (не устраняются этим фиксом):
+  freeze лексический — symlink/reparse не разрешаются, ownership не проверяется,
+  TOCTOU не устраняется (это SEC-003); destination-сторона (`_destinationBasePath`,
+  `_stagedBasePath`, final/backup/conflict/probe-пути) остаётся зависимой от CWD;
+  окно «CWD меняется во время записи томов» (`LzmaArchiveService.cs:225`–`:247`,
+  `VolumeSpanningWriteStream.cs:129`) — отдельное известное ограничение;
+  при не-rooted destination возможна повторная попытка удаления одного и того же
+  staged-файла в `Dispose` (best-effort, описано в дизайне §6.4).
+- Дефект был латентным (hardening контракта): в production относительных staged-путей
   не найдено, CWD в репозитории никто не меняет.
-- Границы: freeze лексический, destination-сторона не покрывается, окно CWD во время
-  записи томов остаётся известным ограничением.
+- Коммит кода и тестов создан по разрешению владельца: `c789515` «Безопасность: заморозить
+  path identity staged-томов между SetVolumes и Commit». Документация — отдельным коммитом
+  (правило «один шаг = два коммита»).
+- Отклонение от F3-Q4a подтверждено ревьюером как приемлемое и предпочтительное: при отсутствии
+  сборки пробы тест **падает** с явным сообщением вместо capability-skip, так как в `xunit 2.9.3`
+  нет `Assert.Skip`, а `Xunit.SkippableFact` означал бы новую зависимость. Тихий пропуск
+  исключён (пропущено 0 во всех прогонах).
 
 F4 disposition (принято владельцем, без преувеличений):
 
