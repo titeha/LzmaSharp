@@ -2,12 +2,12 @@
 doc_kind: current-work-plan
 status: active
 project: LzmaSharp
-last_verified_date: 2026-09-24
+last_verified_date: 2026-10-13
 main_branch: main
 main_commit: 3a55297106e6a978b460faa5bfe3b1a1b85b1041
 active_work_branch: fix/sec002-multivolume-transaction
-active_work_commit: a6bc98ad3eee1cbe9f6c853687874a45fb364fff
-next_task: SEC002-M7
+active_work_commit: 042ffeb
+next_task: "A2: RED-тест F3 (frozen path identity), затем A3 fix"
 ---
 
 # LzmaSharp: текущее состояние работ и ближайший план
@@ -220,6 +220,18 @@ platform CI matrix остаются открытыми.
 - failed: 0; skipped: 0;
 - independent final review: `APPROVE` (SEC002-M6.5-FINAL).
 
+### F3 / AUD-005 — дизайн утверждён, реализация не начата
+
+Дизайн варианта B (frozen operational path в `StagedVolumeSet.SetVolumes`) утверждён
+владельцем и независимым ревью (APPROVE_WITH_COMMENTS, без BLOCKING/MAJOR).
+
+- Дизайн зафиксирован: `docs/plans/F3_PATH_IDENTITY_DESIGN.md`.
+- Реализация не начата; SEC-002 остаётся открытым.
+- Дефект латентный (hardening контракта): в production относительных staged-путей
+  не найдено, CWD в репозитории никто не меняет.
+- Границы: freeze лексический, destination-сторона не покрывается, окно CWD во время
+  записи томов остаётся известным ограничением.
+
 F4 disposition (принято владельцем, без преувеличений):
 
 - исторический mixed-scope коммита `bf0a14b` (M6-код + `.gitignore` + vendor)
@@ -267,6 +279,16 @@ SEC-002 считается **частично реализованным**, по
 
 ### Другие открытые риски
 
+- F3/AUD-005: validate/use consistency для staged-путей manifest — дизайн утверждён,
+  реализация не начата (латентный дефект, hardening контракта);
+- Окно «CWD меняется во время записи томов» (`LzmaArchiveService.cs:225`–`:247`,
+  `VolumeSpanningWriteStream.cs:129`) — отдельное известное ограничение, в F3 не исправляется;
+- RES-002/RES-003: scope уточнён — packed-регион дополнительно ограничен
+  `SevenZipFolderDecoder.cs:278`/`:282`, проверка `int.MaxValue` есть и в
+  LZMA1-ветке (`:1043`–`:1044`, `:1625`–`:1626`); карточки требуют уточнения
+  до выдачи шагов фазы C;
+- Документация синхронизирована по правилу doc-tail, но коммит не создан
+  (делает владелец);
 - SEC-001: транзакционное извлечение и безопасный overwrite;
 - SEC-003: symlink/junction/reparse/TOCTOU;
 - SEC-004: единый resource budget;
