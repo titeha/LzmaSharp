@@ -25,5 +25,6 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Lzma.Ui.Tests" />
+    <InternalsVisibleTo Include="Lzma.Ui.CwdProbe" />
   </ItemGroup>
 </Project>

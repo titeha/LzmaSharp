@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 
 using Lzma.Ui.Services;
@@ -1577,6 +1578,216 @@ public sealed class StagedVolumeSetTests
       try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
       catch (UnauthorizedAccessException) { }
     }
+  }
+
+  /// <summary>
+  /// F3 / AUD-005 (validate/use consistency): относительные staged-пути нормализуются в
+  /// <see cref="StagedVolumeSet.SetVolumes"/> относительно CWD на момент валидации, а файловые
+  /// операции <see cref="StagedVolumeSet.Commit"/> выполняют I/O по исходным строкам manifest
+  /// относительно CWD на момент коммита. Если CWD изменился между вызовами, проверенное
+  /// множество путей не совпадает с множеством, над которым выполняется I/O.
+  ///
+  /// Сценарий исполняется в отдельном процессе-пробе (<c>tests/Lzma.Ui.CwdProbe</c>), поэтому
+  /// глобальный CWD xUnit-раннера не меняется. Инварианты проверяются по фактическому состоянию
+  /// файловой системы в этом тесте, а не по сообщениям production-кода.
+  ///
+  /// Замечание (ревью A1-R, §5): проба передаёт в <see cref="StagedVolumeSet.SetVolumes"/>
+  /// относительные staged-пути напрямую, поэтому <see cref="StagedVolumeSet.StagedBasePath"/>,
+  /// производный от <c>destinationBasePath</c>, не совпадает с фактическим расположением
+  /// staged-файлов. Это допустимо для изолированного теста класса и сознательно НЕ повторяет
+  /// production-поток, где staged-тома создаёт <c>VolumeSpanningWriteStream</c>
+  /// (<c>LzmaArchiveService.cs:226</c>).
+  ///
+  /// Destination в сценарии — абсолютный путь в проверенном каталоге. Причина: решением F3-Q3
+  /// destination-сторона (<c>_destinationBasePath</c>, final/backup/conflict/probe-пути) в фиксе
+  /// НЕ замораживается, поэтому тест обязан изолировать ровно тот дефект, который закрывает
+  /// вариант B: validate/use inconsistency относительных staged-путей manifest.
+  /// </summary>
+  [Fact]
+  public void SetVolumes_RelativePaths_UseFrozenValidatedPathIdentity()
+  {
+    string root = Path.Combine(Path.GetTempPath(), "lzmasharp-f3-cwd-" + Guid.NewGuid().ToString("N"));
+    string validatedDir = Path.Combine(root, "validated");
+    string switchedDir = Path.Combine(root, "switched");
+    Directory.CreateDirectory(validatedDir);
+    Directory.CreateDirectory(switchedDir);
+
+    const string stagedName = "staged.001";
+    const string publishedName = "archive.7z.001";
+    const string destinationBaseName = "archive.7z";
+
+    try
+    {
+      // Staged-том — в каталоге, относительно которого выполняется валидация;
+      // sentinel с тем же относительным именем — в каталоге, на который CWD переключается
+      // перед Commit. Совпадение имён — то, что делает дефект наблюдаемым.
+      File.WriteAllText(Path.Combine(validatedDir, stagedName), "A1");
+      File.WriteAllText(Path.Combine(switchedDir, stagedName), "B1");
+
+      // Destination — абсолютный (см. XML-doc): замораживаются только staged-пути (F3-Q3).
+      string destinationBasePath = Path.Combine(validatedDir, destinationBaseName);
+
+      (int exitCode, string stdout, string stderr) = RunCwdProbe(
+          LocateCwdProbe(), validatedDir, switchedDir, destinationBasePath, stagedName);
+
+      string evidence =
+          $"exit={exitCode}{Environment.NewLine}--- probe stdout ---{Environment.NewLine}{stdout}" +
+          $"--- probe stderr ---{Environment.NewLine}{stderr}";
+
+      Assert.True(exitCode == 0,
+          $"Проба должна выполнить Commit без исключения (иначе сценарий не воспроизведён).{Environment.NewLine}{evidence}");
+
+      // И1: опубликованный том появился в проверенном каталоге и содержит байты его staged-тома.
+      string publishedInValidated = Path.Combine(validatedDir, publishedName);
+      Assert.True(File.Exists(publishedInValidated),
+          $"И1: том должен быть опубликован в каталоге, который был проверен.{Environment.NewLine}{evidence}");
+      Assert.Equal("A1", File.ReadAllText(publishedInValidated));
+
+      // И2: sentinel в непроверенном каталоге не использован как источник и не изменён.
+      string sentinel = Path.Combine(switchedDir, stagedName);
+      Assert.True(File.Exists(sentinel),
+          $"И2: sentinel не должен быть перемещён.{Environment.NewLine}{evidence}");
+      Assert.Equal("B1", File.ReadAllText(sentinel));
+
+      // И2б: в непроверенном каталоге не появилось опубликованного тома.
+      Assert.False(File.Exists(Path.Combine(switchedDir, publishedName)),
+          $"И2б: публикация не должна выполняться относительно нового CWD.{Environment.NewLine}{evidence}");
+
+      // И3: staged-том в проверенном каталоге перенесён, а не скопирован.
+      Assert.False(File.Exists(Path.Combine(validatedDir, stagedName)),
+          $"И3: staged-том должен быть перенесён.{Environment.NewLine}{evidence}");
+
+      // И4: резервных копий не осталось — публикация не перекрывала существующие тома.
+      Assert.Empty(Directory.GetFiles(root, "*.bak", SearchOption.AllDirectories));
+    }
+    finally
+    {
+      try { Directory.Delete(root, recursive: true); }
+      catch (IOException) { }
+      catch (UnauthorizedAccessException) { }
+    }
+  }
+
+  /// <summary>
+  /// Находит сборку процесса-пробы относительно корня решения. Тихий пропуск запрещён (TST-001):
+  /// проба входит в <c>LzmaSharp.sln</c>, поэтому её отсутствие означает, что решение собрано
+  /// не целиком, и тест обязан сообщить причину, а не стать ложно-зелёным.
+  /// </summary>
+  private static string LocateCwdProbe()
+  {
+    string baseDirectory = AppContext.BaseDirectory;
+
+    DirectoryInfo? solution = new(baseDirectory);
+    while (solution is not null && !File.Exists(Path.Combine(solution.FullName, "LzmaSharp.sln")))
+    {
+      solution = solution.Parent;
+    }
+
+    if (solution is null)
+    {
+      throw new FileNotFoundException(
+          $"Не найден корень решения (LzmaSharp.sln) при обходе вверх от {baseDirectory}.");
+    }
+
+    string configuration = DetectConfiguration(baseDirectory);
+
+    string probeDirectory = Path.Combine(solution.FullName, "tests", "Lzma.Ui.CwdProbe");
+    string probeName = "Lzma.Ui.CwdProbe.dll";
+
+    // Решение собирается с UseArtifactsOutput=true (Directory.Build.props), поэтому основной
+    // путь — artifacts/bin/<ProjectName>/<configuration>/. Классическая схема bin/<Config>/net10.0/
+    // оставлена запасным вариантом.
+    string[] candidates =
+    [
+      Path.Combine(solution.FullName, "artifacts", "bin", "Lzma.Ui.CwdProbe", configuration, probeName),
+      Path.Combine(probeDirectory, "bin", configuration, "net10.0", probeName),
+      Path.Combine(probeDirectory, "bin", ToTitleCase(configuration), "net10.0", probeName),
+    ];
+
+    foreach (string candidate in candidates)
+    {
+      if (File.Exists(candidate))
+      {
+        return candidate;
+      }
+    }
+
+    // Тихий пропуск запрещён (TST-001): проба входит в решение, поэтому её отсутствие означает,
+    // что решение собрано не целиком. Тест обязан сообщить причину, а не стать ложно-зелёным.
+    throw new FileNotFoundException(
+        $"Проба CWD не собрана. Проверены пути:{Environment.NewLine}  " +
+        string.Join($"{Environment.NewLine}  ", candidates) +
+        $"{Environment.NewLine}Соберите решение целиком: dotnet build LzmaSharp.sln -c {ToTitleCase(configuration)}.",
+        candidates[0]);
+  }
+
+  /// <summary>Возвращает имя конфигурации с заглавной буквы (<c>release</c> → <c>Release</c>).</summary>
+  private static string ToTitleCase(string configuration) =>
+      configuration.Length == 0
+          ? configuration
+          : char.ToUpperInvariant(configuration[0]) + configuration[1..];
+
+  /// <summary>
+  /// Определяет имя конфигурации по сегментам пути сборки. Работает для обеих схем вывода:
+  /// <c>artifacts/bin/&lt;Project&gt;/release/</c> (<c>UseArtifactsOutput=true</c> из
+  /// <c>Directory.Build.props</c>) и классической <c>bin/Release/net10.0/</c>.
+  /// </summary>
+  private static string DetectConfiguration(string baseDirectory)
+  {
+    foreach (string segment in baseDirectory.Split(
+                 Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+    {
+      if (string.Equals(segment, "release", StringComparison.OrdinalIgnoreCase))
+      {
+        return "release";
+      }
+
+      if (string.Equals(segment, "debug", StringComparison.OrdinalIgnoreCase))
+      {
+        return "debug";
+      }
+    }
+
+    return "release";
+  }
+
+  /// <summary>
+  /// Запускает процесс-пробу с <c>WorkingDirectory = initialCwd</c> и возвращает код возврата
+  /// вместе с stdout/stderr для прикладывания к сообщению об отказе. CWD тест-раннера не меняется.
+  /// </summary>
+  private static (int ExitCode, string StdOut, string StdErr) RunCwdProbe(
+      string probeDll,
+      string initialCwd,
+      string switchCwd,
+      string destinationBasePath,
+      string stagedPath)
+  {
+    ProcessStartInfo psi = new("dotnet")
+    {
+      WorkingDirectory = initialCwd,
+      RedirectStandardOutput = true,
+      RedirectStandardError = true,
+      UseShellExecute = false,
+    };
+
+    psi.ArgumentList.Add(probeDll);
+    psi.ArgumentList.Add(initialCwd);
+    psi.ArgumentList.Add(switchCwd);
+    psi.ArgumentList.Add(destinationBasePath);
+    psi.ArgumentList.Add(stagedPath);
+
+    using Process process = Process.Start(psi)!;
+    string stdout = process.StandardOutput.ReadToEnd();
+    string stderr = process.StandardError.ReadToEnd();
+
+    if (!process.WaitForExit(120_000))
+    {
+      try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+
+      throw new TimeoutException($"Проба CWD не завершилась за 120 с: {probeDll}");
+    }
+
+    return (process.ExitCode, stdout, stderr);
   }
 
   /// <summary>

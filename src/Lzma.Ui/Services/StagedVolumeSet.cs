@@ -54,6 +54,17 @@ internal sealed class StagedVolumeSet : System.IDisposable
   /// <summary>Manifest: staged-тома, зафиксированные для commit/cleanup.</summary>
   private readonly List<string> _manifest = [];
 
+  /// <summary>
+  /// Замороженные (frozen) operational-пути staged-томов: канонические абсолютные пути,
+  /// вычисленные один раз в <see cref="SetVolumes"/> через <see cref="Path.GetFullPath(string)"/>
+  /// после прохождения всех проверок. Используются всеми поздними файловыми операциями
+  /// (precheck, Move-источник, cleanup staged, Dispose) вместо исходных строк manifest,
+  /// чтобы изменение CWD между <see cref="SetVolumes"/> и <see cref="Commit"/> не могло
+  /// перенаправить относительные пути на непроверенный каталог.
+  /// Порядок элементов совпадает с порядком <see cref="_manifest"/>.
+  /// </summary>
+  private readonly List<string> _operationalPaths = [];
+
   /// <summary>Текущее состояние транзакции (SEC002-M6.1B).</summary>
   private State _state;
 
@@ -133,6 +144,7 @@ internal sealed class StagedVolumeSet : System.IDisposable
 
     // SEC002-M6.2B: shape validation — reject null/empty/whitespace, duplicates, collisions.
     var normalizedPaths = new HashSet<string>(PathComparer);
+    var frozenPaths = new List<string>(stagedVolumePaths.Count);
 
     for (int i = 0; i < stagedVolumePaths.Count; i++)
     {
@@ -148,6 +160,7 @@ internal sealed class StagedVolumeSet : System.IDisposable
 
       // Normalize for comparison.
       string normalized = Path.GetFullPath(path);
+      frozenPaths.Add(normalized);
 
       // Reject duplicates.
       if (!normalizedPaths.Add(normalized))
@@ -174,6 +187,7 @@ internal sealed class StagedVolumeSet : System.IDisposable
 
     // Все проверки пройдены: сохраняем оригинальные строки и переходим в Ready.
     _manifest.AddRange(stagedVolumePaths);
+    _operationalPaths.AddRange(frozenPaths);
     _state = State.Ready;
   }
 
@@ -197,6 +211,12 @@ internal sealed class StagedVolumeSet : System.IDisposable
   /// <exception cref="StagedVolumeConflictException">
   /// Непосредственно за новым manifest существует дополнительный нумерованный файл
   /// с недоказанным ownership.
+  /// </exception>
+  /// <exception cref="FileNotFoundException">
+  /// Staged-файл тома не найден на диске. Свойство <c>FileName</c> содержит
+  /// канонический (frozen) путь, зафиксированный при <see cref="SetVolumes"/>,
+  /// а не исходную строку manifest — это гарантирует детерминированную диагностику
+  /// независимо от текущего рабочего каталога процесса.
   /// </exception>
   public void Commit()
   {
@@ -225,7 +245,7 @@ internal sealed class StagedVolumeSet : System.IDisposable
     // Delete: отсутствующий источник —FileNotFoundException до первой мутации
     // назначения (каталог считается отсутствующим, т.к. File.Exists для него false).
     // M6.1 finally фиксирует Failed — повторный Commit запрещён.
-    foreach (string stagedPath in _manifest)
+    foreach (string stagedPath in _operationalPaths)
     {
       if (!_fileOperations.Exists(stagedPath))
       {
@@ -290,7 +310,7 @@ internal sealed class StagedVolumeSet : System.IDisposable
       for (int i = 0; i < _manifest.Count; i++)
       {
         string finalPath = VolumeSpanningWriteStream.VolumePath(_destinationBasePath, i);
-        _fileOperations.Move(_manifest[i], finalPath, overwrite: false);
+        _fileOperations.Move(_operationalPaths[i], finalPath, overwrite: false);
         published.Add(finalPath);
       }
     }
@@ -375,7 +395,7 @@ internal sealed class StagedVolumeSet : System.IDisposable
     }
 
     // 3. Best-effort чистим оставшиеся staged-файлы текущего manifest.
-    foreach (string staged in _manifest)
+    foreach (string staged in _operationalPaths)
     {
       TryDelete(staged, errors);
     }
@@ -477,7 +497,7 @@ internal sealed class StagedVolumeSet : System.IDisposable
     // Created/Ready/Committing/Failed: существующая best-effort staged cleanup.
     // Committing — только при concurrent misuse (не thread-safe, документировано).
 
-    var victims = new List<string>(_manifest);
+    var victims = new List<string>(_operationalPaths);
     foreach (string path in ProbeStagedVolumes())
     {
       if (!victims.Contains(path))
