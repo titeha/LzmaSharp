@@ -274,28 +274,25 @@ internal sealed class StagedVolumeSet : System.IDisposable
     catch (Exception backupFailure) when (IsControlledFailure(backupFailure))
     {
       // Сбой внутри backup-фазы: новые тома ещё не публиковались, откатываем уже
-      // созданные резервные копии в обратном порядке и сохраняем исходное исключение
-      // как первичное. Откат не должен молча глотать собственные ошибки.
-      // SEC002-M6.4B: откат выполняется только для контролируемых отказов файловой
-      // системы. Не-контролируемое исключение (OOM/AccessViolation и т.п.) не
-      // перехватывается и не заворачивается: оно пробрасывается как есть, а M6.1
-      // finally фиксирует Failed — повторный Commit запрещён.
-      Exception? restoreFailure = null;
-      try
+      // созданные резервные копии в обратном порядке (best-effort: каждый элемент
+      // ловится отдельно, цикл продолжается). SEC002-M7: после restore выполняется
+      // best-effort staged-cleanup по frozen-путям _operationalPaths. Ошибки обоих
+      // этапов собираются в общий агрегат. Данные важнее чистоты: при отказе restore
+      // уцелевшие .bak остаются (M7-Q5). Не-контролируемое исключение пробрасывается
+      // как есть и не агрегируется (граница M6.4B).
+      var restoreErrors = RestoreBackups(backups);
+
+      var cleanupErrors = new List<Exception>();
+      foreach (string staged in _operationalPaths)
       {
-        RestoreBackups(backups);
-      }
-      catch (Exception ex)
-      {
-        restoreFailure = ex;
+        TryDelete(staged, cleanupErrors);
       }
 
-      if (restoreFailure is not null)
+      if (restoreErrors.Count > 0 || cleanupErrors.Count > 0)
       {
         throw new AggregateException(
             "Ошибка backup-фазы с последующим сбоем отката резервных копий.",
-            backupFailure,
-            restoreFailure);
+            [backupFailure, .. restoreErrors, .. cleanupErrors]);
       }
 
       throw;
@@ -445,17 +442,29 @@ internal sealed class StagedVolumeSet : System.IDisposable
   }
 
   /// <summary>
-  /// Откатывает созданные резервные копии в обратном порядке: backup → исходный конечный
-  /// путь. Конечные пути, для которых backup не был создан, и посторонние файлы не
-  /// затрагиваются.
+  /// Best-effort откат созданных резервных копий в обратном порядке: backup → исходный
+  /// конечный путь. Каждый перенос обёрнут в per-item catch для контролируемых отказов
+  /// (M7-Q3): цикл продолжается после сбоя, ошибки собираются в возвращаемый список.
+  /// Non-controlled исключение пробрасывается как есть и не агрегируется (граница M6.4B).
+  /// Конечные пути, для которых backup не был создан, и посторонние файлы не затрагиваются.
+  /// Уцелевшие резервные копии (.bak) не удаляются (M7-Q5).
   /// </summary>
-  private void RestoreBackups(List<(string FinalPath, string BackupPath)> backups)
+  private List<Exception> RestoreBackups(List<(string FinalPath, string BackupPath)> backups)
   {
+    var errors = new List<Exception>();
     for (int i = backups.Count - 1; i >= 0; i--)
     {
       (string finalPath, string backupPath) = backups[i];
-      _fileOperations.Move(backupPath, finalPath, overwrite: false);
+      try
+      {
+        _fileOperations.Move(backupPath, finalPath, overwrite: false);
+      }
+      catch (Exception ex) when (IsControlledFailure(ex))
+      {
+        errors.Add(ex);
+      }
     }
+    return errors;
   }
 
   /// <summary>

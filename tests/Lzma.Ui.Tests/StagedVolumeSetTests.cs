@@ -272,6 +272,109 @@ public sealed class StagedVolumeSetTests
   }
 
   /// <summary>
+  /// M7 RED-тест: двойной отказ — сбой backup (#2) и сбой restore (#3).
+  /// На текущем HEAD RestoreBackups не имеет per-item try/catch, поэтому после отказа #3
+  /// оставшиеся backup не получают попытку восстановления. Тест падает на инвариантах
+  /// best-effort: final001 не восстановлен и/или MoveCalls.Count != 5.
+  /// </summary>
+  [Fact]
+  public void Commit_BackupFailureThenRestoreFailure_RestoresRemainingBackups()
+  {
+    string dir = Path.Combine(Path.GetTempPath(), "lzmasharp-m7-double-fault-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(dir);
+
+    // Две точки отказа Move: #2 (backup final003) и #3 (restore backupB→final002).
+    var failIndices = new (int Index, Exception? Failure)[]
+    {
+      (2, new IOException("Injected failure on Move #2 (backup final003).")),
+      (3, new IOException("Injected failure on Move #3 (restore backupB→final002).")),
+    };
+    var fake = new StagedFileOperationsFake(failIndices);
+
+    try
+    {
+      string destinationBase = Path.Combine(dir, "archive");
+
+      string final001 = destinationBase + ".001";
+      string final002 = destinationBase + ".002";
+      string final003 = destinationBase + ".003";
+
+      byte[] old001 = Encoding.UTF8.GetBytes("old-001");
+      byte[] old002 = Encoding.UTF8.GetBytes("old-002");
+      byte[] old003 = Encoding.UTF8.GetBytes("old-003");
+
+      File.WriteAllBytes(final001, old001);
+      File.WriteAllBytes(final002, old002);
+      File.WriteAllBytes(final003, old003);
+
+      string stagedBase = Path.Combine(dir, "archive.staged");
+      string staged001 = stagedBase + ".001";
+      string staged002 = stagedBase + ".002";
+      string staged003 = stagedBase + ".003";
+
+      File.WriteAllBytes(staged001, Encoding.UTF8.GetBytes("new-001"));
+      File.WriteAllBytes(staged002, Encoding.UTF8.GetBytes("new-002"));
+      File.WriteAllBytes(staged003, Encoding.UTF8.GetBytes("new-003"));
+
+      using var set = new StagedVolumeSet(destinationBase, fake);
+      set.SetVolumes([staged001, staged002, staged003]);
+
+      // Инвариант 1: Commit бросает AggregateException с двумя inner.
+      var ex = Assert.Throws<AggregateException>(() => set.Commit());
+      Assert.True(ex.InnerExceptions.Count == 2,
+          $"Инвариант 1: InnerExceptions.Count должен быть 2, фактически {ex.InnerExceptions.Count}. Журнал MoveCalls: {string.Join("; ", fake.MoveCalls.Select(m => $"{m.Source}→{m.Destination}"))}");
+
+      // InnerExceptions[0] — backup-отказ (#2), InnerExceptions[1] — restore-отказ (#3).
+      Assert.IsType<IOException>(ex.InnerExceptions[0]);
+      Assert.IsType<IOException>(ex.InnerExceptions[1]);
+      Assert.Contains("#2", ex.InnerExceptions[0].Message);
+      Assert.Contains("#3", ex.InnerExceptions[1].Message);
+
+      // Инвариант 5: журнал MoveCalls — на текущем HEAD Count == 4 (нет вызова #4).
+      // После фикса ожидается Count == 5.
+      string moveLog = string.Join("; ", fake.MoveCalls.Select((m, i) => $"#{i} {m.Source}→{m.Destination}"));
+      Assert.True(fake.MoveCalls.Count == 5,
+          $"Инвариант 5: MoveCalls.Count должен быть 5 (best-effort restore для backupA), фактически {fake.MoveCalls.Count}. Журнал: {moveLog}");
+
+      // Инвариант 2: final001 восстановлен из backupA (best-effort).
+      string backupA = fake.MoveCalls[0].Destination;
+      Assert.True(File.Exists(final001),
+          $"Инвариант 2: final001 должен существовать (восстановлен из backupA). Журнал: {moveLog}");
+      Assert.Equal(old001, File.ReadAllBytes(final001));
+
+      // Инвариант 3: final002 отсутствует (restore отказал), final003 не затронут.
+      Assert.False(File.Exists(final002),
+          $"Инвариант 3: final002 должен отсутствовать (restore backupB отказал). Журнал: {moveLog}");
+      Assert.Equal(old003, File.ReadAllBytes(final003));
+
+      // Инвариант 3 (продолжение): уцелевший backup для final002 существует.
+      string backupB = fake.MoveCalls[1].Destination;
+      Assert.True(File.Exists(backupB),
+          $"Инвариант 3: backupB ({backupB}) должен существовать. Журнал: {moveLog}");
+      Assert.Equal(old002, File.ReadAllBytes(backupB));
+
+      // Инвариант 4: публикации не было — ни один final не содержит new-*.
+      Assert.DoesNotContain("new-", Encoding.UTF8.GetString(File.ReadAllBytes(final001)));
+      Assert.DoesNotContain("new-", Encoding.UTF8.GetString(File.ReadAllBytes(final003)));
+
+      // Инвариант 6: уцелевшая копия backupB не удалена.
+      Assert.DoesNotContain(backupB, fake.DeleteCalls);
+
+      // Инвариант 7: повторный Commit запрещён (retry).
+      int movesBefore = fake.MoveCalls.Count;
+      int deletesBefore = fake.DeleteCalls.Count;
+      Assert.Throws<InvalidOperationException>(() => set.Commit());
+      Assert.Equal(movesBefore, fake.MoveCalls.Count);
+      Assert.Equal(deletesBefore, fake.DeleteCalls.Count);
+    }
+    finally
+    {
+      try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+      catch (UnauthorizedAccessException) { }
+    }
+  }
+
+  /// <summary>
   /// Сбой на ПЕРВОМ publish Move после успешной backup-фазы: новые тома не публикуются,
   /// исходный набор восстанавливается байт-в-байт.
   /// </summary>
@@ -1795,23 +1898,52 @@ public sealed class StagedVolumeSetTests
   /// считает вызовы Move/Delete и выбрасывает IOException на точно заданном номере
   /// (нумерация с нуля) в Move или Delete. Для Move отказ можно задать своим
   /// исключением через <c>moveFailure</c> (по умолчанию — IOException).
+  /// Поддерживает множество точек отказа Move через дополнительный конструктор.
   /// </summary>
   private sealed class StagedFileOperationsFake : IStagedVolumeFileOperations
   {
-    private readonly int _failMoveIndex;
+    private readonly Dictionary<int, Exception> _failMoveIndices;
     private readonly int _failDeleteIndex;
-    private readonly Exception? _moveFailure;
     private int _moveCallCount;
     private int _deleteCallCount;
 
+    /// <summary>
+    /// Базовый конструктор (обратная совместимость): одна точка отказа Move и/или Delete.
+    /// </summary>
     public StagedFileOperationsFake(
         int failMoveIndex = -1,
         int failDeleteIndex = -1,
         Exception? moveFailure = null)
     {
-      _failMoveIndex = failMoveIndex;
       _failDeleteIndex = failDeleteIndex;
-      _moveFailure = moveFailure;
+      _failMoveIndices = new Dictionary<int, Exception>();
+      if (failMoveIndex >= 0)
+      {
+        _failMoveIndices[failMoveIndex] = moveFailure ?? new IOException($"Injected failure on Move #{failMoveIndex}.");
+      }
+    }
+
+    /// <summary>
+    /// Расширенный конструктор: множество точек отказа Move. Каждый индекс 0-based,
+    /// сквозной для всех фаз. Дубликат индекса — <see cref="ArgumentException"/>.
+    /// </summary>
+    public StagedFileOperationsFake(
+        IEnumerable<(int Index, Exception? Failure)> failMoveIndices,
+        int failDeleteIndex = -1)
+    {
+      _failDeleteIndex = failDeleteIndex;
+      _failMoveIndices = new Dictionary<int, Exception>();
+      foreach (var (index, failure) in failMoveIndices)
+      {
+        if (index < 0)
+        {
+          continue;
+        }
+        if (!_failMoveIndices.TryAdd(index, failure ?? new IOException($"Injected failure on Move #{index}.")))
+        {
+          throw new ArgumentException($"Дублирующийся индекс отказа Move: {index}.", nameof(failMoveIndices));
+        }
+      }
     }
 
     public List<(string Source, string Destination)> MoveCalls { get; } = [];
@@ -1827,9 +1959,9 @@ public sealed class StagedVolumeSetTests
       int current = _moveCallCount;
       _moveCallCount++;
 
-      if (current == _failMoveIndex)
+      if (_failMoveIndices.TryGetValue(current, out var failure))
       {
-        throw _moveFailure ?? new IOException($"Injected failure on Move #{current}.");
+        throw failure;
       }
 
       File.Move(sourcePath, destinationPath, overwrite);
