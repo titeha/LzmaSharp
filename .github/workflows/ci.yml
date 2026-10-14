@@ -9,8 +9,14 @@ on:
 
 jobs:
   build-test:
-    # ubuntu — заодно доказывает кроссплатформенную managed-сборку (ядро без нативных зависимостей).
-    runs-on: ubuntu-latest
+    name: build-test (${{ matrix.os }})
+    # Матрица ОС: ubuntu, windows, macos — доказываем кроссплатформенную managed-сборку
+    # (ядро без нативных зависимостей).
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -26,5 +32,13 @@ jobs:
       - name: Build (Release)
         run: dotnet build -c Release --no-restore
 
-      - name: Test (Release)
-        run: dotnet test -c Release --no-build --verbosity quiet
+      - name: Test (${{ matrix.os }}, Release)
+        run: dotnet test -c Release --no-build --verbosity quiet --logger "trx;LogFileName=results.trx" --results-directory TestResults
+
+      - name: Upload TRX (${{ matrix.os }})
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trx-${{ matrix.os }}-${{ github.sha }}
+          path: TestResults/
+          retention-days: 14
