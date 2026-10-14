@@ -375,6 +375,386 @@ public sealed class StagedVolumeSetTests
   }
 
   /// <summary>
+  /// M7 матрица, <b>строка 2</b>: backup-fail + НЕСКОЛЬКО restore-fail.
+  /// Отказы: <c>#2</c> backup final003, <c>#3</c> restore backupB→final002,
+  /// <c>#4</c> restore backupA→final001.
+  /// Фиксирует контракт best-effort отката: цикл <c>RestoreBackups</c> продолжает
+  /// работу после отказа каждого элемента (каждый зарегистрированный backup получает
+  /// ровно одну попытку), все ошибки агрегируются, первичной остаётся backup-ошибка,
+  /// порядок вторичных ошибок соответствует обратному порядку цикла,
+  /// уцелевшие <c>.bak</c>-копии не уничтожаются (M7-Q5), staged-файлы чистятся
+  /// best-effort по frozen-путям (M7-Q6 = б), повторный Commit запрещён.
+  /// Характеризующий тест: production-фикс уже внесён (<c>d8c43e7</c>), тест зелёный.
+  /// Ловит регрессию: возврат fail-fast в <c>RestoreBackups</c> (пропал бы вызов <c>#4</c>,
+  /// backupA не получил бы попытку восстановления) и потерю staged-cleanup в backup-фазе.
+  /// </summary>
+  [Fact]
+  public void Commit_BackupFailureThenTwoRestoreFailures_AggregatesAllInReverseOrder()
+  {
+    string dir = Path.Combine(Path.GetTempPath(), "lzmasharp-m7-row2-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(dir);
+
+    // Три сквозные точки отказа Move (нумерация по всем вызовам одного Commit).
+    var failIndices = new (int Index, Exception? Failure)[]
+    {
+      (2, new IOException("Injected failure on Move #2 (backup final003).")),
+      (3, new IOException("Injected failure on Move #3 (restore backupB→final002).")),
+      (4, new IOException("Injected failure on Move #4 (restore backupA→final001).")),
+    };
+    var fake = new StagedFileOperationsFake(failIndices);
+
+    try
+    {
+      string destinationBase = Path.Combine(dir, "archive");
+
+      string final001 = destinationBase + ".001";
+      string final002 = destinationBase + ".002";
+      string final003 = destinationBase + ".003";
+
+      byte[] old001 = Encoding.UTF8.GetBytes("old-001");
+      byte[] old002 = Encoding.UTF8.GetBytes("old-002");
+      byte[] old003 = Encoding.UTF8.GetBytes("old-003");
+
+      File.WriteAllBytes(final001, old001);
+      File.WriteAllBytes(final002, old002);
+      File.WriteAllBytes(final003, old003);
+
+      string stagedBase = Path.Combine(dir, "archive.staged");
+      string staged001 = stagedBase + ".001";
+      string staged002 = stagedBase + ".002";
+      string staged003 = stagedBase + ".003";
+
+      File.WriteAllBytes(staged001, Encoding.UTF8.GetBytes("new-001"));
+      File.WriteAllBytes(staged002, Encoding.UTF8.GetBytes("new-002"));
+      File.WriteAllBytes(staged003, Encoding.UTF8.GetBytes("new-003"));
+
+      using var set = new StagedVolumeSet(destinationBase, fake);
+      set.SetVolumes([staged001, staged002, staged003]);
+
+      var ex = Assert.Throws<AggregateException>(() => set.Commit());
+
+      string moveLog = string.Join("; ", fake.MoveCalls.Select((m, i) => $"#{i} {m.Source}→{m.Destination}"));
+      string deleteLog = string.Join("; ", fake.DeleteCalls);
+
+      // Инвариант 1: backup-ошибка плюс два restore-ошибки.
+      Assert.True(ex.InnerExceptions.Count == 3,
+          $"Инвариант 1: InnerExceptions.Count должен быть 3 (backup + два restore), фактически {ex.InnerExceptions.Count}. Журнал Move: {moveLog}. Журнал Delete: {deleteLog}");
+
+      // Инвариант 2: первичной остаётся backup-ошибка #2, далее restore-ошибки
+      // в порядке обратного цикла: сначала backupB (#3), затем backupA (#4).
+      Assert.IsType<IOException>(ex.InnerExceptions[0]);
+      Assert.IsType<IOException>(ex.InnerExceptions[1]);
+      Assert.IsType<IOException>(ex.InnerExceptions[2]);
+      Assert.Contains("#2", ex.InnerExceptions[0].Message);
+      Assert.Contains("#3", ex.InnerExceptions[1].Message);
+      Assert.Contains("#4", ex.InnerExceptions[2].Message);
+
+      // Инвариант 3: пять вызовов Move; restore выполнен для ОБОИХ зарегистрированных
+      // backup в обратном порядке. Пути backup берутся из журнала, а не конструируются.
+      Assert.True(fake.MoveCalls.Count == 5,
+          $"Инвариант 3: MoveCalls.Count должен быть 5 (оба backup получили попытку restore), фактически {fake.MoveCalls.Count}. Журнал Move: {moveLog}");
+
+      string backupA = fake.MoveCalls[0].Destination;
+      string backupB = fake.MoveCalls[1].Destination;
+
+      Assert.Equal(final001, fake.MoveCalls[0].Source);
+      Assert.Equal(final002, fake.MoveCalls[1].Source);
+      Assert.Equal(final003, fake.MoveCalls[2].Source);
+      Assert.Equal(backupB, fake.MoveCalls[3].Source);
+      Assert.Equal(final002, fake.MoveCalls[3].Destination);
+      Assert.Equal(backupA, fake.MoveCalls[4].Source);
+      Assert.Equal(final001, fake.MoveCalls[4].Destination);
+
+      // Инвариант 4: final001 и final002 отсутствуют — их restore не удался.
+      Assert.False(File.Exists(final001),
+          $"Инвариант 4: final001 должен отсутствовать (restore backupA отказал). Журнал Move: {moveLog}");
+      Assert.False(File.Exists(final002),
+          $"Инвариант 4: final002 должен отсутствовать (restore backupB отказал). Журнал Move: {moveLog}");
+
+      // Инвариант 5: уцелевшие копии сохранены байт-в-байт и не уничтожены (M7-Q5).
+      Assert.True(File.Exists(backupA),
+          $"Инвариант 5: backupA ({backupA}) должен остаться на диске. Журнал Move: {moveLog}. Журнал Delete: {deleteLog}");
+      Assert.Equal(old001, File.ReadAllBytes(backupA));
+      Assert.True(File.Exists(backupB),
+          $"Инвариант 5: backupB ({backupB}) должен остаться на диске. Журнал Move: {moveLog}. Журнал Delete: {deleteLog}");
+      Assert.Equal(old002, File.ReadAllBytes(backupB));
+
+      // Инвариант 6: final003 не затронут — его backup не состоялся.
+      Assert.True(File.Exists(final003),
+          $"Инвариант 6: final003 должен существовать (backup отказал до переноса). Журнал Move: {moveLog}");
+      Assert.Equal(old003, File.ReadAllBytes(final003));
+
+      // Инвариант 7: уцелевшие backup не входили в DeleteCalls.
+      Assert.DoesNotContain(backupA, fake.DeleteCalls);
+      Assert.DoesNotContain(backupB, fake.DeleteCalls);
+
+      // Инвариант 8: staged-cleanup backup-фазы выполнен по frozen-путям (M7-Q6 = б).
+      Assert.False(File.Exists(staged001),
+          $"Инвариант 8: staged001 должен быть удалён. Журнал Delete: {deleteLog}");
+      Assert.False(File.Exists(staged002),
+          $"Инвариант 8: staged002 должен быть удалён. Журнал Delete: {deleteLog}");
+      Assert.False(File.Exists(staged003),
+          $"Инвариант 8: staged003 должен быть удалён. Журнал Delete: {deleteLog}");
+      Assert.Contains(staged001, fake.DeleteCalls);
+      Assert.Contains(staged002, fake.DeleteCalls);
+      Assert.Contains(staged003, fake.DeleteCalls);
+
+      // Инвариант 9: публикации не было — ни один сохранившийся том не содержит new-*.
+      Assert.DoesNotContain("new-", Encoding.UTF8.GetString(File.ReadAllBytes(final003)));
+      Assert.DoesNotContain("new-", Encoding.UTF8.GetString(File.ReadAllBytes(backupA)));
+      Assert.DoesNotContain("new-", Encoding.UTF8.GetString(File.ReadAllBytes(backupB)));
+
+      // Инвариант 10: повторный Commit запрещён и не добавляет файловых операций.
+      int movesBefore = fake.MoveCalls.Count;
+      int deletesBefore = fake.DeleteCalls.Count;
+      Assert.Throws<InvalidOperationException>(() => set.Commit());
+      Assert.Equal(movesBefore, fake.MoveCalls.Count);
+      Assert.Equal(deletesBefore, fake.DeleteCalls.Count);
+    }
+    finally
+    {
+      try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+      catch (UnauthorizedAccessException) { }
+    }
+  }
+
+  /// <summary>
+  /// M7 матрица, <b>строка 7</b>: non-controlled отказ при restore.
+  /// Отказы: <c>#2</c> backup final003 (<see cref="IOException"/>, контролируемый),
+  /// <c>#3</c> restore backupB→final002 (<see cref="InvalidOperationException"/>,
+  /// НЕ контролируемый).
+  /// Фиксирует границу M6.4B и решение M7-Q3 = а: per-item catch в
+  /// <c>RestoreBackups</c> ловит только контролируемые отказы, поэтому
+  /// не-контролируемое исключение пробрасывается как есть — без обёртки в
+  /// <see cref="AggregateException"/> и без попытки восстановления backupA.
+  /// Состояние фиксируется <c>finally</c> в Failed, retry запрещён.
+  /// Характеризующий тест: production-фикс уже внесён (<c>d8c43e7</c>), тест зелёный.
+  /// Ловит регрессию: возврат широкого <c>catch (Exception ex)</c> вокруг restore
+  /// привёл бы к агрегату вместо проброса (инвариант 1).
+  /// </summary>
+  [Fact]
+  public void Commit_RestoreNonControlledFailure_EscapesWithoutAggregation()
+  {
+    string dir = Path.Combine(Path.GetTempPath(), "lzmasharp-m7-row7-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(dir);
+
+    var injected = new InvalidOperationException(
+        "Injected non-controlled failure on Move #3 (restore backupB→final002).");
+
+    // Точки отказа: #2 — контролируемый backup-отказ, #3 — не-контролируемый restore-отказ.
+    var failIndices = new (int Index, Exception? Failure)[]
+    {
+      (2, new IOException("Injected failure on Move #2 (backup final003).")),
+      (3, injected),
+    };
+    var fake = new StagedFileOperationsFake(failIndices);
+
+    try
+    {
+      string destinationBase = Path.Combine(dir, "archive");
+
+      string final001 = destinationBase + ".001";
+      string final002 = destinationBase + ".002";
+      string final003 = destinationBase + ".003";
+
+      byte[] old001 = Encoding.UTF8.GetBytes("old-001");
+      byte[] old002 = Encoding.UTF8.GetBytes("old-002");
+      byte[] old003 = Encoding.UTF8.GetBytes("old-003");
+
+      File.WriteAllBytes(final001, old001);
+      File.WriteAllBytes(final002, old002);
+      File.WriteAllBytes(final003, old003);
+
+      string stagedBase = Path.Combine(dir, "archive.staged");
+      string staged001 = stagedBase + ".001";
+      string staged002 = stagedBase + ".002";
+      string staged003 = stagedBase + ".003";
+
+      File.WriteAllBytes(staged001, Encoding.UTF8.GetBytes("new-001"));
+      File.WriteAllBytes(staged002, Encoding.UTF8.GetBytes("new-002"));
+      File.WriteAllBytes(staged003, Encoding.UTF8.GetBytes("new-003"));
+
+      using var set = new StagedVolumeSet(destinationBase, fake);
+      set.SetVolumes([staged001, staged002, staged003]);
+
+      // Инвариант 1: проброс ровно того же экземпляра, БЕЗ агрегации.
+      Exception? thrown = Record.Exception(() => set.Commit());
+
+      string moveLog = string.Join("; ", fake.MoveCalls.Select((m, i) => $"#{i} {m.Source}→{m.Destination}"));
+      string deleteLog = string.Join("; ", fake.DeleteCalls);
+
+      Assert.NotNull(thrown);
+      Assert.False(thrown is AggregateException,
+          $"Инвариант 1: не-контролируемый отказ restore обязан пробрасываться как есть, а не собираться в AggregateException (граница M6.4B). Фактический тип: {thrown!.GetType().FullName}. Журнал Move: {moveLog}");
+      Assert.IsType<InvalidOperationException>(thrown);
+      Assert.Same(injected, thrown);
+
+      // Инвариант 2: цикл restore прерван пробросом — ровно четыре вызова Move,
+      // для backupA попытки восстановления не было.
+      Assert.True(fake.MoveCalls.Count == 4,
+          $"Инвариант 2: MoveCalls.Count должен быть 4 (попытка restore для backupA не выполнялась), фактически {fake.MoveCalls.Count}. Журнал Move: {moveLog}");
+
+      string backupA = fake.MoveCalls[0].Destination;
+      string backupB = fake.MoveCalls[1].Destination;
+
+      Assert.Equal(final001, fake.MoveCalls[0].Source);
+      Assert.Equal(final002, fake.MoveCalls[1].Source);
+      Assert.Equal(final003, fake.MoveCalls[2].Source);
+      Assert.Equal(backupB, fake.MoveCalls[3].Source);
+      Assert.Equal(final002, fake.MoveCalls[3].Destination);
+      Assert.DoesNotContain(backupA, fake.MoveCalls.Select(m => m.Source));
+
+      // Инвариант 3: обе уцелевшие копии на диске и содержат прежние байты —
+      // ничего не потеряно (M7-Q5).
+      Assert.True(File.Exists(backupA),
+          $"Инвариант 3: backupA ({backupA}) должен существовать с байтами old-001. Журнал Move: {moveLog}. Журнал Delete: {deleteLog}");
+      Assert.Equal(old001, File.ReadAllBytes(backupA));
+      Assert.True(File.Exists(backupB),
+          $"Инвариант 3: backupB ({backupB}) должен существовать с байтами old-002. Журнал Move: {moveLog}. Журнал Delete: {deleteLog}");
+      Assert.Equal(old002, File.ReadAllBytes(backupB));
+
+      // Инвариант 4: final001 и final002 освобождены backup-фазой и не восстановлены;
+      // final003 не затронут.
+      Assert.False(File.Exists(final001),
+          $"Инвариант 4: final001 должен отсутствовать (перенесён в backupA). Журнал Move: {moveLog}");
+      Assert.False(File.Exists(final002),
+          $"Инвариант 4: final002 должен отсутствовать (restore отказал). Журнал Move: {moveLog}");
+      Assert.True(File.Exists(final003),
+          $"Инвариант 4: final003 должен существовать (backup отказал до переноса). Журнал Move: {moveLog}");
+      Assert.Equal(old003, File.ReadAllBytes(final003));
+
+      // Инвариант 5: уцелевшие backup не удалялись.
+      Assert.DoesNotContain(backupA, fake.DeleteCalls);
+      Assert.DoesNotContain(backupB, fake.DeleteCalls);
+
+      // Инвариант 6: состояние Failed зафиксировано finally — retry запрещён
+      // и не добавляет файловых операций (отличаем lifecycle-ошибку от инжектированной).
+      int movesBefore = fake.MoveCalls.Count;
+      int deletesBefore = fake.DeleteCalls.Count;
+      var retry = Assert.Throws<InvalidOperationException>(() => set.Commit());
+      Assert.NotSame(injected, retry);
+      Assert.Contains("Повторный Commit запрещён", retry.Message);
+      Assert.Equal(movesBefore, fake.MoveCalls.Count);
+      Assert.Equal(deletesBefore, fake.DeleteCalls.Count);
+    }
+    finally
+    {
+      try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+      catch (UnauthorizedAccessException) { }
+    }
+  }
+
+  /// <summary>
+  /// M7 матрица, <b>строка 8</b>: единственный backup и отказ его восстановления
+  /// (частный случай строки 1). Отказы: <c>#1</c> backup final002,
+  /// <c>#2</c> restore backupA→final001.
+  /// Фиксирует: агрегат из двух ошибок с первичной backup-ошибкой; уцелевшая
+  /// <c>.bak</c>-копия — единственная оставшаяся копия данных final001, она
+  /// намеренно НЕ уничтожается (M7-Q5); final002 не тронут, потому что его backup
+  /// не состоялся; staged-файлы очищены best-effort (M7-Q6 = б); retry запрещён.
+  /// Характеризующий тест: production-фикс уже внесён (<c>d8c43e7</c>), тест зелёный.
+  /// Ловит регрессию: уничтожение уцелевшей копии (пункты 3 и 5) и потерю
+  /// staged-cleanup в backup-фазе (пункт 6).
+  /// </summary>
+  [Fact]
+  public void Commit_SingleBackupRestoreFailure_KeepsSurvivingBackupCopy()
+  {
+    string dir = Path.Combine(Path.GetTempPath(), "lzmasharp-m7-row8-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(dir);
+
+    // Точки отказа: #1 — backup final002, #2 — restore единственного backup.
+    var failIndices = new (int Index, Exception? Failure)[]
+    {
+      (1, new IOException("Injected failure on Move #1 (backup final002).")),
+      (2, new IOException("Injected failure on Move #2 (restore backupA→final001).")),
+    };
+    var fake = new StagedFileOperationsFake(failIndices);
+
+    try
+    {
+      string destinationBase = Path.Combine(dir, "archive");
+
+      string final001 = destinationBase + ".001";
+      string final002 = destinationBase + ".002";
+
+      byte[] old001 = Encoding.UTF8.GetBytes("old-001");
+      byte[] old002 = Encoding.UTF8.GetBytes("old-002");
+
+      File.WriteAllBytes(final001, old001);
+      File.WriteAllBytes(final002, old002);
+
+      string stagedBase = Path.Combine(dir, "archive.staged");
+      string staged001 = stagedBase + ".001";
+      string staged002 = stagedBase + ".002";
+
+      File.WriteAllBytes(staged001, Encoding.UTF8.GetBytes("new-001"));
+      File.WriteAllBytes(staged002, Encoding.UTF8.GetBytes("new-002"));
+
+      using var set = new StagedVolumeSet(destinationBase, fake);
+      set.SetVolumes([staged001, staged002]);
+
+      var ex = Assert.Throws<AggregateException>(() => set.Commit());
+
+      string moveLog = string.Join("; ", fake.MoveCalls.Select((m, i) => $"#{i} {m.Source}→{m.Destination}"));
+      string deleteLog = string.Join("; ", fake.DeleteCalls);
+
+      // Инвариант 1: первичная backup-ошибка #1, затем единственная restore-ошибка #2.
+      Assert.True(ex.InnerExceptions.Count == 2,
+          $"Инвариант 1: InnerExceptions.Count должен быть 2 (backup + один restore), фактически {ex.InnerExceptions.Count}. Журнал Move: {moveLog}. Журнал Delete: {deleteLog}");
+      Assert.IsType<IOException>(ex.InnerExceptions[0]);
+      Assert.IsType<IOException>(ex.InnerExceptions[1]);
+      Assert.Contains("#1", ex.InnerExceptions[0].Message);
+      Assert.Contains("#2", ex.InnerExceptions[1].Message);
+
+      // Инвариант 2: backup final001 (#0), отказ backup final002 (#1), попытка restore (#2).
+      Assert.True(fake.MoveCalls.Count == 3,
+          $"Инвариант 2: MoveCalls.Count должен быть 3, фактически {fake.MoveCalls.Count}. Журнал Move: {moveLog}");
+
+      string backupA = fake.MoveCalls[0].Destination;
+      Assert.Equal(final001, fake.MoveCalls[0].Source);
+      Assert.Equal(final002, fake.MoveCalls[1].Source);
+      Assert.Equal(backupA, fake.MoveCalls[2].Source);
+      Assert.Equal(final001, fake.MoveCalls[2].Destination);
+
+      // Инвариант 3: уцелевшая копия — единственная оставшаяся копия данных final001;
+      // она сохранена байт-в-байт и не уничтожается (M7-Q5).
+      Assert.True(File.Exists(backupA),
+          $"Инвариант 3: backupA ({backupA}) должен существовать как единственная копия old-001. Журнал Move: {moveLog}. Журнал Delete: {deleteLog}");
+      Assert.Equal(old001, File.ReadAllBytes(backupA));
+
+      // Инвариант 4: final001 отсутствует (restore не удался), final002 не тронут.
+      Assert.False(File.Exists(final001),
+          $"Инвариант 4: final001 должен отсутствовать (restore backupA отказал). Журнал Move: {moveLog}");
+      Assert.True(File.Exists(final002),
+          $"Инвариант 4: final002 должен существовать (его backup не состоялся). Журнал Move: {moveLog}");
+      Assert.Equal(old002, File.ReadAllBytes(final002));
+
+      // Инвариант 5: уцелевшая копия не входила в DeleteCalls.
+      Assert.DoesNotContain(backupA, fake.DeleteCalls);
+
+      // Инвариант 6: staged-cleanup backup-фазы выполнен по frozen-путям (M7-Q6 = б).
+      Assert.False(File.Exists(staged001),
+          $"Инвариант 6: staged001 должен быть удалён. Журнал Delete: {deleteLog}");
+      Assert.False(File.Exists(staged002),
+          $"Инвариант 6: staged002 должен быть удалён. Журнал Delete: {deleteLog}");
+      Assert.Contains(staged001, fake.DeleteCalls);
+      Assert.Contains(staged002, fake.DeleteCalls);
+
+      // Инвариант 7: повторный Commit запрещён и не добавляет файловых операций.
+      int movesBefore = fake.MoveCalls.Count;
+      int deletesBefore = fake.DeleteCalls.Count;
+      Assert.Throws<InvalidOperationException>(() => set.Commit());
+      Assert.Equal(movesBefore, fake.MoveCalls.Count);
+      Assert.Equal(deletesBefore, fake.DeleteCalls.Count);
+    }
+    finally
+    {
+      try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+      catch (UnauthorizedAccessException) { }
+    }
+  }
+
+  /// <summary>
   /// Сбой на ПЕРВОМ publish Move после успешной backup-фазы: новые тома не публикуются,
   /// исходный набор восстанавливается байт-в-байт.
   /// </summary>
