@@ -6,8 +6,8 @@ last_verified_date: 2026-10-13
 main_branch: main
 main_commit: 3a55297106e6a978b460faa5bfe3b1a1b85b1041
 active_work_branch: fix/sec002-multivolume-transaction
-active_work_commit: 412c563
-next_task: "Коммит и push правок кроссплатформенности (по команде владельца) → проверка CI на трёх ОС → G2 (7-Zip в CI)"
+active_work_commit: be413de
+next_task: "G2: установить 7-Zip в CI и сделать interop-тесты правдивыми (явный require вместо тихого выхода)"
 ---
 
 # LzmaSharp: текущее состояние работ и ближайший план
@@ -220,7 +220,7 @@ platform CI matrix остаются открытыми.
 - failed: 0; skipped: 0;
 - independent final review: `APPROVE` (SEC002-M6.5-FINAL).
 
-### Кроссплатформенность тестов — 4 падения CI устранены, подтверждение в CI ожидается
+### Кроссплатформенность тестов — 4 падения CI устранены и подтверждены прогоном на трёх ОС
 
 Первый фактический прогон CI-матрицы (run `38773220694`, HEAD `a25a411`) показал: сборка
 Release успешна на ubuntu/windows/macos, тесты на `windows-latest` зелёные, а на
@@ -261,12 +261,13 @@ Release успешна на ubuntu/windows/macos, тесты на `windows-lates
 комментарии нового теста (устранены тимлидом: комментарии описывали дефект, который этим же
 диффом устранён) и неполное покрытие фазы публикации на POSIX (вынесено в отдельный шаг).
 
-**Честная граница:** на Linux и macOS правки не прогонялись — локальной POSIX-среды нет
-(в WSL доступен только служебный дистрибутив `docker-desktop`), поэтому подтверждение
-даст только прогон CI после публикации. macOS владельцу недоступен локально — проверяется
-только через `macos-latest`.
+**Подтверждение:** прогон CI после публикации правки — run `38794891354`, HEAD `be413de`:
+`build-test (ubuntu-latest)`, `build-test (windows-latest)` и `build-test (macos-latest)` —
+все три **success** (шаги Build и Test, TRX-артефакты загружены). Локальной POSIX-среды у
+владельца нет (в WSL доступен только служебный дистрибутив `docker-desktop`), поэтому Linux
+и macOS проверяются только через CI; локально прогон выполняется на Windows.
 
-### SEC-011 / G1 — матрица ОС в CI прогнана: сборка зелёная на трёх ОС, тесты падают на ubuntu/macos
+### SEC-011 / G1 — матрица ОС в CI прогнана: сборка и тесты зелёные на трёх ОС
 
 - В `.github/workflows/ci.yml` job `build-test` переведён на матрицу
   `[ubuntu-latest, windows-latest, macos-latest]` с `fail-fast: false`; имя job содержит ОС;
@@ -456,9 +457,10 @@ F4 disposition (принято владельцем, без преувеличе
 - crash/power-loss recovery;
 - безопасное извлечение недоверенных архивов;
 - проверенная идентичность upstream/vendor;
-- зелёная platform/security CI-матрица (матрица ОС добавлена в `e04c90e` и прогнана:
-  сборка Release успешна на ubuntu/windows/macos, однако тесты на `ubuntu-latest` и
-  `macos-latest` падают — причина устанавливается; `windows-latest` зелёный).
+- полная platform/**security** CI-матрица: сборка и тесты зелёные на ubuntu/windows/macos
+  (run `38794891354`, HEAD `be413de`), но security-покрытие в CI неполное — interop-проверки
+  с внешним 7-Zip фактически не выполняются (7-Zip на раннерах не установлен; 8 тестов
+  завершаются тихо). Устраняется шагом G2.
 
 Открытые hardening/preflight items (в M6 не входили):
 
@@ -492,11 +494,10 @@ F4 disposition (принято владельцем, без преувеличе
 7. Поведение при cleanup failure после commit — закрыто (M4B).
 8. Нет crash/power-loss recovery journal — ОТКРЫТО. Это допустимое остаточное
    ограничение, но оно должно быть честно документировано.
-9. Windows/Linux/macOS CI matrix для файловых транзакций — матрица ОС добавлена (`e04c90e`)
-   и прогнана (run `38773220694`, HEAD `a25a411`): сборка Release зелёная на трёх ОС;
-   тесты — `windows-latest` success, `ubuntu-latest` и `macos-latest` failure.
-   Статус — ПРОГНАНО, КРАСНО НА LINUX/macOS (причина не установлена; падение существовало
-   и до добавления матрицы).
+9. Windows/Linux/macOS CI matrix для файловых транзакций — ЗАКРЫТО: матрица ОС добавлена
+   (`e04c90e`), первый прогон (`38773220694`, HEAD `a25a411`) выявил 4 падения на ubuntu/macos,
+   причина устранена (`2d90417`, `020d74e`), контрольный прогон (`38794891354`, HEAD `be413de`)
+   — все три ОС success. Остаток: interop-проверки с внешним 7-Zip в CI не выполняются (G2).
 
 ### Другие риски и их статус
 
