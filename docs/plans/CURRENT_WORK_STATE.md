@@ -6,8 +6,8 @@ last_verified_date: 2026-10-13
 main_branch: main
 main_commit: 3a55297106e6a978b460faa5bfe3b1a1b85b1041
 active_work_branch: fix/sec002-multivolume-transaction
-active_work_commit: d8c43e7
-next_task: "Коммит G1 и A8 по команде владельца; далее A10 (global gate SEC-002) или G2 (правдивость interop-тестов)"
+active_work_commit: 412c563
+next_task: "A11: doc sync SEC-002 (честность формулировок), затем A12 merge — только вручную владельцем"
 ---
 
 # LzmaSharp: текущее состояние работ и ближайший план
@@ -243,6 +243,43 @@ platform CI matrix остаются открытыми.
   `Lzma.Ui` (WinExe) на windows/macos прогоном не подтверждено.
 - Изменение не закоммичено: `git status --short` показывает только `.github/workflows/ci.yml`.
 
+### SEC-002 — глобальный gate пройден (APPROVE_WITH_FINDINGS)
+
+Финальный gate SEC-002 выполнен независимой моделью (`deepseek-v4-pro`) как adversarial-критик
+и перепроверен тимлидом собственным прогоном и grep-ом.
+
+- **No-bypass call graph доказан:** все четыре публичные точки создания/записи архива
+  (`CreateArchiveAsync` — in-memory, на диск не пишет; `WriteArchiveAsync`;
+  `CreateArchiveToFileAsync` — одиночный и многотомный маршруты; `CreateZipToFileAsync`)
+  идут через staging (`StagedDestination` / `StagedVolumeSet` + `VolumeSpanningWriteStream`),
+  а конечный путь затрагивается только в точке публикации: `StagedDestination.Commit`
+  (`File.Move(staged → destination, overwrite: true)`) или `StagedVolumeSet.Commit`
+  (`Move(staged → final, overwrite: false)` после backup-фазы).
+- **Обходных маршрутов нет:** все вхождения `FileMode.Create` / `File.WriteAllBytes` /
+  `new FileStream` / `File.Move` в `src/` классифицированы; записи конечного архива минуя
+  staging не обнаружено. Вхождения в маршрутах извлечения
+  (`SevenZipArchiveDecoder.cs:1098`, `:1146`; `ZipExtractor.cs:42`; `ZipStreamExtractor.cs:97`)
+  относятся к SEC-001 и этим gate не закрываются.
+- **Фактический прогон (независимо перепроверен тимлидом):** `dotnet test LzmaSharp.sln` —
+  `Lzma.Ui.Tests` 225 пройдено / 0 падений / 0 пропущено, `Lzma.Core.Tests` 1699 / 0 / 0,
+  итого **1924 пройдено, 0 падений, 0 пропущено**; сборка — 0 ошибок, 67 предупреждений
+  (baseline, подтверждён полной пересборкой).
+- **Сохранность гарантий:** F1, F2, M4B, M5.2, M6.1B, M6.4B, F3, M7 — проверены по коду,
+  регрессий не найдено.
+- **Находки gate:** BLOCKING — 0, MAJOR — 0, MINOR — 1 (устаревший статус коммитов в этом
+  файле; устраняется настоящей правкой и шагом doc sync), NIT — 2 (граница ответственности
+  `VolumeSpanningWriteStream`; остаточная CWD-зависимость `_stagedBasePath` в `Dispose` —
+  относится к SEC-003/фазе D). Отдельно: правдивость interop-тестов (TST-001) — шаг G2.
+- **Что gate НЕ доказывает (границы честности):** матрица ОС в CI добавлена, но push не
+  выполнялся ⇒ фактического прогона на ubuntu/macos не было; interop с внешним 7-Zip в CI
+  не проверяется (8 тестов тихо завершаются без `7z.exe`; на локальной машине 7-Zip есть,
+  и эти тесты выполнились); crash/power-loss recovery и атомарность набора томов отсутствуют;
+  извлечение (SEC-001) gate не покрывает.
+- **Статус SEC-002:** транзакционное **создание** архивов реализовано и закреплено тестами
+  в утверждённых границах; SEC-002 как пункт плана готов к doc sync (A11) и к ручному merge
+  владельцем (A12). Заявлять атомарность, полное сохранение прежних байтов при overwrite
+  или закрытие SEC-001 оснований нет.
+
 ### M7 / SEC-002-R1 — фикс внесён и подтверждён независимым ревью
 
 Дизайн recovery-контракта M7 (best-effort восстановление всех backup при двойном отказе)
@@ -291,8 +328,9 @@ platform CI matrix остаются открытыми.
   блокирующими тестами (сценарий двойного отказа плюс три сценария матрицы). SEC-002 остаётся
   открытым (впереди global gate, doc sync, merge). Заявлять закрытие SEC-002 или атомарность
   оснований нет.
-- Изменения G1 (матрица ОС в CI) и A8 (тесты матрицы M7) находятся в рабочей копии и НЕ
-  закоммичены; коммит создаёт только владелец.
+- Изменения G1 и A8 закоммичены по команде владельца тремя коммитами по числу причин
+  изменения: `e04c90e` (CI: матрица ОС), `437edb9` (тесты: матрица сценариев M7),
+  `412c563` (док: статус). Push не выполнялся — только по явной команде владельца.
 - Границы: никаких гарантий атомарности, crash/power-loss recovery, полного восстановления
   при недоступной файловой системе или обязательной очистки этот фикс не добавляет.
   Известное поведение: при отказе восстановления в каталоге назначения может остаться
@@ -329,8 +367,9 @@ platform CI matrix остаются открытыми.
   5 NIT — все документационные или теоретические, к коду диффа не относятся. Ревьюер
   самостоятельно воспроизвёл сборку и прогоны и сверил более 40 line-ссылок.
 - Статус: ограничение устранено **в пределах решения F3-Q3** — «validate/use consistency для
-  staged-путей manifest». SEC-002 в целом остаётся открытым (впереди M7, global gate,
-  doc sync, merge). Заявлять закрытие SEC-002 или атомарность оснований нет.
+  staged-путей manifest» (коммит `c789515`, тест-проба `tests/Lzma.Ui.CwdProbe`). M7 и
+  глобальный gate SEC-002 выполнены после этого; заявлять атомарность или сохранение прежних
+  байтов при перезаписи оснований нет.
 - Остаточные ограничения (не устраняются этим фиксом):
   freeze лексический — symlink/reparse не разрешаются, ownership не проверяется,
   TOCTOU не устраняется (это SEC-003); destination-сторона (`_destinationBasePath`,
@@ -365,22 +404,29 @@ F4 disposition (принято владельцем, без преувеличе
 - crash/power-loss recovery;
 - безопасное извлечение недоверенных архивов;
 - проверенная идентичность upstream/vendor;
-- завершённая platform/security CI-матрица.
+- фактически прогнанная platform/security CI-матрица (матрица ОС добавлена в `e04c90e`,
+  но push не выполнялся, поэтому прогон на ubuntu/windows/macos не подтверждён).
 
 Открытые hardening/preflight items (в M6 не входили):
 
-- F2/AUD-004: `Manifest` возвращает mutable backing list;
-- F3/AUD-005: validate/use consistency для относительных путей;
-- M7: double-fault recovery (rollback-failure матрица);
+- F2/AUD-004: `Manifest` возвращал mutable backing list — ЗАКРЫТО (`042ffeb`,
+  закреплён тестом immutability);
+- F3/AUD-005: validate/use consistency для относительных путей — ЗАКРЫТО в пределах F3-Q3
+  (`c789515`, тест `SetVolumes_RelativePaths_UseFrozenValidatedPathIdentity`);
+- M7: double-fault recovery (rollback-failure матрица) — ЗАКРЫТО (`d8c43e7`, тесты матрицы
+  `437edb9`: двойной отказ, несколько restore-отказов, неконтролируемый отказ, единственный backup);
 - SEC-003: symlink/junction/reparse/TOCTOU;
 - MNT-F4-*: deferred maintenance (vendor provenance, локальные `bin/**`,
   output/agent-политики, GOST/RFC, evaluated build/package exclusion).
 
-## 5. Почему SEC-002 ещё не закрыт
+## 5. Остаточные ограничения SEC-002
 
-SEC-002 считается **частично реализованным**, пока не выполнены все пункты ниже.
+Маршрут **создания** архивов реализован транзакционно и прошёл глобальный gate
+(`APPROVE_WITH_FINDINGS`, BLOCKING/MAJOR нет, HEAD `412c563`, прогон 1924 passed / 0 failed /
+0 skipped). Ниже — пункты, которые остались открытыми или не доказаны; они не позволяют
+заявлять атомарность, crash/power-loss recovery или закрытие SEC-001.
 
-### Открытые пункты multi-volume
+### Пункты multi-volume и их статус
 
 1. Backup-файлы после успешного commit — закрыто (M4B).
 2. Delete-by-scan дополнительных `{base}.NNN` без доказательства ownership —
@@ -388,16 +434,19 @@ SEC-002 считается **частично реализованным**, по
 3. State machine для повторного `Commit`, failed/rolled-back/disposed — закрыто (M6).
 4. Manifest validation — закрыто (M6).
 5. Широкий `Exception` в backup-фазе — закрыто (M6).
-6. Недостаточно тестов ошибок самого rollback — ОТКРЫТО (M7).
+6. Недостаточно тестов ошибок самого rollback — ЗАКРЫТО (M7: `d8c43e7` + матрица `437edb9`,
+   регрессионная чувствительность доказана мутационной проверкой).
 7. Поведение при cleanup failure после commit — закрыто (M4B).
 8. Нет crash/power-loss recovery journal — ОТКРЫТО. Это допустимое остаточное
    ограничение, но оно должно быть честно документировано.
-9. Нет Windows/Linux/macOS CI matrix для файловых транзакций — ОТКРЫТО.
+9. Windows/Linux/macOS CI matrix для файловых транзакций — матрица ОС добавлена (`e04c90e`),
+   но фактический прогон не подтверждён: push не выполнялся. Статус — ДОБАВЛЕНО, НЕ ПРОГНАНО.
 
-### Другие открытые риски
+### Другие риски и их статус
 
-- F3/AUD-005: validate/use consistency для staged-путей manifest — дизайн утверждён,
-  реализация не начата (латентный дефект, hardening контракта);
+- F3/AUD-005: validate/use consistency для staged-путей manifest — ЗАКРЫТО в пределах F3-Q3
+  (`c789515`, тест `SetVolumes_RelativePaths_UseFrozenValidatedPathIdentity`);
+  destination-сторона остаётся CWD-зависимой (см. следующий пункт);
 - Окно «CWD меняется во время записи томов» (`LzmaArchiveService.cs:225`–`:247`,
   `VolumeSpanningWriteStream.cs:129`) — отдельное известное ограничение, в F3 не исправляется;
 - RES-002/RES-003: scope уточнён — packed-регион дополнительно ограничен
