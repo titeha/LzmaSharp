@@ -5,7 +5,12 @@
 stage-документах ([`STAGE1_STATUS.md`](STAGE1_STATUS.md), [`STAGE15_AES_STATUS.md`](STAGE15_AES_STATUS.md),
 [`STAGE16_GOST_STATUS.md`](STAGE16_GOST_STATUS.md), [`STAGE2_WRITER_STATUS.md`](STAGE2_WRITER_STATUS.md)).
 
-Фреймворк: `xUnit`.
+Фреймворк: `xUnit` v3 (пакет `xunit.v3` 3.2.2). Тестовые проекты являются исполняемыми
+(`OutputType Exe`), поэтому поддерживаются оба способа запуска: `dotnet test` (через
+`xunit.runner.visualstudio`) и прямой запуск собранного исполняемого файла.
+
+Динамический пропуск теста выполняется только через `Assert.Skip("причина")` — причина видна
+в отчёте прогона. Тихий `return` из теста запрещён: он даёт ложно-зелёный результат.
 
 ## Структура тестов
 

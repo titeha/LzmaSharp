@@ -6,8 +6,8 @@ last_verified_date: 2026-10-13
 main_branch: main
 main_commit: 3a55297106e6a978b460faa5bfe3b1a1b85b1041
 active_work_branch: fix/sec002-multivolume-transaction
-active_work_commit: 2d8a84d
-next_task: "P1: миграция xUnit v2.9.3 → v3 (Assert.Skip вместо fail-fast), затем фаза B (SEC-001)"
+active_work_commit: b4ec795
+next_task: "P2: Assert.Skip вместо fail-fast в CWD-пробе и вместо 4 тихих return в Windows-only тестах"
 ---
 
 # LzmaSharp: текущее состояние работ и ближайший план
@@ -219,6 +219,28 @@ platform CI matrix остаются открытыми.
 - full solution: 1918 passed = `Lzma.Ui.Tests` 219 + `Lzma.Core.Tests` 1699;
 - failed: 0; skipped: 0;
 - independent final review: `APPROVE` (SEC002-M6.5-FINAL).
+
+### Тестовый фреймворк — миграция на xUnit v3 выполнена
+
+- Пакет `xunit` 2.9.3 заменён на `xunit.v3` 3.2.2 в обоих тестовых проектах, добавлен
+  `<OutputType>Exe</OutputType>` (v3-проекты исполняемые). `xunit.runner.visualstudio` 3.1.4
+  и `Microsoft.NET.Test.Sdk` 17.14.1 сохранены: `dotnet test` продолжает работать через VSTest.
+- Миграция на xUnit v4 не выполнялась осознанно: v4 требует Microsoft Testing Platform,
+  а `dotnet test` больше не запускает v4-проекты через VSTest — это потребовало бы менять
+  команду прогона и способ получения TRX в CI.
+- Фактические прогоны после миграции: `Lzma.Core.Tests` — 1699 passed / 0 failed / 0 skipped;
+  `Lzma.Ui.Tests` — 226 passed / 0 failed / 0 skipped; прямой запуск исполняемого файла
+  (`Lzma.Ui.Tests.exe -noLogo`) — Total 226, Errors 0, Failed 0, Skipped 0;
+  `dotnet build LzmaSharp.sln -c Release` — 0 ошибок, 67 уникальных предупреждений (baseline).
+- Подтверждено в CI: run `38808168023` (HEAD `b4ec795`) — все три job'а success
+  (ubuntu/windows/macos), шаги Test и Upload TRX работают с v3 без изменения workflow.
+- Известный технический долг: анализатор v3 добавил правило `xUnit1051`
+  (рекомендация передавать `TestContext.Current.CancellationToken` в вызовы с `CancellationToken`)
+  в 518 местах. Правило подавлено осознанно (`NoWarn` в обоих тестовых csproj с комментарием):
+  массовая замена изменила бы поведение тестов (отмена по таймауту раннера) и не относится
+  к миграции пакетов. Внедрение отменяемых токенов — отдельная задача.
+- Цель миграции достигнута: доступен динамический `Assert.Skip`, поэтому следующим шагом
+  fail-fast в CWD-пробе и 4 тихих `return` в Windows-only тестах заменяются видимым пропуском.
 
 ### G2 / TST-001 — interop-тесты требуют настоящий 7-Zip; совместимость проверяется в CI на трёх ОС
 
