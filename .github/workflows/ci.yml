@@ -32,6 +32,58 @@ jobs:
       - name: Build (Release)
         run: dotnet build -c Release --no-restore
 
+      # --- 7-Zip: установка и evidence -------------------------------------------
+      # Official console 7-Zip (7zz) — для Linux/macOS из релиза на GitHub;
+      # Windows — используем предустановленный 7z.exe или ставим через Chocolatey.
+      # Идемпотентно: не падает, если 7-Zip уже есть.
+      - name: Установить 7-Zip
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            # Official 7-Zip console for Linux x64 (archive .tar.xz from github.com/ip7z)
+            mkdir -p "$HOME/7zip"
+            curl -fsSL --retry 3 "https://github.com/ip7z/7zip/releases/download/26.04/7z2604-linux-x64.tar.xz" \
+              -o "$HOME/7zip/7zip.tar.xz"
+            tar -xJf "$HOME/7zip/7zip.tar.xz" -C "$HOME/7zip"
+            rm -f "$HOME/7zip/7zip.tar.xz"
+            echo "$HOME/7zip" >> "$GITHUB_PATH"
+          elif [ "${{ runner.os }}" = "macOS" ]; then
+            # Official 7-Zip console for macOS (arm64/x86-64, universal)
+            mkdir -p "$HOME/7zip"
+            curl -fsSL --retry 3 "https://github.com/ip7z/7zip/releases/download/26.04/7z2604-mac.tar.xz" \
+              -o "$HOME/7zip/7zip.tar.xz"
+            tar -xJf "$HOME/7zip/7zip.tar.xz" -C "$HOME/7zip"
+            rm -f "$HOME/7zip/7zip.tar.xz"
+            echo "$HOME/7zip" >> "$GITHUB_PATH"
+          elif [ "${{ runner.os }}" = "Windows" ]; then
+            # windows-latest: 7-Zip pre-installed; fallback — Chocolatey
+            if ! command -v 7z >/dev/null 2>&1 && [ ! -f "C:/Program Files/7-Zip/7z.exe" ]; then
+              choco install 7zip -y
+            fi
+          fi
+
+      - name: "7-Zip: версия и путь (evidence)"
+        shell: bash
+        run: |
+          # Выводим версию и путь для каждого кандидата; не роняем job при отсутствии.
+          for candidate in 7zz 7z; do
+            echo "--- candidate: $candidate ---"
+            if command -v "$candidate" >/dev/null 2>&1; then
+              echo "path: $(command -v "$candidate")"
+              "$candidate" i 2>&1 | head -5 || true
+            else
+              echo "(not found in PATH)"
+            fi
+          done
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            echo "--- Windows-specific ---"
+            if [ -f "C:/Program Files/7-Zip/7z.exe" ]; then
+              echo "path: C:/Program Files/7-Zip/7z.exe"
+              "C:/Program Files/7-Zip/7z.exe" i 2>&1 | head -5 || true
+            fi
+          fi
+
       - name: Test (${{ matrix.os }}, Release)
         run: dotnet test -c Release --no-build --verbosity quiet --logger "trx;LogFileName=results.trx" --results-directory TestResults
 
