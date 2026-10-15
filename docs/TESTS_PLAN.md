@@ -123,3 +123,28 @@ Test-only помощники fault injection живут в `tests/Lzma.Core.Test
 - если сборка пробы не найдена, тест падает с явным сообщением и перечнем проверенных путей:
   тихий пропуск запрещён, так как даёт ложно-зелёный результат;
 - временные каталоги удаляются в `finally`.
+
+### Платформенно-зависимые theory-данные (Windows-only)
+
+Некоторые theory-тесты содержат данные, которые имеют смысл только на Windows.
+Это не тихий пропуск (TST-001), а осознанное ограничение: данные не генерируются
+на не-Windows платформах, поэтому xUnit не обнаруживает соответствующие кейсы.
+
+**`SevenZipArchiveDecoderExtractUnsafePathTests.InvalidEntryNames()`**
+(`tests/Lzma.Core.Tests/SevenZip/Decoding/SevenZipArchiveDecoderExtractUnsafePath.Tests.cs`):
+
+- `"C:/evil.bin"` — абсолютный путь с буквой диска; на POSIX это относительный путь
+  (сегмент `C:`), не являющийся небезопасным.
+- `"file.bin:ads"` — NTFS Alternate Data Stream; на POSIX `:` — легальный символ имени.
+
+Эти 2 кейса обнаруживаются только на Windows, что объясняет разницу в общем числе тестов
+`Lzma.Core.Tests`: 1699 (Windows) vs 1697 (Linux/macOS). Разница не является дефектом
+или скрытым пропуском — это корректное отражение платформенно-специфичной семантики
+безопасности.
+
+Аналогичные Windows-only тесты (case collision, invalid characters, reserved names,
+read-only overwrite) используют `if (!OperatingSystem.IsWindows()) return;` в теле
+теста — они обнаруживаются на всех платформах, но выполняют проверку только на Windows.
+Это отдельная проблема TST-001, которая отслеживается в рамках security-remediation
+и будет устранена отдельным шагом (миграция на xUnit v3 `Assert.SkipWhen` или
+выделение в Windows-only тест-проект).
