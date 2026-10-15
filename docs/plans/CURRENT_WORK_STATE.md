@@ -6,8 +6,8 @@ last_verified_date: 2026-10-13
 main_branch: main
 main_commit: 3a55297106e6a978b460faa5bfe3b1a1b85b1041
 active_work_branch: fix/sec002-multivolume-transaction
-active_work_commit: b4ec795
-next_task: "P2: Assert.Skip вместо fail-fast в CWD-пробе и вместо 4 тихих return в Windows-only тестах"
+active_work_commit: 7a2d792
+next_task: "фаза B (SEC-001) — транзакционное извлечение; ожидается команда запуска"
 ---
 
 # LzmaSharp: текущее состояние работ и ближайший план
@@ -219,6 +219,41 @@ platform CI matrix остаются открытыми.
 - full solution: 1918 passed = `Lzma.Ui.Tests` 219 + `Lzma.Core.Tests` 1699;
 - failed: 0; skipped: 0;
 - independent final review: `APPROVE` (SEC002-M6.5-FINAL).
+
+### P1/P2 — xUnit v3 и видимые пропуски тестов выполнены
+
+- Пакет `xunit` 2.9.3 заменён на `xunit.v3` 3.2.2 в обоих тестовых проектах, добавлен
+  `<OutputType>Exe</OutputType>` (v3-проекты исполняемые). `xunit.runner.visualstudio` 3.1.4 и
+  `Microsoft.NET.Test.Sdk` 17.14.1 сохранены, поэтому `dotnet test` продолжает работать через
+  VSTest. На xUnit v4 не переходили осознанно: v4 требует Microsoft Testing Platform, а
+  `dotnet test` больше не запускает v4-проекты через VSTest — пришлось бы менять команду прогона
+  и способ получения TRX в CI.
+- Факты после миграции (Windows): `Lzma.Core.Tests` 1699 passed / 0 failed / 0 skipped;
+  `Lzma.Ui.Tests` 226 passed / 0 failed / 0 skipped; прямой запуск исполняемого файла
+  (`Lzma.Ui.Tests.exe -noLogo`) — Total 226, Errors 0, Failed 0, Skipped 0; полная пересборка —
+  0 ошибок, 67 уникальных предупреждений (baseline сохранён). Подтверждено в CI: run `38808168023`
+  (HEAD `b4ec795`) — все три job'а success; шаги Test и Upload TRX работают с v3 без изменения
+  workflow.
+- Шаг P2 устранил оставшиеся невидимые пропуски: четыре теста Windows-специфичных правил вместо
+  тихого `return` вызывают `Assert.Skip` с указанием причины; сценарий смены рабочего каталога
+  вместо падения при несобранной пробе также вызывает `Assert.Skip`. Это закрывает остаток TST-001
+  и отклонение F3-Q4a. Факты после P2 (Windows): полная пересборка — 0 ошибок, 67 уникальных
+  предупреждений; `Lzma.Core.Tests` 1699 / 0 / 0; `Lzma.Ui.Tests` 226 / 0 / 0; `git diff --check`
+  пусто; изменены только пять тестовых файлов. CI run `38813708548` (HEAD `7a2d792`) — все три
+  job'а success (ubuntu/windows/macos), включая Build, evidence 7-Zip и Test.
+- Техническая деталь, найденная при верификации: `Assert.Skip` в xunit.v3 не помечен
+  `[DoesNotReturn]`, поэтому `LocateCwdProbe()` (возврат `string`) не компилировался —
+  `error CS0161: не все пути к коду возвращают значение`. Исправлено добавлением недостижимого
+  `return null!;` с комментарием-обоснованием. Это отклонение от spec-pack вызвано реальностью
+  компилятора, а не ошибкой проектирования.
+- Честная граница проверки: точное число пропусков на ubuntu/macos (ожидается 4 в
+  `Lzma.Core.Tests`) в этой сессии не выводилось — лог CI и TRX-артефакты требуют авторизации.
+  Шаг Test завершился успешно на всех трёх ОС; числа доступны владельцу в артефактах.
+- Известный технический долг: анализатор v3 добавил правило `xUnit1051` (рекомендация передавать
+  `TestContext.Current.CancellationToken` в вызовы с `CancellationToken`) в 518 местах. Правило
+  подавлено осознанно через `NoWarn` с комментарием в обоих тестовых csproj: массовая замена
+  изменила бы поведение тестов (отмена по таймауту раннера) и не относится к миграции пакетов.
+  Внедрение отменяемых токенов — отдельная задача.
 
 ### Тестовый фреймворк — миграция на xUnit v3 выполнена
 
