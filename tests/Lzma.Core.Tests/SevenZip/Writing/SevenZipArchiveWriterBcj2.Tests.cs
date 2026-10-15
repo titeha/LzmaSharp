@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 
 using Lzma.Core.SevenZip;
+using Lzma.Core.Tests.Helpers;
 
 namespace Lzma.Core.Tests.SevenZip;
 
@@ -114,9 +115,7 @@ public sealed class SevenZipArchiveWriterBcj2Tests
   [Fact]
   public void BuildBcj2_РаспаковываетсяНастоящим7Zip()
   {
-    const string sevenZip = @"C:\Program Files\7-Zip\7z.exe";
-    if (!File.Exists(sevenZip))
-      return; // Настоящий 7-Zip недоступен в этом окружении.
+    string sevenZip = SevenZipInterop.RequireExecutable();
 
     byte[] content = MakeX86Like(40000, 0x5A5A5A5A);
 

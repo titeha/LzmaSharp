@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text;
 
 using Lzma.Core.SevenZip;
+using Lzma.Core.Tests.Helpers;
 
 namespace Lzma.Core.Tests.SevenZip;
 
@@ -129,9 +130,7 @@ public sealed class SevenZipArchiveWriterAesEncryptionTests
   [Fact]
   public void BuildAes_РаспаковываетсяНастоящим7Zip()
   {
-    const string sevenZip = @"C:\Program Files\7-Zip\7z.exe";
-    if (!File.Exists(sevenZip))
-      return;
+    string sevenZip = SevenZipInterop.RequireExecutable();
 
     byte[] content = Encoding.UTF8.GetBytes(string.Concat(Enumerable.Repeat(
         "AES ↔ настоящий 7-Zip. The quick brown fox. 0123456789. ", 200)));

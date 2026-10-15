@@ -4,6 +4,7 @@ using System.Text;
 using ICSharpCode.SharpZipLib.BZip2;
 
 using Lzma.Core.BZip2;
+using Lzma.Core.Tests.Helpers;
 
 namespace Lzma.Core.Tests.BZip2;
 
@@ -95,9 +96,7 @@ public sealed class BZip2EncoderTests
   [Fact]
   public void Encode_РаспаковываетсяНастоящим7Zip()
   {
-    const string sevenZip = @"C:\Program Files\7-Zip\7z.exe";
-    if (!File.Exists(sevenZip))
-      return; // Настоящий 7-Zip недоступен в этом окружении.
+    string sevenZip = SevenZipInterop.RequireExecutable();
 
     byte[] data = Encoding.UTF8.GetBytes(
         string.Concat(Enumerable.Repeat("Живой BZip2 → 7-Zip. ABCABC xyz 123. ", 1500)));

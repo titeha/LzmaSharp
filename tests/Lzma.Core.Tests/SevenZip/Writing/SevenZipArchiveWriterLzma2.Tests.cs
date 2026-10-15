@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 
 using Lzma.Core.SevenZip;
+using Lzma.Core.Tests.Helpers;
 
 namespace Lzma.Core.Tests.SevenZip;
 
@@ -182,9 +183,7 @@ public sealed class SevenZipArchiveWriterLzma2Tests
   [Fact]
   public void BuildArchive_Lzma2_РаспаковываетсяНастоящим7Zip()
   {
-    const string sevenZip = @"C:\Program Files\7-Zip\7z.exe";
-    if (!File.Exists(sevenZip))
-      return; // Настоящий 7-Zip недоступен в этом окружении.
+    string sevenZip = SevenZipInterop.RequireExecutable();
 
     // ~300 КБ текста => несколько LZMA2-чанков, кросс-чанковые матчи и перенос состояния.
     byte[] content = Encoding.UTF8.GetBytes(

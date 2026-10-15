@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Text;
 
 using Lzma.Core.Ppmd;
+using Lzma.Core.Tests.Helpers;
 
 namespace Lzma.Core.Tests.Ppmd;
 
@@ -74,9 +75,7 @@ public sealed class Ppmd7EncoderTests
   [Fact]
   public void Encode_СовпадаетСНастоящим7Zip()
   {
-    const string sevenZip = @"C:\Program Files\7-Zip\7z.exe";
-    if (!File.Exists(sevenZip))
-      return; // Настоящий 7-Zip недоступен в этом окружении.
+    string sevenZip = SevenZipInterop.RequireExecutable();
 
     byte[] data = Encoding.UTF8.GetBytes(
         string.Concat(Enumerable.Repeat("PPMd ↔ 7-Zip байт-в-байт. The quick brown fox. 12345. ", 800)));

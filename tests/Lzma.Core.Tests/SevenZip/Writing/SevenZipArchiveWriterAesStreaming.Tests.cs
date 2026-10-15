@@ -5,6 +5,7 @@ using System.IO;
 using System.Text;
 
 using Lzma.Core.SevenZip;
+using Lzma.Core.Tests.Helpers;
 
 namespace Lzma.Core.Tests.SevenZip;
 
@@ -68,9 +69,7 @@ public sealed class SevenZipArchiveWriterAesStreamingTests
   [Fact]
   public void ПотоковыйAes_Читается7Zip()
   {
-    const string sevenZip = @"C:\Program Files\7-Zip\7z.exe";
-    if (!File.Exists(sevenZip))
-      return;
+    string sevenZip = SevenZipInterop.RequireExecutable();
 
     var entries = TwoFiles(out byte[] a, out _);
     const string password = "p@ssw0rd-Тест";
