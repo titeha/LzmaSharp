@@ -28,7 +28,7 @@ public sealed class SevenZipArchiveDecoderExtractWindowsInvalidCharactersTests
   public void ExtractToDirectory_WindowsInvalidCharacters_InvalidData(string entryName)
   {
     if (!OperatingSystem.IsWindows())
-      return;
+      Assert.Skip("Недопустимые в Windows символы имён проверяются только на Windows; на других ОС такие имена легальны.");
 
     byte[] plain = MakePattern(128, mul: 31, add: 7);
     byte[] archive = BuildArchiveSingleFileCopy(plain, entryName);
