@@ -56,7 +56,7 @@ public static class ZipStreamExtractor
         entries.Count,
         i => entries[i].Name,
         i => entries[i].IsDirectory,
-        (i, fullPath) => WriteEntry(archive, entries[i], fullPath, token, progress, total, processed, password),
+        (i, stagedPath) => WriteEntry(archive, entries[i], stagedPath, token, progress, total, processed, password),
         destinationDirectory,
         overwrite,
         currentFile,
@@ -66,7 +66,7 @@ public static class ZipStreamExtractor
   // Пишет данные одного члена на диск: seek к данным по локальному заголовку → Store-копия/Deflate-декод
   // (или расшифровка WinZip-AES → декомпрессия для зашифрованных членов).
   private static ZipExtractResult WriteEntry(
-      Stream archive, ZipStreamEntry entry, string fullPath, CancellationToken token,
+      Stream archive, ZipStreamEntry entry, string stagedPath, CancellationToken token,
       IProgress<SevenZipProgress>? progress, long total, long[] processed, byte[]? password)
   {
     // Длины имени/extra берём из ЛОКАЛЬНОГО заголовка (могут отличаться от центрального).
@@ -94,7 +94,7 @@ public static class ZipStreamExtractor
 
     archive.Position = dataStart;
 
-    using var file = new FileStream(fullPath, FileMode.Create, FileAccess.Write);
+    using var file = new FileStream(stagedPath, FileMode.Create, FileAccess.Write);
 
     if (entry.IsEncrypted)
       return WriteEncryptedEntry(archive, entry, file, password, progress, total, processed);

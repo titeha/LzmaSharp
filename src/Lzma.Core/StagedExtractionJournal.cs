@@ -1,0 +1,366 @@
+using System.Security.Cryptography;
+
+namespace Lzma.Core;
+
+/// <summary>
+/// Вид записи в журнале staged-извлечения.
+/// </summary>
+internal enum StagedEntryKind
+{
+  /// <summary>Файл создан заново (прежнего не было).</summary>
+  CreatedNew,
+
+  /// <summary>Файл заменил прежний (существующий был перемещён в .bak).</summary>
+  Replaced,
+
+  /// <summary>Каталог создан операцией извлечения.</summary>
+  CreatedDir,
+
+  /// <summary>Атрибуты файла были изменены (fallback-сценарий).</summary>
+  AttributesChanged,
+}
+
+/// <summary>
+/// <para>Журнал staged-извлечения: управляет временными путями, публикацией и откатом.
+/// Не знает про декодирование, CRC, пароли и форматы архивов — только файловая механика.</para>
+/// <para>Lifetime — одна операция извлечения (one-shot, не thread-safe).</para>
+/// <para>
+/// Формат имён стадии: <c>{fullPath}.{16 hex}.tmp</c>, backup: <c>{fullPath}.{16 hex}.bak</c>.
+/// Суффикс генерируется в том же каталоге, что и конечный путь (тот же том ⇒ rename без копирования).
+/// </para>
+/// </summary>
+internal sealed class StagedExtractionJournal
+{
+  // Записи о файлах (в порядке публикации).
+  private readonly List<StagedFileEntry> _files = new();
+
+  // Записи о каталогах (в порядке создания).
+  private readonly List<string> _dirs = new();
+
+  // Записи об изменённых атрибутах (fallback).
+  private readonly List<AttributeEntry> _attrChanges = new();
+
+  // Флаг точки фиксации: после Commit откат не выполняется (one-shot).
+  private bool _committed;
+
+  // Флаг выполненного отката: повторный вызов Rollback не должен удалять уже восстановленные
+  // прежние байты (идемпотентность по последствию).
+  private bool _rolledBack;
+
+  /// <summary>
+  /// Создаёт staged-путь РЯДОМ с конечным (тот же каталог ⇒ тот же том ⇒ rename без копирования).
+  /// Формат: <c>{fullPath}.{16 hex}.tmp</c>. При коллизии — повторная генерация.
+  /// </summary>
+  /// <param name="fullPath">Конечный путь файла.</param>
+  /// <returns>Путь для staged-записи (временный файл).</returns>
+  public string CreateStagedPath(string fullPath)
+  {
+    for (int attempt = 0; attempt < 16; attempt++)
+    {
+      string suffix = GenerateHexSuffix();
+      string candidate = fullPath + "." + suffix + ".tmp";
+      if (!File.Exists(candidate))
+        return candidate;
+    }
+
+    // Все попытки дали занятое имя: возвращать существующий путь НЕЛЬЗЯ — FileMode.Create
+    // обрезал бы чужой файл. Отказываем явно (граница ExtractCore смаппит в IOError).
+    throw new IOException($"Не удалось подобрать уникальное имя staged-файла для \"{fullPath}\".");
+  }
+
+  /// <summary>
+  /// Регистрирует созданный каталог для отката в обратном порядке.
+  /// </summary>
+  /// <param name="directory">Путь созданного каталога.</param>
+  public void TrackCreatedDirectory(string directory)
+  {
+    _dirs.Add(directory);
+  }
+
+  /// <summary>
+  /// Определяет вид записи перед публикацией и подбирает свободное имя backup.
+  /// Если конечный файл существует — <see cref="StagedEntryKind.Replaced"/> (нужен backup),
+  /// иначе <see cref="StagedEntryKind.CreatedNew"/>. Метод приватный: единственный вызывающий —
+  /// <see cref="Publish"/>, что исключает двойную регистрацию одного элемента.
+  /// </summary>
+  /// <param name="fullPath">Конечный путь файла.</param>
+  /// <param name="backupPath">Свободный путь backup (для <see cref="StagedEntryKind.Replaced"/>) или null.</param>
+  /// <returns>Вид записи.</returns>
+  private StagedEntryKind RegisterTarget(string fullPath, out string? backupPath)
+  {
+    if (!File.Exists(fullPath))
+    {
+      backupPath = null;
+      return StagedEntryKind.CreatedNew;
+    }
+
+    // Имя backup подбирается так же, как имя стадии: занятое имя привело бы к отказу File.Move
+    // и лишнему откату всей операции.
+    for (int attempt = 0; attempt < 16; attempt++)
+    {
+      string candidate = fullPath + "." + GenerateHexSuffix() + ".bak";
+      if (!File.Exists(candidate))
+      {
+        backupPath = candidate;
+        return StagedEntryKind.Replaced;
+      }
+    }
+
+    throw new IOException($"Не удалось подобрать уникальное имя backup-файла для \"{fullPath}\".");
+  }
+
+  /// <summary>
+  /// Публикует ОДИН элемент: сначала перемещает прежний файл в backup (если есть),
+  /// затем перемещает staged-файл на конечный путь.
+  /// Вызывается ТОЛЬКО после успешной записи и Dispose потока стадии.
+  /// </summary>
+  /// <param name="stagedPath">Путь staged-файла (временный).</param>
+  /// <param name="fullPath">Конечный путь публикации.</param>
+  public void Publish(string stagedPath, string fullPath)
+  {
+    StagedEntryKind kind = RegisterTarget(fullPath, out string? backupPath);
+
+    // Запись добавляется в журнал ДО переносов: если второй перенос откажет, прежний файл уже
+    // уехал в .bak, и откат обязан вернуть его на место (иначе файл исчезнет из своего имени).
+    var entry = new StagedFileEntry(kind, fullPath, stagedPath, backupPath);
+    _files.Add(entry);
+
+    if (kind == StagedEntryKind.Replaced && backupPath is not null)
+    {
+      // Переносим прежний файл в backup (атрибуты, включая ReadOnly, переносятся вместе с файлом).
+      File.Move(fullPath, backupPath);
+    }
+
+    // Переносим staged на конечный путь.
+    File.Move(stagedPath, fullPath);
+
+    entry.Published = true;
+  }
+
+  /// <summary>
+  /// Точка фиксации: после успешной публикации всех элементов.
+  /// После <see cref="Commit"/> вызов <see cref="Rollback"/> не выполняется.
+  /// </summary>
+  public void Commit()
+  {
+    // Точка фиксации: после неё откат не выполняется (one-shot), а оставшиеся .bak подлежат
+    // best-effort очистке. Флаг хранится в самом журнале, чтобы случайный вызов Rollback
+    // не удалил данные пользователя после успешной операции.
+    _committed = true;
+  }
+
+  /// <summary>
+  /// Best-effort удаление .bak/.tmp после <see cref="Commit"/>.
+  /// Отказ очистки НЕ отменяет успех операции (семантика M4B).
+  /// </summary>
+  public void CleanupAfterCommit()
+  {
+    for (int i = 0; i < _files.Count; i++)
+    {
+      string? backupPath = _files[i].BackupPath;
+      if (backupPath is null)
+        continue;
+
+      // Очистка после точки фиксации — best-effort: она не отменяет успех операции и НЕ СМЕЕТ
+      // бросать исключение наружу (иначе публичный метод упадёт после успешного извлечения).
+      try
+      {
+        if (!File.Exists(backupPath))
+          continue;
+
+        // Backup наследует атрибуты прежнего файла (File.Move переносит их вместе с файлом),
+        // включая ReadOnly, а удаление ReadOnly-файла на Windows отказывает. Без снятия атрибута
+        // .bak оставался бы в каталоге назначения навсегда (измерено ревьюером на Windows).
+        FileAttributes attrs = File.GetAttributes(backupPath);
+        if ((attrs & FileAttributes.ReadOnly) == FileAttributes.ReadOnly)
+          File.SetAttributes(backupPath, attrs & ~FileAttributes.ReadOnly);
+
+        File.Delete(backupPath);
+      }
+      catch (IOException) { }
+      catch (UnauthorizedAccessException) { }
+      catch (NotSupportedException) { }
+      catch (ArgumentException) { }
+      catch (System.Security.SecurityException) { }
+
+      // Остаток .bak не отменяет успех; возможность остатка фиксируется в документации
+      // как известное ограничение (гарантированная очистка не заявляется).
+    }
+  }
+
+  /// <summary>
+  /// <para>Откат ВСЕЙ операции: обратный порядок журнала, per-item catch.</para>
+  /// <para>Порядок действий:</para>
+  /// <list type="number">
+  /// <item>Опубликованные <see cref="StagedEntryKind.CreatedNew"/> — удалить;</item>
+  /// <item><see cref="StagedEntryKind.Replaced"/> — удалить опубликованный новый файл,
+  /// затем восстановить backup (bak → final);</item>
+  /// <item>Неопубликованные staged-файлы — удалить;</item>
+  /// <item><see cref="StagedEntryKind.AttributesChanged"/> — восстановить исходное значение
+  /// (до удаления каталогов);</item>
+  /// <item><see cref="StagedEntryKind.CreatedDir"/> — удалить в обратном порядке (только пустые).</item>
+  /// </list>
+  /// <para>Файл, существовавший до операции и НЕ имеющий backup, не удаляется НИКОГДА.</para>
+  /// <para>Откат выполняется один раз: повторный вызов не удаляет уже восстановленные прежние байты.</para>
+  /// </summary>
+  public void Rollback()
+  {
+    // После точки фиксации откат не выполняется: данные уже опубликованы успешно.
+    if (_committed)
+      return;
+
+    // Идемпотентность по последствию: второй вызов не должен удалять восстановленный прежний файл.
+    if (_rolledBack)
+      return;
+
+    _rolledBack = true;
+
+    // a) Опубликованные файлы — в обратном порядке.
+    for (int i = _files.Count - 1; i >= 0; i--)
+    {
+      var entry = _files[i];
+
+      if (entry.Published)
+      {
+        if (entry.Kind == StagedEntryKind.CreatedNew)
+        {
+          // Опубликованный CreatedNew — удаляем.
+          try { if (File.Exists(entry.FinalPath)) File.Delete(entry.FinalPath); }
+          catch (IOException) { }
+          catch (UnauthorizedAccessException) { }
+
+          entry.Published = false;
+        }
+        else if (entry.Kind == StagedEntryKind.Replaced && entry.BackupPath is not null)
+        {
+          // Опубликованный Replaced — удаляем новый, восстанавливаем backup.
+          try { if (File.Exists(entry.FinalPath)) File.Delete(entry.FinalPath); }
+          catch (IOException) { }
+          catch (UnauthorizedAccessException) { }
+
+          try { if (File.Exists(entry.BackupPath)) File.Move(entry.BackupPath, entry.FinalPath); }
+          catch (IOException) { }
+          catch (UnauthorizedAccessException) { }
+
+          // Состояние записи приводится к фактическому: файл больше не опубликован, а прежние
+          // байты вернулись на своё имя. Без этого повторный откат удалил бы восстановленный файл.
+          entry.Published = false;
+        }
+      }
+      else
+      {
+        // Неопубликованный staged-файл — удаляем tmp.
+        try { if (File.Exists(entry.StagedPath)) File.Delete(entry.StagedPath); }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+
+        // Если прежний файл уже уехал в .bak, а публикация не завершилась (отказ второго
+        // переноса) — возвращаем его на место: инвариант «прежние байты на своём имени».
+        if (entry.BackupPath is not null)
+        {
+          try
+          {
+            if (!File.Exists(entry.FinalPath) && File.Exists(entry.BackupPath))
+              File.Move(entry.BackupPath, entry.FinalPath);
+          }
+          catch (IOException) { }
+          catch (UnauthorizedAccessException) { }
+        }
+      }
+    }
+
+    // b) Отдельный проход по списку _unpublishedStaged: сюда попадают staged-файлы, созданные
+    // CreateStagedPath и зарегистрированные TrackUnpublishedStaged, для которых Publish не вызывался
+    // (например, writeAt вернул отрицательный результат). Проход по _files такие файлы не видит.
+    for (int i = _unpublishedStaged.Count - 1; i >= 0; i--)
+    {
+      try { if (File.Exists(_unpublishedStaged[i])) File.Delete(_unpublishedStaged[i]); }
+      catch (IOException) { }
+      catch (UnauthorizedAccessException) { }
+    }
+
+    // c) Атрибуты — восстанавливаем (fallback).
+    for (int i = _attrChanges.Count - 1; i >= 0; i--)
+    {
+      var attr = _attrChanges[i];
+      try
+      {
+        if (File.Exists(attr.Path))
+          File.SetAttributes(attr.Path, attr.OriginalAttributes);
+      }
+      catch (IOException) { }
+      catch (UnauthorizedAccessException) { }
+    }
+
+    // d) Каталоги — удаляем в обратном порядке (только пустые).
+    for (int i = _dirs.Count - 1; i >= 0; i--)
+    {
+      try
+      {
+        if (Directory.Exists(_dirs[i]))
+          Directory.Delete(_dirs[i], recursive: false);
+      }
+      catch (IOException) { }
+      catch (UnauthorizedAccessException) { }
+    }
+  }
+
+  /// <summary>
+  /// Отмечает staged-путь как «созданный, но ещё не опубликованный» — для удаления при откате,
+  /// если запись завершилась сбоем до <see cref="Publish"/>.
+  /// </summary>
+  /// <param name="stagedPath">Путь staged-файла.</param>
+  public void TrackUnpublishedStaged(string stagedPath)
+  {
+    _unpublishedStaged.Add(stagedPath);
+  }
+
+  /// <summary>
+  /// Убирает staged-путь из списка неопубликованных (вызывается после успешной публикации,
+  /// т.к. файл больше не по этому пути).
+  /// </summary>
+  /// <param name="stagedPath">Путь staged-файла.</param>
+  public void RemoveUnpublishedStaged(string stagedPath)
+  {
+    _unpublishedStaged.Remove(stagedPath);
+  }
+
+  /// <summary>
+  /// Регистрирует изменение атрибутов файла (для fallback-восстановления при откате).
+  /// В ZIP-маршруте не используется: backup-first rename переносит атрибуты вместе с файлом.
+  /// Подключается в шаге B6 (capability-probe ReadOnly/атрибуты), поэтому ветвь восстановления
+  /// атрибутов в <see cref="Rollback"/> пока не имеет исполняемого вызывающего.
+  /// </summary>
+  /// <param name="path">Путь файла.</param>
+  /// <param name="originalAttributes">Исходные атрибуты.</param>
+  public void TrackAttributeChange(string path, FileAttributes originalAttributes)
+  {
+    _attrChanges.Add(new AttributeEntry { Path = path, OriginalAttributes = originalAttributes });
+  }
+
+  // Неопубликованные staged-файлы (созданы, но запись не удалась).
+  private readonly List<string> _unpublishedStaged = new();
+
+  private static string GenerateHexSuffix()
+  {
+    Span<byte> bytes = stackalloc byte[8];
+    RandomNumberGenerator.Fill(bytes);
+    return Convert.ToHexString(bytes);
+  }
+
+  private sealed class StagedFileEntry(
+      StagedEntryKind kind, string finalPath, string stagedPath, string? backupPath)
+  {
+    public StagedEntryKind Kind { get; } = kind;
+    public string FinalPath { get; } = finalPath;
+    public string StagedPath { get; } = stagedPath;
+    public string? BackupPath { get; } = backupPath;
+    public bool Published { get; set; }
+  }
+
+  private struct AttributeEntry
+  {
+    public string Path;
+    public FileAttributes OriginalAttributes;
+  }
+}

@@ -37,9 +37,9 @@ public static class ZipExtractor
         entries.Count,
         i => entries[i].Name,
         i => entries[i].IsDirectory,
-        (i, fullPath) =>
+        (i, stagedPath) =>
         {
-          File.WriteAllBytes(fullPath, entries[i].Bytes);
+          File.WriteAllBytes(stagedPath, entries[i].Bytes);
           return ZipExtractResult.Ok;
         },
         destinationDirectory,
@@ -49,8 +49,9 @@ public static class ZipExtractor
   }
 
   /// <summary>
-  /// Общее ядро извлечения: валидация путей, создание каталогов, откат при сбое. Данные каждого
-  /// элемента пишет делегат <paramref name="writeAt"/> (index, полный путь) → результат.
+  /// Общее ядро извлечения: валидация путей, создание каталогов, staged-запись, публикация
+  /// после проверки и откат при сбое. Данные каждого элемента пишет делегат
+  /// <paramref name="writeAt"/> (index, staged-путь) → результат.
   /// </summary>
   internal static ZipExtractResult ExtractCore(
       int count,
@@ -98,14 +99,13 @@ public static class ZipExtractor
         fullPaths[i] = fp;
       }
 
-      var createdDirs = new List<string>();
-      var createdFiles = new List<string>();
+      var journal = new StagedExtractionJournal();
       bool committed = false;
 
       if (!Directory.Exists(root))
       {
         Directory.CreateDirectory(root);
-        createdDirs.Add(root);
+        journal.TrackCreatedDirectory(root);
       }
 
       // Создаёт недостающие уровни каталога, запоминая каждый созданный (для отката).
@@ -122,7 +122,7 @@ public static class ZipExtractor
         {
           string d = missing.Pop();
           Directory.CreateDirectory(d);
-          createdDirs.Add(d);
+          journal.TrackCreatedDirectory(d);
         }
       }
 
@@ -159,44 +159,40 @@ public static class ZipExtractor
           {
             if (!overwrite)
               return ZipExtractResult.InvalidData;
-
-            if (!SevenZipArchiveDecoder.TryPrepareExistingFileForOverwrite(fullPath))
-              return ZipExtractResult.IOError;
           }
 
           CreateDirsTracked(dir);
 
           currentFile?.Report(nameAt(i));
 
-          // Файл добавляется в откат ДО записи — при частичной потоковой записи он тоже удалится.
-          createdFiles.Add(fullPath);
-          ZipExtractResult written = writeAt(i, fullPath);
+          // Staged-запись: делегат пишет во временный файл рядом с конечным путём.
+          string stagedPath = journal.CreateStagedPath(fullPath);
+          journal.TrackUnpublishedStaged(stagedPath);
+          ZipExtractResult written = writeAt(i, stagedPath);
           if (written != ZipExtractResult.Ok)
             return written;
+
+          // Публикация: поток стадии уже закрыт (using внутри делегата), переносим файл на место.
+          journal.Publish(stagedPath, fullPath);
+          journal.RemoveUnpublishedStaged(stagedPath);
         }
 
+        // Все элементы успешно опубликованы — фиксируем.
+        journal.Commit();
         committed = true;
+
+        // Best-effort очистка backup-файлов; отказ не отменяет успех (семантика M4B).
+        try { journal.CleanupAfterCommit(); }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+
         return ZipExtractResult.Ok;
       }
       finally
       {
-        // При любом сбое до commit — удаляем всё созданное (файлы, затем каталоги в обратном порядке).
+        // При любом сбое до commit — откат всей операции с восстановлением прежних байт.
         if (!committed)
-        {
-          for (int i = createdFiles.Count - 1; i >= 0; i--)
-          {
-            try { if (File.Exists(createdFiles[i])) File.Delete(createdFiles[i]); }
-            catch (IOException) { }
-            catch (UnauthorizedAccessException) { }
-          }
-
-          for (int i = createdDirs.Count - 1; i >= 0; i--)
-          {
-            try { if (Directory.Exists(createdDirs[i])) Directory.Delete(createdDirs[i], recursive: false); }
-            catch (IOException) { }
-            catch (UnauthorizedAccessException) { }
-          }
-        }
+          journal.Rollback();
       }
     }
     catch (OperationCanceledException)

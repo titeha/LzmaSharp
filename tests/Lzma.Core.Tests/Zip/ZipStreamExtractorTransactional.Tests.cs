@@ -171,4 +171,74 @@ public sealed class ZipStreamExtractorTransactionalTests
       if (Directory.Exists(dest)) Directory.Delete(dest, true);
     }
   }
+
+  /// <summary>
+  /// Регрессия на находку кросс-семейного ревью (BLOCKING 1): успешная перезапись файла
+  /// с атрибутом <see cref="FileAttributes.ReadOnly"/> не должна оставлять backup в каталоге
+  /// назначения. До исправления <c>CleanupAfterCommit</c> не мог удалить <c>.bak</c>
+  /// (атрибут ReadOnly переносится вместе с файлом при <c>File.Move</c>), и операция
+  /// возвращала <c>Ok</c> с мусором в каталоге пользователя.
+  /// Только Windows: атрибут ReadOnly блокирует удаление именно там.
+  /// </summary>
+  [Fact]
+  public void Извлечь_Перезапись_Успех_ПрежнийReadOnly_НеОставляетBackup()
+  {
+    if (!OperatingSystem.IsWindows())
+      Assert.Skip("Атрибут ReadOnly блокирует удаление файла только на Windows; на POSIX успех определяется правами каталога.");
+
+    const int payloadSize = 4096;
+    byte[] payload = MakeFilled(seed: 21, payloadSize);
+    byte[] sentinel = MakeFilled(seed: 22, payloadSize);
+    Assert.NotEqual(payload, sentinel);
+
+    // Архив без шифрования: проверяется успешный путь публикации и последующей очистки.
+    using var ms = new MemoryStream();
+    Assert.Equal(ZipWriteResult.Ok, ZipStreamWriter.Write(
+        [F("keep.bin", payload)], ms,
+        progress: null, token: default, currentFile: null,
+        maxDegreeOfParallelism: 0, password: null));
+    byte[] archive = ms.ToArray();
+
+    string dest = TempDir();
+    try
+    {
+      Directory.CreateDirectory(dest);
+      string target = Path.Combine(dest, "keep.bin");
+      File.WriteAllBytes(target, sentinel);
+      File.SetAttributes(target, FileAttributes.ReadOnly);
+      Assert.True(File.Exists(target));
+
+      using var read = new MemoryStream(archive, writable: false);
+      Assert.Equal(ZipReadResult.Ok,
+          ZipStreamReader.ReadCentralDirectory(read, out ZipStreamEntry[] entries));
+      Assert.Single(entries);
+
+      var result = ZipStreamExtractor.ExtractToDirectory(
+          read, entries, dest, overwrite: true,
+          currentFile: null, token: default, progress: null,
+          password: null);
+
+      // Успех, новое содержимое опубликовано, мусора в каталоге назначения нет.
+      Assert.Equal(ZipExtractResult.Ok, result);
+      Assert.Equal(payload, File.ReadAllBytes(target));
+      Assert.Empty(Directory.GetFiles(dest, "*.bak", SearchOption.AllDirectories));
+      Assert.Empty(Directory.GetFiles(dest, "*.tmp", SearchOption.AllDirectories));
+      Assert.Single(Directory.GetFiles(dest));
+    }
+    finally
+    {
+      if (Directory.Exists(dest))
+      {
+        // ReadOnly снимается, иначе Directory.Delete откажет (в т.ч. на остатке .bak, если фикс сломается).
+        foreach (string f in Directory.GetFiles(dest, "*", SearchOption.AllDirectories))
+        {
+          try { File.SetAttributes(f, FileAttributes.Normal); }
+          catch (IOException) { }
+          catch (UnauthorizedAccessException) { }
+        }
+
+        Directory.Delete(dest, true);
+      }
+    }
+  }
 }
