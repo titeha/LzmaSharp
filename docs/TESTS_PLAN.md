@@ -167,13 +167,17 @@ Test-only помощники fault injection живут в `tests/Lzma.Core.Test
 - `"file.bin:ads"` — NTFS Alternate Data Stream; на POSIX `:` — легальный символ имени.
 
 Эти 2 кейса обнаруживаются только на Windows, что объясняет разницу в общем числе тестов
-`Lzma.Core.Tests`: 1699 (Windows) vs 1697 (Linux/macOS). Разница не является дефектом
+`Lzma.Core.Tests`: 1705 (Windows) vs 1703 (Linux/macOS). Разница не является дефектом
 или скрытым пропуском — это корректное отражение платформенно-специфичной семантики
 безопасности.
 
-Аналогичные Windows-only тесты (case collision, invalid characters, reserved names,
-read-only overwrite) используют `if (!OperatingSystem.IsWindows()) return;` в теле
-теста — они обнаруживаются на всех платформах, но выполняют проверку только на Windows.
+Аналогичные Windows-only тесты (коллизия регистра, недопустимые символы, зарезервированные
+имена, перезапись файла с атрибутом `ReadOnly`, успешная перезапись `ReadOnly`-файла без
+остатков backup) используют видимый пропуск:
+`if (!OperatingSystem.IsWindows()) Assert.Skip("причина");` — они обнаруживаются на всех
+платформах, выполняются только на Windows, а на других ОС фиксируются как пропущенные
+с указанием причины. Поэтому на POSIX ожидается 1698 passed / 5 skipped (всего 1703).
+Тихий `return` из теста запрещён: он даёт ложно-зелёный результат.
 Это отдельная проблема TST-001, которая отслеживается в рамках security-remediation
 и будет устранена отдельным шагом (миграция на xUnit v3 `Assert.SkipWhen` или
 выделение в Windows-only тест-проект).
