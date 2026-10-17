@@ -911,7 +911,7 @@ public static partial class SevenZipArchiveDecoder
         : StringComparison.Ordinal;
 
       // destinationDirectory должен быть каталогом, а не существующим файлом.
-      if (File.Exists(root))
+      if (File.Exists(StagedExtractionJournal.ToFileSystemPath(root)))
         return SevenZipArchiveDecodeResult.InvalidData;
 
       // destinationDirectory должен быть каталогом.
@@ -925,15 +925,14 @@ public static partial class SevenZipArchiveDecoder
       if (!rootWithSep.EndsWith(Path.DirectorySeparatorChar))
         rootWithSep += Path.DirectorySeparatorChar;
 
-      // Отслеживаем всё созданное на диске — для отката при сбое декода (см. try/finally ниже),
-      // чтобы при неудаче на диске «ничего не осталось», включая саму целевую папку.
-      var createdDirs = new List<string>();
-      var createdFiles = new List<string>();
+      // Журнал staged-извлечения: временные файлы рядом с назначением, публикация только после
+      // успешной проверки folder-а и Dispose потоков, откат с восстановлением прежних байт при сбое.
+      var journal = new StagedExtractionJournal();
 
-      if (!Directory.Exists(root))
+      if (!Directory.Exists(StagedExtractionJournal.ToFileSystemPath(root)))
       {
-        Directory.CreateDirectory(root);
-        createdDirs.Add(root);
+        Directory.CreateDirectory(StagedExtractionJournal.ToFileSystemPath(root));
+        journal.TrackCreatedDirectory(root);
       }
 
       StringComparer pathComparer = OperatingSystem.IsWindows()
@@ -1018,11 +1017,11 @@ public static partial class SevenZipArchiveDecoder
           return SevenZipArchiveDecodeResult.InvalidData;
 
         // Если на месте файла уже есть каталог — это конфликт.
-        if (Directory.Exists(fullPath))
+        if (Directory.Exists(StagedExtractionJournal.ToFileSystemPath(fullPath)))
           return SevenZipArchiveDecodeResult.InvalidData;
 
         // Если файл уже существует и overwrite=false — это тоже конфликт.
-        if (File.Exists(fullPath) && !overwrite)
+        if (File.Exists(StagedExtractionJournal.ToFileSystemPath(fullPath)) && !overwrite)
           return SevenZipArchiveDecodeResult.InvalidData;
       }
 
@@ -1034,23 +1033,28 @@ public static partial class SevenZipArchiveDecoder
       // Создаёт недостающие уровни каталога, запоминая каждый созданный (для отката).
       void CreateDirsTracked(string directory)
       {
-        if (string.IsNullOrEmpty(directory) || Directory.Exists(directory))
+        if (string.IsNullOrEmpty(directory) || Directory.Exists(StagedExtractionJournal.ToFileSystemPath(directory)))
           return;
 
         var missing = new Stack<string>();
-        for (string? cur = directory; cur is not null && !Directory.Exists(cur); cur = Path.GetDirectoryName(cur))
+        for (string? cur = directory; cur is not null && !Directory.Exists(StagedExtractionJournal.ToFileSystemPath(cur)); cur = Path.GetDirectoryName(cur))
           missing.Push(cur);
 
         while (missing.Count > 0)
         {
           string d = missing.Pop();
-          Directory.CreateDirectory(d);
-          createdDirs.Add(d);
+          Directory.CreateDirectory(StagedExtractionJournal.ToFileSystemPath(d));
+          journal.TrackCreatedDirectory(d);
         }
       }
 
       try
       {
+        // Пустые файлы: данных для проверки нет (empty-stream CRC проверен на этапе плана),
+        // поэтому отдельная проверка не нужна, но публикация выполняется вместе с остальными —
+        // после успешного декодирования всех folder-ов.
+        var emptyStaged = new List<(string Staged, string Final)>();
+
         // Каталоги и пустые файлы; для файлов с данными проверяем конфликты/overwrite здесь,
         // а сами данные пишем потоково ниже.
         for (int i = 0; i < entries.Length; i++)
@@ -1080,10 +1084,10 @@ public static partial class SevenZipArchiveDecoder
 
           CreateDirsTracked(dir);
 
-          if (Directory.Exists(fullPath))
+          if (Directory.Exists(StagedExtractionJournal.ToFileSystemPath(fullPath)))
             return SevenZipArchiveDecodeResult.InvalidData;
 
-          if (File.Exists(fullPath))
+          if (File.Exists(StagedExtractionJournal.ToFileSystemPath(fullPath)))
           {
             if (!overwrite)
               return SevenZipArchiveDecodeResult.InvalidData;
@@ -1092,11 +1096,13 @@ public static partial class SevenZipArchiveDecoder
               return SevenZipArchiveDecodeResult.InvalidData;
           }
 
-          // Пустой файл создаём сразу; файл с данными будет записан потоком ниже.
+          // Пустой файл: создаём staged рядом с назначением, публикация — после commit.
           if (plan[i].Kind == ExtractEntryKind.EmptyFile)
           {
-            File.WriteAllBytes(fullPath, []);
-            createdFiles.Add(fullPath);
+            string stagedEmpty = journal.CreateStagedPath(fullPath);
+            journal.TrackUnpublishedStaged(stagedEmpty);
+            File.WriteAllBytes(StagedExtractionJournal.ToFileSystemPath(stagedEmpty), []);
+            emptyStaged.Add((stagedEmpty, fullPath));
           }
         }
 
@@ -1128,6 +1134,7 @@ public static partial class SevenZipArchiveDecoder
 
           var openStreams = new List<FileStream>();
           var segments = new List<SubstreamRoutingWriter.Segment>();
+          var folderStaged = new List<(string Staged, string Final)>();
 
           try
           {
@@ -1143,9 +1150,11 @@ public static partial class SevenZipArchiveDecoder
               if (!filterActive || selected[i])
               {
                 folderFirstName ??= plan[i].Name;
-                var fs = new FileStream(fullPaths[i], FileMode.Create, FileAccess.Write);
+                string stagedPath = journal.CreateStagedPath(fullPaths[i]);
+                journal.TrackUnpublishedStaged(stagedPath);
+                var fs = new FileStream(StagedExtractionJournal.ToFileSystemPath(stagedPath), FileMode.Create, FileAccess.Write);
                 openStreams.Add(fs);
-                createdFiles.Add(fullPaths[i]);
+                folderStaged.Add((stagedPath, fullPaths[i]));
                 segments.Add(new SubstreamRoutingWriter.Segment(fs, plan[i].Size, plan[i].HasCrc, plan[i].ExpectedCrc));
               }
               else
@@ -1187,29 +1196,37 @@ public static partial class SevenZipArchiveDecoder
             foreach (FileStream fs in openStreams)
               fs.Dispose();
           }
+
+          // Публикация folder-а: все временные потоки закрыты (R1 — Windows не позволяет
+          // переносить открытый файл), раскладка и CRC проверены.
+          // При return внутри try этот код не выполняется — откат делает журнал.
+          foreach ((string stagedPath, string finalPath) in folderStaged)
+          {
+            journal.Publish(stagedPath, finalPath);
+            journal.RemoveUnpublishedStaged(stagedPath);
+          }
         }
 
+        // Публикация пустых файлов: данных для проверки нет, публикация вместе с остальными.
+        foreach ((string stagedEmpty, string finalEmpty) in emptyStaged)
+        {
+          journal.Publish(stagedEmpty, finalEmpty);
+          journal.RemoveUnpublishedStaged(stagedEmpty);
+        }
+
+        journal.Commit();
         committed = true;
+
+        // Best-effort удаление backup-файлов; отказ очистки не отменяет успех операции.
+        try { journal.CleanupAfterCommit(); }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
       }
       finally
       {
-        // При любом сбое до commit — удаляем всё созданное (файлы, затем каталоги в обратном порядке).
+        // При любом сбое до commit — откат всей операции с восстановлением прежних байт.
         if (!committed)
-        {
-          for (int i = createdFiles.Count - 1; i >= 0; i--)
-          {
-            try { if (File.Exists(createdFiles[i])) File.Delete(createdFiles[i]); }
-            catch (IOException) { }
-            catch (UnauthorizedAccessException) { }
-          }
-
-          for (int i = createdDirs.Count - 1; i >= 0; i--)
-          {
-            try { if (Directory.Exists(createdDirs[i])) Directory.Delete(createdDirs[i], recursive: false); }
-            catch (IOException) { }
-            catch (UnauthorizedAccessException) { }
-          }
-        }
+          journal.Rollback();
       }
 
       for (int i = 0; i < fileCount; i++)
@@ -1242,9 +1259,9 @@ public static partial class SevenZipArchiveDecoder
           try
           {
             if (entries[i].IsDirectory)
-              Directory.SetCreationTimeUtc(fullPath, dt);
+              Directory.SetCreationTimeUtc(StagedExtractionJournal.ToFileSystemPath(fullPath), dt);
             else
-              File.SetCreationTimeUtc(fullPath, dt);
+              File.SetCreationTimeUtc(StagedExtractionJournal.ToFileSystemPath(fullPath), dt);
           }
           catch (IOException) { }
           catch (UnauthorizedAccessException) { }
@@ -1271,9 +1288,9 @@ public static partial class SevenZipArchiveDecoder
           try
           {
             if (entries[i].IsDirectory)
-              Directory.SetLastAccessTimeUtc(fullPath, dt);
+              Directory.SetLastAccessTimeUtc(StagedExtractionJournal.ToFileSystemPath(fullPath), dt);
             else
-              File.SetLastAccessTimeUtc(fullPath, dt);
+              File.SetLastAccessTimeUtc(StagedExtractionJournal.ToFileSystemPath(fullPath), dt);
           }
           catch (IOException) { }
           catch (UnauthorizedAccessException) { }
@@ -1303,9 +1320,9 @@ public static partial class SevenZipArchiveDecoder
           try
           {
             if (entries[i].IsDirectory)
-              Directory.SetLastWriteTimeUtc(fullPath, dt);
+              Directory.SetLastWriteTimeUtc(StagedExtractionJournal.ToFileSystemPath(fullPath), dt);
             else
-              File.SetLastWriteTimeUtc(fullPath, dt);
+              File.SetLastWriteTimeUtc(StagedExtractionJournal.ToFileSystemPath(fullPath), dt);
           }
           catch (IOException) { }
           catch (UnauthorizedAccessException) { }
@@ -1324,7 +1341,7 @@ public static partial class SevenZipArchiveDecoder
 
           try
           {
-            File.SetAttributes(fullPath, attrs);
+            File.SetAttributes(StagedExtractionJournal.ToFileSystemPath(fullPath), attrs);
           }
           catch (IOException) { }
           catch (UnauthorizedAccessException) { }
