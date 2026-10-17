@@ -60,7 +60,7 @@ internal sealed class StagedExtractionJournal
     {
       string suffix = GenerateHexSuffix();
       string candidate = fullPath + "." + suffix + ".tmp";
-      if (!File.Exists(candidate))
+      if (!FileExists(candidate))
         return candidate;
     }
 
@@ -89,7 +89,7 @@ internal sealed class StagedExtractionJournal
   /// <returns>Вид записи.</returns>
   private StagedEntryKind RegisterTarget(string fullPath, out string? backupPath)
   {
-    if (!File.Exists(fullPath))
+    if (!FileExists(fullPath))
     {
       backupPath = null;
       return StagedEntryKind.CreatedNew;
@@ -100,7 +100,7 @@ internal sealed class StagedExtractionJournal
     for (int attempt = 0; attempt < 16; attempt++)
     {
       string candidate = fullPath + "." + GenerateHexSuffix() + ".bak";
-      if (!File.Exists(candidate))
+      if (!FileExists(candidate))
       {
         backupPath = candidate;
         return StagedEntryKind.Replaced;
@@ -129,11 +129,11 @@ internal sealed class StagedExtractionJournal
     if (kind == StagedEntryKind.Replaced && backupPath is not null)
     {
       // Переносим прежний файл в backup (атрибуты, включая ReadOnly, переносятся вместе с файлом).
-      File.Move(fullPath, backupPath);
+      MoveFile(fullPath, backupPath);
     }
 
     // Переносим staged на конечный путь.
-    File.Move(stagedPath, fullPath);
+    MoveFile(stagedPath, fullPath);
 
     entry.Published = true;
   }
@@ -166,17 +166,17 @@ internal sealed class StagedExtractionJournal
       // бросать исключение наружу (иначе публичный метод упадёт после успешного извлечения).
       try
       {
-        if (!File.Exists(backupPath))
+        if (!FileExists(backupPath))
           continue;
 
         // Backup наследует атрибуты прежнего файла (File.Move переносит их вместе с файлом),
         // включая ReadOnly, а удаление ReadOnly-файла на Windows отказывает. Без снятия атрибута
         // .bak оставался бы в каталоге назначения навсегда (измерено ревьюером на Windows).
-        FileAttributes attrs = File.GetAttributes(backupPath);
+        FileAttributes attrs = GetAttributes(backupPath);
         if ((attrs & FileAttributes.ReadOnly) == FileAttributes.ReadOnly)
-          File.SetAttributes(backupPath, attrs & ~FileAttributes.ReadOnly);
+          SetAttributes(backupPath, attrs & ~FileAttributes.ReadOnly);
 
-        File.Delete(backupPath);
+        DeleteFile(backupPath);
       }
       catch (IOException) { }
       catch (UnauthorizedAccessException) { }
@@ -226,7 +226,7 @@ internal sealed class StagedExtractionJournal
         if (entry.Kind == StagedEntryKind.CreatedNew)
         {
           // Опубликованный CreatedNew — удаляем.
-          try { if (File.Exists(entry.FinalPath)) File.Delete(entry.FinalPath); }
+          try { if (FileExists(entry.FinalPath)) DeleteFile(entry.FinalPath); }
           catch (IOException) { }
           catch (UnauthorizedAccessException) { }
 
@@ -235,11 +235,11 @@ internal sealed class StagedExtractionJournal
         else if (entry.Kind == StagedEntryKind.Replaced && entry.BackupPath is not null)
         {
           // Опубликованный Replaced — удаляем новый, восстанавливаем backup.
-          try { if (File.Exists(entry.FinalPath)) File.Delete(entry.FinalPath); }
+          try { if (FileExists(entry.FinalPath)) DeleteFile(entry.FinalPath); }
           catch (IOException) { }
           catch (UnauthorizedAccessException) { }
 
-          try { if (File.Exists(entry.BackupPath)) File.Move(entry.BackupPath, entry.FinalPath); }
+          try { if (FileExists(entry.BackupPath)) MoveFile(entry.BackupPath, entry.FinalPath); }
           catch (IOException) { }
           catch (UnauthorizedAccessException) { }
 
@@ -251,7 +251,7 @@ internal sealed class StagedExtractionJournal
       else
       {
         // Неопубликованный staged-файл — удаляем tmp.
-        try { if (File.Exists(entry.StagedPath)) File.Delete(entry.StagedPath); }
+        try { if (FileExists(entry.StagedPath)) DeleteFile(entry.StagedPath); }
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }
 
@@ -261,8 +261,8 @@ internal sealed class StagedExtractionJournal
         {
           try
           {
-            if (!File.Exists(entry.FinalPath) && File.Exists(entry.BackupPath))
-              File.Move(entry.BackupPath, entry.FinalPath);
+            if (!FileExists(entry.FinalPath) && FileExists(entry.BackupPath))
+              MoveFile(entry.BackupPath, entry.FinalPath);
           }
           catch (IOException) { }
           catch (UnauthorizedAccessException) { }
@@ -275,7 +275,7 @@ internal sealed class StagedExtractionJournal
     // (например, writeAt вернул отрицательный результат). Проход по _files такие файлы не видит.
     for (int i = _unpublishedStaged.Count - 1; i >= 0; i--)
     {
-      try { if (File.Exists(_unpublishedStaged[i])) File.Delete(_unpublishedStaged[i]); }
+      try { if (FileExists(_unpublishedStaged[i])) DeleteFile(_unpublishedStaged[i]); }
       catch (IOException) { }
       catch (UnauthorizedAccessException) { }
     }
@@ -286,8 +286,8 @@ internal sealed class StagedExtractionJournal
       var attr = _attrChanges[i];
       try
       {
-        if (File.Exists(attr.Path))
-          File.SetAttributes(attr.Path, attr.OriginalAttributes);
+        if (FileExists(attr.Path))
+          SetAttributes(attr.Path, attr.OriginalAttributes);
       }
       catch (IOException) { }
       catch (UnauthorizedAccessException) { }
@@ -298,8 +298,8 @@ internal sealed class StagedExtractionJournal
     {
       try
       {
-        if (Directory.Exists(_dirs[i]))
-          Directory.Delete(_dirs[i], recursive: false);
+        if (DirectoryExists(_dirs[i]))
+          DeleteDirectory(_dirs[i]);
       }
       catch (IOException) { }
       catch (UnauthorizedAccessException) { }
@@ -342,6 +342,48 @@ internal sealed class StagedExtractionJournal
   // Неопубликованные staged-файлы (созданы, но запись не удалась).
   private readonly List<string> _unpublishedStaged = new();
 
+  /// <summary>
+  /// На Windows приводит путь к расширенной форме <c>\\?\</c> (для UNC — <c>\\?\UNC\server\share</c>),
+  /// если его длина достигает предела MAX_PATH, что позволяет работать с длинными путями БЕЗ
+  /// long-path opt-in хоста (реестр LongPathsEnabled + longPathAware в манифесте приложения).
+  /// Префикс отключает нормализацию Win32, поэтому путь обязан быть абсолютным и уже
+  /// нормализованным (без <c>.</c> и <c>..</c>); наши пути строятся через Path.GetFullPath и TryBuildSafePath.
+  /// На других ОС и для коротких/относительных/уже расширенных путей возвращает входной путь
+  /// без изменения, поэтому поведение коротких путей не меняется вовсе.
+  /// </summary>
+  internal static string ToFileSystemPath(string path)
+  {
+    if (!OperatingSystem.IsWindows())
+      return path;
+
+    if (path.Length < WindowsMaxPath - 1)
+      return path;
+
+    if (path.StartsWith(@"\\?\", StringComparison.Ordinal) ||
+        path.StartsWith(@"\\.\", StringComparison.Ordinal))
+      return path;
+
+    if (!Path.IsPathRooted(path))
+      return path;   // относительные пути всегда ограничены MAX_PATH, префикс неприменим
+
+    string normalized = path.Replace('/', '\\');
+
+    if (normalized.StartsWith(@"\\", StringComparison.Ordinal))
+      return @"\\?\UNC\" + normalized.Substring(2);
+
+    return @"\\?\" + normalized;
+  }
+
+  // Обёртки файловых вызовов: переводят путь через ToFileSystemPath для расширенной формы
+  // на Windows. Логика журнала не меняется — только способ передачи пути в FS-API.
+  private static bool FileExists(string path) => File.Exists(ToFileSystemPath(path));
+  private static void MoveFile(string from, string to) => File.Move(ToFileSystemPath(from), ToFileSystemPath(to));
+  private static void DeleteFile(string path) => File.Delete(ToFileSystemPath(path));
+  private static FileAttributes GetAttributes(string path) => File.GetAttributes(ToFileSystemPath(path));
+  private static void SetAttributes(string path, FileAttributes value) => File.SetAttributes(ToFileSystemPath(path), value);
+  private static bool DirectoryExists(string path) => Directory.Exists(ToFileSystemPath(path));
+  private static void DeleteDirectory(string path) => Directory.Delete(ToFileSystemPath(path), recursive: false);
+
   private static string GenerateHexSuffix()
   {
     Span<byte> bytes = stackalloc byte[8];
@@ -367,20 +409,45 @@ internal sealed class StagedExtractionJournal
   internal const int PosixMaxPath = 4096;
 
   /// <summary>
+  /// Предел расширенного пути Windows при использовании префикса <c>\\?\</c> (документированное
+  /// значение 32767 приблизительно и включает сам префикс). Применяется, потому что файловые
+  /// вызовы маршрута переводятся на расширенную форму (<see cref="ToFileSystemPath"/>).
+  /// </summary>
+  internal const int WindowsExtendedMaxPath = 32767;
+
+  /// <summary>
+  /// Запас на префикс расширенного пути: <c>\\?\</c> добавляет 4 символа, а <c>\\?\UNC\</c>
+  /// заменяет <c>\\</c> и добавляет 6 (итого +8). Вычитается из документированного предела,
+  /// чтобы лимит описывал длину ИСХОДНОГО пути, а не пути с префиксом.
+  /// </summary>
+  internal const int ExtendedPathPrefixReserve = 8;
+
+  /// <summary>
+  /// Эффективный лимит длины полного пути для текущей ОС (без завершающего нуля и с учётом
+  /// префикса расширенного пути). Используется и проверкой <see cref="IsPathTooLong"/>, и тестами,
+  /// чтобы лимит имел одно определение.
+  /// </summary>
+  internal static int FullPathLimit
+      => OperatingSystem.IsWindows() ? WindowsExtendedMaxPath - ExtendedPathPrefixReserve
+       : OperatingSystem.IsMacOS() ? MacOsMaxPath
+       : PosixMaxPath;
+
+  /// <summary>
   /// Оценивает, выйдет ли имя стадии/backup для <paramref name="fullPath"/> за пределы платформы.
-  /// Проверяются длина последнего компонента имени (с учётом суффикса стадии) и длина полного пути.
-  /// Лимиты полного пути — документированные константы платформ: Windows — MAX_PATH (260) без
-  /// long-path opt-in, macOS — MAXPATHLEN (1024), прочие POSIX — PATH_MAX (4096).
-  /// Фактические значения на ubuntu/macos локально не измерены и подтверждаются capability-probe
-  /// в CI; до подтверждения считаются неподтверждёнными.
+  /// Проверяются длина последнего компонента имени (с учётом суффикса стадии) и длина полного пути
+  /// против <see cref="FullPathLimit"/>: на Windows это расширенный предел (файловые вызовы маршрута
+  /// переводятся на префикс <c>\\?\</c>), на macOS <c>MAXPATHLEN</c> (1024), на прочих POSIX
+  /// <c>PATH_MAX</c> (4096). Фактические значения на ubuntu/macos локально не измерены
+  /// и подтверждаются capability-probe в CI; до подтверждения считаются неподтверждёнными.
   /// </summary>
   internal static bool IsPathTooLongForStaging(string fullPath)
       => IsPathTooLong(fullPath, StagedSuffixLength);
 
   /// <summary>
   /// Оценивает, выйдет ли <paramref name="fullPath"/> с учётом добавочного суффикса
-  /// <paramref name="extraSuffixLength"/> за лимит, принятый в реализации.
-  /// Единицы измерения соответствуют платформе: Windows считает <c>MAX_PATH</c> в символах UTF-16,
+  /// <paramref name="extraSuffixLength"/> за лимит, принятый в реализации (<see cref="FullPathLimit"/>).
+  /// Единицы измерения соответствуют платформе: Windows считает лимит пути в символах UTF-16
+  /// (документированный <c>MAX_PATH</c> и расширенный предел заданы в <c>WCHAR</c>),
   /// POSIX считает <c>NAME_MAX</c>/<c>PATH_MAX</c> в байтах UTF-8, поэтому для не-ASCII имён
   /// на POSIX измеряется именно длина в байтах (иначе проверка недооценивала бы длину
   /// и отказ возник бы на уровне ОС с маппингом в общий <c>IOError</c>).
@@ -399,7 +466,9 @@ internal sealed class StagedExtractionJournal
 
     // Лимит выбран по платформе: завышенное значение привело бы к тому, что отказ возникнет
     // на уровне ОС и будет смаплен в общий IOError, то есть шаг потерял бы смысл.
-    int limit = windows ? WindowsMaxPath : OperatingSystem.IsMacOS() ? MacOsMaxPath : PosixMaxPath;
+    // На Windows используется расширенный лимит (32767 минус запас на префикс), потому что
+    // файловые вызовы маршрута переводятся на префикс \\?\ через ToFileSystemPath.
+    int limit = FullPathLimit;
     int pathLength = windows ? fullPath.Length : Encoding.UTF8.GetByteCount(fullPath);
 
     return pathLength + extraSuffixLength >= limit;

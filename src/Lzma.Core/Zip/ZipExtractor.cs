@@ -39,7 +39,7 @@ public static class ZipExtractor
         i => entries[i].IsDirectory,
         (i, stagedPath) =>
         {
-          File.WriteAllBytes(stagedPath, entries[i].Bytes);
+          File.WriteAllBytes(StagedExtractionJournal.ToFileSystemPath(stagedPath), entries[i].Bytes);
           return ZipExtractResult.Ok;
         },
         destinationDirectory,
@@ -79,7 +79,7 @@ public static class ZipExtractor
           ? StringComparer.OrdinalIgnoreCase
           : StringComparer.Ordinal;
 
-      if (File.Exists(root))
+      if (File.Exists(StagedExtractionJournal.ToFileSystemPath(root)))
         return ZipExtractResult.InvalidData;
       if (SevenZipArchiveDecoder.HasFileOnDirectoryPath(root, cmp))
         return ZipExtractResult.InvalidData;
@@ -144,26 +144,26 @@ public static class ZipExtractor
       var journal = new StagedExtractionJournal();
       bool committed = false;
 
-      if (!Directory.Exists(root))
+      if (!Directory.Exists(StagedExtractionJournal.ToFileSystemPath(root)))
       {
-        Directory.CreateDirectory(root);
+        Directory.CreateDirectory(StagedExtractionJournal.ToFileSystemPath(root));
         journal.TrackCreatedDirectory(root);
       }
 
       // Создаёт недостающие уровни каталога, запоминая каждый созданный (для отката).
       void CreateDirsTracked(string directory)
       {
-        if (string.IsNullOrEmpty(directory) || Directory.Exists(directory))
+        if (string.IsNullOrEmpty(directory) || Directory.Exists(StagedExtractionJournal.ToFileSystemPath(directory)))
           return;
 
         var missing = new Stack<string>();
-        for (string? cur = directory; cur is not null && !Directory.Exists(cur); cur = Path.GetDirectoryName(cur))
+        for (string? cur = directory; cur is not null && !Directory.Exists(StagedExtractionJournal.ToFileSystemPath(cur)); cur = Path.GetDirectoryName(cur))
           missing.Push(cur);
 
         while (missing.Count > 0)
         {
           string d = missing.Pop();
-          Directory.CreateDirectory(d);
+          Directory.CreateDirectory(StagedExtractionJournal.ToFileSystemPath(d));
           journal.TrackCreatedDirectory(d);
         }
       }
@@ -194,10 +194,10 @@ public static class ZipExtractor
             return ZipExtractResult.InvalidData;
 
           // На месте файла уже каталог — конфликт.
-          if (Directory.Exists(fullPath))
+          if (Directory.Exists(StagedExtractionJournal.ToFileSystemPath(fullPath)))
             return ZipExtractResult.InvalidData;
 
-          if (File.Exists(fullPath))
+          if (File.Exists(StagedExtractionJournal.ToFileSystemPath(fullPath)))
           {
             if (!overwrite)
               return ZipExtractResult.InvalidData;

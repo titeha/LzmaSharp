@@ -29,7 +29,9 @@ public sealed class ZipExtractPathLengthTests
     => (i, stagedPath) =>
     {
       calls[0]++;
-      File.WriteAllBytes(stagedPath, entries[i].Bytes);
+      // Запись идёт через расширенную форму пути: иначе на хосте без long-path opt-in
+      // helper падал бы на длинном staged-пути и тест обходил бы проверяемый механизм.
+      File.WriteAllBytes(StagedExtractionJournal.ToFileSystemPath(stagedPath), entries[i].Bytes);
       return ZipExtractResult.Ok;
     };
 
@@ -155,7 +157,7 @@ public sealed class ZipExtractPathLengthTests
     if (StagedExtractionJournal.IsPathTooLongForStaging(testFilePath))
     {
       Assert.Skip($"путь назначения '{testFilePath}' (длина {testFilePath.Length}) превышает " +
-                  "принятый в реализации консервативный лимит (Windows: MAX_PATH 260 без long-path opt-in); " +
+                  "принятый в реализации лимит (на Windows — расширенный предел с учётом префикса); " +
                   "интеграционный тест пропущен");
     }
 
@@ -193,9 +195,9 @@ public sealed class ZipExtractPathLengthTests
   [Fact]
   public void IsPathTooLong_ГраницаПолногоПути_СоответствуетЛимитуПлатформы()
   {
-    int limit = OperatingSystem.IsWindows() ? StagedExtractionJournal.WindowsMaxPath
-        : OperatingSystem.IsMacOS() ? StagedExtractionJournal.MacOsMaxPath
-        : StagedExtractionJournal.PosixMaxPath;
+    // Единый источник лимита: на Windows это расширенный предел минус запас на префикс,
+    // на macOS MAXPATHLEN, на прочих POSIX PATH_MAX.
+    int limit = StagedExtractionJournal.FullPathLimit;
 
     // extra = 0: проверяем именно ветвь полного пути, без суффикса стадии.
     string belowLimit = MakePath(limit - 1);   // limit - 1 + 0 <  limit ⇒ false
@@ -296,6 +298,185 @@ public sealed class ZipExtractPathLengthTests
     finally
     {
       if (Directory.Exists(dest)) Directory.Delete(dest, recursive: true);
+    }
+  }
+
+  // === Тесты шага B3b-2b: ToFileSystemPath и смягчение лимита ===
+
+  /// <summary>
+  /// Короткий путь возвращается без изменений на всех ОС: на Windows короткая длина
+  /// не достигает порога (259), на других ОС префикс не применяется никогда.
+  /// </summary>
+  [Fact]
+  public void ToFileSystemPath_КороткийПуть_ВозвращаетБезИзменений()
+  {
+    string shortPath = OperatingSystem.IsWindows()
+        ? @"C:\Users\test\file.txt"
+        : "/home/user/file.txt";
+
+    string result = StagedExtractionJournal.ToFileSystemPath(shortPath);
+    Assert.Equal(shortPath, result);
+  }
+
+  /// <summary>
+  /// Путь длиной ≥ 259 символов: на Windows результат начинается с <c>\\?\</c> и не содержит
+  /// прямых слэшей; на других ОС равен входу (префикс не применяется).
+  /// </summary>
+  [Fact]
+  public void ToFileSystemPath_ДлинныйПуть_ДобавляетПрефиксТолькоНаWindows()
+  {
+    // Строим абсолютный путь длиной >= 259 символов из коротких компонентов.
+    string longPath = MakePath(300);
+
+    string result = StagedExtractionJournal.ToFileSystemPath(longPath);
+
+    if (OperatingSystem.IsWindows())
+    {
+      Assert.StartsWith(@"\\?\", result);
+      Assert.DoesNotContain("/", result);
+    }
+    else
+    {
+      Assert.Equal(longPath, result);
+    }
+  }
+
+  /// <summary>
+  /// На Windows UNC-путь <c>\\server\share\...</c> преобразуется в <c>\\?\UNC\server\share\...</c>;
+  /// на других ОС — без изменений.
+  /// </summary>
+  [Fact]
+  public void ToFileSystemPath_Unc_ПреобразуетсяВUncПрефикс()
+  {
+    // UNC-путь длиной >= 259, чтобы префикс применился на Windows.
+    string uncBase = @"\\server\share\";
+    string longComponent = new string('a', 260);
+    string uncPath = uncBase + longComponent;
+
+    string result = StagedExtractionJournal.ToFileSystemPath(uncPath);
+
+    if (OperatingSystem.IsWindows())
+    {
+      Assert.StartsWith(@"\\?\UNC\server\share\", result);
+      Assert.DoesNotContain("/", result);
+    }
+    else
+    {
+      Assert.Equal(uncPath, result);
+    }
+  }
+
+  /// <summary>
+  /// Повторное применение к уже расширенному пути не добавляет второй префикс (идемпотентность).
+  /// На других ОС тривиально верно (вход = выход).
+  /// </summary>
+  [Fact]
+  public void ToFileSystemPath_Идемпотентен()
+  {
+    string longPath = MakePath(300);
+    string first = StagedExtractionJournal.ToFileSystemPath(longPath);
+    string second = StagedExtractionJournal.ToFileSystemPath(first);
+    Assert.Equal(first, second);
+  }
+
+  /// <summary>
+  /// Относительный путь возвращается без изменений на всех ОС (префикс неприменим по документации).
+  /// </summary>
+  [Fact]
+  public void ToFileSystemPath_ОтносительныйПуть_НеРасширяется()
+  {
+    // Относительный путь длиной >= 259 (префикс всё равно не применяется).
+    string relativePath = string.Join("/", Enumerable.Repeat("subdir", 50));
+    Assert.True(relativePath.Length >= 259);
+
+    string result = StagedExtractionJournal.ToFileSystemPath(relativePath);
+    Assert.Equal(relativePath, result);
+  }
+
+  /// <summary>
+  /// Путь длиной ~300 символов: на Windows теперь <c>false</c> (лимит 32767),
+  /// на macOS/Linux — <c>false</c> (300 &lt; 1024/4096). Тест фиксирует снятие интерим-ограничения.
+  /// </summary>
+  [Fact]
+  public void IsPathTooLong_ДлинныйПутьWindows_ВПределахРасширенногоЛимита()
+  {
+    string path300 = MakePath(300);
+    // extra = 0: проверяем именно ветвь полного пути.
+    Assert.False(StagedExtractionJournal.IsPathTooLong(path300, 0));
+  }
+
+  /// <summary>
+  /// Путь длиной >= лимита текущей ОС возвращает <c>true</c> (проверка не стала «резиновой»).
+  /// </summary>
+  [Fact]
+  public void IsPathTooLong_ПревышениеРасширенногоЛимита_ВозвращаетTrue()
+  {
+    int limit = StagedExtractionJournal.FullPathLimit;
+
+    string atLimit = MakePath(limit);
+    Assert.True(StagedExtractionJournal.IsPathTooLong(atLimit, 0));
+  }
+
+  /// <summary>
+  /// Охрана <c>overwrite: false</c> на ДЛИННОМ пути. Тест закрывает риск асимметрии обёрток:
+  /// если <c>File.Exists(fullPath)</c> в <c>ZipExtractor</c> останется без префикса, а публикация
+  /// будет с префиксом, то на хосте без long-path opt-in охрана не сработает, элемент будет
+  /// классифицирован как <c>Replaced</c> и существующий файл пользователя перезапишется
+  /// вместо возврата <see cref="ZipExtractResult.InvalidData"/>.
+  /// Сценарий: создание → повтор с запретом перезаписи (отказ, содержимое не изменилось) →
+  /// повтор с разрешением (замена, остатков <c>.bak</c>/<c>.tmp</c> нет).
+  /// </summary>
+  [Fact]
+  public void ExtractCore_ДлинныйПуть_ОхранаПерезаписиРаботает_ИСодержимоеЗащищено()
+  {
+    string uniqueRoot = Path.Combine(Path.GetTempPath(), "lzs-longow-" + Guid.NewGuid().ToString("N"));
+    string dest = Path.Combine(uniqueRoot, new string('d', 200));
+    string target = Path.Combine(dest, "file.txt");
+
+    if (StagedExtractionJournal.IsPathTooLongForStaging(target))
+    {
+      Assert.Skip($"путь назначения '{target}' (длина {target.Length}) превышает принятый " +
+                  "в реализации лимит; тест охраны перезаписи на длинном пути пропущен");
+    }
+
+    try
+    {
+      // 1. Первое извлечение создаёт файл.
+      ZipEntry[] first = [new("file.txt", Payload("original"), IsDirectory: false)];
+      int[] calls1 = [0];
+      Assert.Equal(ZipExtractResult.Ok, ZipExtractor.ExtractCore(
+          first.Length, i => first[i].Name, i => first[i].IsDirectory,
+          WriteToStaged(first, calls1), dest, overwrite: false,
+          currentFile: null, token: CancellationToken.None, sizeAt: null));
+      Assert.Equal("original", File.ReadAllText(StagedExtractionJournal.ToFileSystemPath(target)));
+
+      // 2. Повтор с overwrite: false — отказ БЕЗ изменения содержимого и без записи.
+      ZipEntry[] second = [new("file.txt", Payload("replaced"), IsDirectory: false)];
+      int[] calls2 = [0];
+      Assert.Equal(ZipExtractResult.InvalidData, ZipExtractor.ExtractCore(
+          second.Length, i => second[i].Name, i => second[i].IsDirectory,
+          WriteToStaged(second, calls2), dest, overwrite: false,
+          currentFile: null, token: CancellationToken.None, sizeAt: null));
+      Assert.Equal(0, calls2[0]);
+      Assert.Equal("original", File.ReadAllText(StagedExtractionJournal.ToFileSystemPath(target)));
+
+      // 3. Повтор с overwrite: true — замена содержимого и отсутствие остатков.
+      int[] calls3 = [0];
+      Assert.Equal(ZipExtractResult.Ok, ZipExtractor.ExtractCore(
+          second.Length, i => second[i].Name, i => second[i].IsDirectory,
+          WriteToStaged(second, calls3), dest, overwrite: true,
+          currentFile: null, token: CancellationToken.None, sizeAt: null));
+      Assert.Equal(1, calls3[0]);
+      Assert.Equal("replaced", File.ReadAllText(StagedExtractionJournal.ToFileSystemPath(target)));
+
+      string destFs = StagedExtractionJournal.ToFileSystemPath(dest);
+      Assert.Empty(Directory.GetFiles(destFs, "*.bak", SearchOption.AllDirectories));
+      Assert.Empty(Directory.GetFiles(destFs, "*.tmp", SearchOption.AllDirectories));
+    }
+    finally
+    {
+      string rootFs = StagedExtractionJournal.ToFileSystemPath(uniqueRoot);
+      if (Directory.Exists(rootFs)) Directory.Delete(rootFs, recursive: true);
     }
   }
 

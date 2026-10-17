@@ -95,7 +95,7 @@ public static class ZipStreamExtractor
 
     archive.Position = dataStart;
 
-    using var file = new FileStream(stagedPath, FileMode.Create, FileAccess.Write);
+    using var file = new FileStream(StagedExtractionJournal.ToFileSystemPath(stagedPath), FileMode.Create, FileAccess.Write);
 
     if (entry.IsEncrypted)
       return WriteEncryptedEntry(archive, entry, file, password, progress, total, processed);
