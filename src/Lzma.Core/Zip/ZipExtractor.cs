@@ -126,6 +126,21 @@ public static class ZipExtractor
           return ZipExtractResult.InsufficientSpace;
       }
 
+      // Pre-flight: длина пути. Проверка выполняется до первой мутации, чтобы не начинать
+      // операцию, которая откажет на уровне ОС уже после публикации предыдущих элементов
+      // (и вернула бы общий IOError вместо отличимого состояния).
+      // Каталоги проверяются без суффикса стадии (он добавляется только к именам файлов),
+      // потому что Directory.CreateDirectory на длинном пути тоже отказывает.
+      if (StagedExtractionJournal.IsPathTooLong(root, 0))
+        return ZipExtractResult.PathTooLong;
+
+      for (int i = 0; i < count; i++)
+      {
+        int extra = isDirAt(i) ? 0 : StagedExtractionJournal.StagedSuffixLength;
+        if (StagedExtractionJournal.IsPathTooLong(fullPaths[i], extra))
+          return ZipExtractResult.PathTooLong;
+      }
+
       var journal = new StagedExtractionJournal();
       bool committed = false;
 

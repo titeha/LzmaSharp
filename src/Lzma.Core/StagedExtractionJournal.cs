@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text;
 
 namespace Lzma.Core;
 
@@ -346,6 +347,62 @@ internal sealed class StagedExtractionJournal
     Span<byte> bytes = stackalloc byte[8];
     RandomNumberGenerator.Fill(bytes);
     return Convert.ToHexString(bytes);
+  }
+
+  /// <summary>Число символов, которое имя стадии добавляет к полному пути: "." + 16 hex + ".tmp".</summary>
+  internal const int StagedSuffixLength = 21;
+
+  /// <summary>
+  /// Предельная длина одного компонента имени файла. Одинакова для целевых платформ:
+  /// NTFS ограничивает имя 255 символами UTF-16, POSIX — NAME_MAX (обычно 255 байт).
+  /// </summary>
+  internal const int MaxFileNameComponentLength = 255;
+
+  /// <summary>
+  /// Лимиты полного пути — документированные константы платформ (включают завершающий ноль):
+  /// Windows <c>MAX_PATH</c> без long-path opt-in, macOS <c>MAXPATHLEN</c>, Linux <c>PATH_MAX</c>.
+  /// </summary>
+  internal const int WindowsMaxPath = 260;
+  internal const int MacOsMaxPath = 1024;
+  internal const int PosixMaxPath = 4096;
+
+  /// <summary>
+  /// Оценивает, выйдет ли имя стадии/backup для <paramref name="fullPath"/> за пределы платформы.
+  /// Проверяются длина последнего компонента имени (с учётом суффикса стадии) и длина полного пути.
+  /// Лимиты полного пути — документированные константы платформ: Windows — MAX_PATH (260) без
+  /// long-path opt-in, macOS — MAXPATHLEN (1024), прочие POSIX — PATH_MAX (4096).
+  /// Фактические значения на ubuntu/macos локально не измерены и подтверждаются capability-probe
+  /// в CI; до подтверждения считаются неподтверждёнными.
+  /// </summary>
+  internal static bool IsPathTooLongForStaging(string fullPath)
+      => IsPathTooLong(fullPath, StagedSuffixLength);
+
+  /// <summary>
+  /// Оценивает, выйдет ли <paramref name="fullPath"/> с учётом добавочного суффикса
+  /// <paramref name="extraSuffixLength"/> за лимит, принятый в реализации.
+  /// Единицы измерения соответствуют платформе: Windows считает <c>MAX_PATH</c> в символах UTF-16,
+  /// POSIX считает <c>NAME_MAX</c>/<c>PATH_MAX</c> в байтах UTF-8, поэтому для не-ASCII имён
+  /// на POSIX измеряется именно длина в байтах (иначе проверка недооценивала бы длину
+  /// и отказ возник бы на уровне ОС с маппингом в общий <c>IOError</c>).
+  /// Фактические значения на ubuntu/macos локально не измерены и подтверждаются
+  /// capability-probe в CI; до подтверждения считаются неподтверждёнными.
+  /// </summary>
+  internal static bool IsPathTooLong(string fullPath, int extraSuffixLength)
+  {
+    bool windows = OperatingSystem.IsWindows();
+    string fileName = Path.GetFileName(fullPath);
+
+    // Суффикс стадии удлиняет только последний компонент имени.
+    int componentLength = windows ? fileName.Length : Encoding.UTF8.GetByteCount(fileName);
+    if (componentLength + extraSuffixLength > MaxFileNameComponentLength)
+      return true;
+
+    // Лимит выбран по платформе: завышенное значение привело бы к тому, что отказ возникнет
+    // на уровне ОС и будет смаплен в общий IOError, то есть шаг потерял бы смысл.
+    int limit = windows ? WindowsMaxPath : OperatingSystem.IsMacOS() ? MacOsMaxPath : PosixMaxPath;
+    int pathLength = windows ? fullPath.Length : Encoding.UTF8.GetByteCount(fullPath);
+
+    return pathLength + extraSuffixLength >= limit;
   }
 
   private sealed class StagedFileEntry(
