@@ -252,6 +252,7 @@ public static class ZipStreamReader
   /// <summary>
   /// Разбирает ZIP64 extra-field (<c>0x0001</c>) записи каталога, подставляя 64-битные размеры/смещение
   /// для тех полей, что помечены сентинелом (порядок по APPNOTE: uncompressed, compressed, offset).
+  /// Значения, не помещающиеся в <see cref="long"/> (≥ 2^63), отклоняются как некорректные.
   /// </summary>
   private static bool TryApplyZip64Extra(
       ReadOnlySpan<byte> extra,
@@ -281,6 +282,7 @@ public static class ZipStreamReader
         {
           if (q + 8 > end) return false;
           uncompSize = (long)BinaryPrimitives.ReadUInt64LittleEndian(extra.Slice(q, 8));
+          if (uncompSize < 0) return false;   // Zip64-значение ≥ 2^63 не помещается в Int64
           q += 8;
         }
 
@@ -288,6 +290,7 @@ public static class ZipStreamReader
         {
           if (q + 8 > end) return false;
           compSize = (long)BinaryPrimitives.ReadUInt64LittleEndian(extra.Slice(q, 8));
+          if (compSize < 0) return false;     // Zip64-значение ≥ 2^63 не помещается в Int64
           q += 8;
         }
 
@@ -295,6 +298,7 @@ public static class ZipStreamReader
         {
           if (q + 8 > end) return false;
           localOffset = (long)BinaryPrimitives.ReadUInt64LittleEndian(extra.Slice(q, 8));
+          if (localOffset < 0) return false;  // Zip64-значение ≥ 2^63 не помещается в Int64
         }
 
         return true;

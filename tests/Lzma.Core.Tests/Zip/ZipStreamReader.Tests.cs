@@ -211,6 +211,133 @@ public sealed class ZipStreamReaderTests
     Assert.Equal(0, entry.Method);
   }
 
+  // --- B4b: валидация отрицательных Zip64-размеров --------------------------------------------
+
+  // Строит ZIP-фикстуру с Zip64 extra по образцу теста выше, но с параметризованными значениями
+  // в extra-поле (uncomp, comp, offset). Используется для проверки отклонения значений ≥ 2^63.
+  private static byte[] BuildZip64FixtureWithExtraValues(ulong uncompExtra, ulong compExtra, ulong offsetExtra)
+  {
+    byte[] content = Encoding.UTF8.GetBytes("zip64 sign validation payload");
+    uint crc = Crc32.Compute(content);
+    byte[] name = Encoding.ASCII.GetBytes("z64sign.txt");
+
+    var buf = new List<byte>();
+
+    long localOffset = buf.Count; // 0
+    WriteU32(buf, 0x04034b50);                 // local file header
+    WriteU16(buf, 45);                         // version needed (ZIP64)
+    WriteU16(buf, 0);                          // flags
+    WriteU16(buf, 0);                          // method = store
+    WriteU16(buf, 0);                          // mod time
+    WriteU16(buf, 0x21);                       // mod date
+    WriteU32(buf, crc);
+    WriteU32(buf, (uint)content.Length);       // comp size (в локальном — реальные)
+    WriteU32(buf, (uint)content.Length);       // uncomp size
+    WriteU16(buf, (ushort)name.Length);
+    WriteU16(buf, 0);                          // extra len
+    buf.AddRange(name);
+    buf.AddRange(content);
+
+    long cdStart = buf.Count;
+    WriteU32(buf, 0x02014b50);                 // central header
+    WriteU16(buf, 45);                         // version made by
+    WriteU16(buf, 45);                         // version needed
+    WriteU16(buf, 0);                          // flags
+    WriteU16(buf, 0);                          // method
+    WriteU16(buf, 0);                          // mod time
+    WriteU16(buf, 0x21);                       // mod date
+    WriteU32(buf, crc);
+    WriteU32(buf, 0xFFFFFFFF);                 // comp size = сентинел → в extra
+    WriteU32(buf, 0xFFFFFFFF);                 // uncomp size = сентинел → в extra
+    WriteU16(buf, (ushort)name.Length);
+    WriteU16(buf, 28);                         // extra len (4 + 3×8)
+    WriteU16(buf, 0);                          // comment len
+    WriteU16(buf, 0);                          // disk start
+    WriteU16(buf, 0);                          // internal attrs
+    WriteU32(buf, 0);                          // external attrs
+    WriteU32(buf, 0xFFFFFFFF);                 // local offset = сентинел → в extra
+    buf.AddRange(name);
+    WriteU16(buf, 0x0001);                     // ZIP64 extra id
+    WriteU16(buf, 24);                         // размер данных extra
+    WriteU64(buf, uncompExtra);                // uncompressed (порядок по APPNOTE)
+    WriteU64(buf, compExtra);                  // compressed
+    WriteU64(buf, offsetExtra);                // offset
+    long cdSize = buf.Count - cdStart;
+
+    long zip64EocdOffset = buf.Count;
+    WriteU32(buf, 0x06064b50);                 // ZIP64 EOCD record
+    WriteU64(buf, 44);                         // размер записи (56 - 12)
+    WriteU16(buf, 45);
+    WriteU16(buf, 45);
+    WriteU32(buf, 0);                          // disk number
+    WriteU32(buf, 0);                          // disk with CD
+    WriteU64(buf, 1);                          // entries this disk
+    WriteU64(buf, 1);                          // total entries
+    WriteU64(buf, (ulong)cdSize);
+    WriteU64(buf, (ulong)cdStart);
+
+    WriteU32(buf, 0x07064b50);                 // ZIP64 EOCD locator
+    WriteU32(buf, 0);                          // disk with ZIP64 EOCD
+    WriteU64(buf, (ulong)zip64EocdOffset);
+    WriteU32(buf, 1);                          // total disks
+
+    WriteU32(buf, 0x06054b50);                 // EOCD
+    WriteU16(buf, 0);
+    WriteU16(buf, 0);
+    WriteU16(buf, 0xFFFF);                     // entries this disk = сентинел
+    WriteU16(buf, 0xFFFF);                     // total entries = сентинел
+    WriteU32(buf, 0xFFFFFFFF);                 // CD size = сентинел
+    WriteU32(buf, 0xFFFFFFFF);                 // CD offset = сентинел
+    WriteU16(buf, 0);                          // comment len
+
+    return buf.ToArray();
+  }
+
+  [Fact]
+  public void ZIP64_Extra_ОтрицательныйUncompressedSize_InvalidData()
+  {
+    byte[] fixture = BuildZip64FixtureWithExtraValues(
+        uncompExtra: ulong.MaxValue,                  // ≥ 2^63 → отрицательный long
+        compExtra: (ulong)29,                         // валидное
+        offsetExtra: 0);                              // валидное
+
+    using var ms = new MemoryStream(fixture, writable: false);
+    ZipReadResult result = ZipStreamReader.ReadCentralDirectory(ms, out ZipStreamEntry[] entries);
+
+    Assert.Equal(ZipReadResult.InvalidData, result);
+    Assert.Empty(entries);
+  }
+
+  [Fact]
+  public void ZIP64_Extra_ОтрицательныйCompressedSize_InvalidData()
+  {
+    byte[] fixture = BuildZip64FixtureWithExtraValues(
+        uncompExtra: (ulong)29,                         // валидное
+        compExtra: 1UL << 63,                           // ≥ 2^63 → отрицательный long
+        offsetExtra: 0);                                // валидное
+
+    using var ms = new MemoryStream(fixture, writable: false);
+    ZipReadResult result = ZipStreamReader.ReadCentralDirectory(ms, out ZipStreamEntry[] entries);
+
+    Assert.Equal(ZipReadResult.InvalidData, result);
+    Assert.Empty(entries);
+  }
+
+  [Fact]
+  public void ZIP64_Extra_ОтрицательныйLocalOffset_InvalidData()
+  {
+    byte[] fixture = BuildZip64FixtureWithExtraValues(
+        uncompExtra: (ulong)29,                         // валидное
+        compExtra: (ulong)29,                           // валидное
+        offsetExtra: ulong.MaxValue);                   // ≥ 2^63 → отрицательный long
+
+    using var ms = new MemoryStream(fixture, writable: false);
+    ZipReadResult result = ZipStreamReader.ReadCentralDirectory(ms, out ZipStreamEntry[] entries);
+
+    Assert.Equal(ZipReadResult.InvalidData, result);
+    Assert.Empty(entries);
+  }
+
   private static void WriteU16(List<byte> buf, ushort v)
   {
     buf.Add((byte)v);
