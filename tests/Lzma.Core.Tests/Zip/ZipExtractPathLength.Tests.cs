@@ -499,4 +499,70 @@ public sealed class ZipExtractPathLengthTests
     sb.Length = length;
     return sb.ToString();
   }
+
+  /// <summary>
+  /// Интеграционный тест потокового маршрута на длинном пути (шаг B4a).
+  /// Реальный ZIP-архив через <see cref="ZipStreamWriter.Write"/> в seekable <see cref="MemoryStream"/>,
+  /// извлечение через публичный <see cref="ZipStreamExtractor.ExtractToDirectory(Stream, IReadOnlyList{ZipStreamEntry}, string, bool, IProgress{string}, CancellationToken, IProgress{SevenZipProgress}, byte[])"/>.
+  /// Каталог назначения суммарной длиной ~300 символов с короткими компонентами (каждый &lt; 234).
+  /// Все операции с длинным путём идут через <see cref="StagedExtractionJournal.ToFileSystemPath"/>
+  /// (урок MAJOR 2 из ревью B3b-2b).
+  /// </summary>
+  [Fact]
+  public void ExtractToDirectory_Stream_ДлинныйПуть_ИзвлекаетУспешно()
+  {
+    // Построение каталога назначения ~300 символов с короткими компонентами.
+    string tempBase = Path.GetTempPath();
+    string uniqueRoot = Path.Combine(tempBase, "lzs-stream-long-" + Guid.NewGuid().ToString("N"));
+    string longComponent = new string('e', 200);
+    string dest = Path.Combine(uniqueRoot, longComponent);
+
+    // Проверка лимита до начала работы.
+    string testFilePath = Path.Combine(dest, "file.txt");
+    if (StagedExtractionJournal.IsPathTooLongForStaging(testFilePath))
+    {
+      Assert.Skip($"путь назначения '{testFilePath}' (длина {testFilePath.Length}) превышает " +
+                  "принятый в реализации лимит; интеграционный stream-тест пропущен");
+    }
+
+    try
+    {
+      // 1. Создать ZIP-архив в памяти.
+      byte[] content = Payload("stream long path content");
+      using var ms = new MemoryStream();
+      Assert.Equal(ZipWriteResult.Ok, ZipStreamWriter.Write(
+          [new ZipStreamingEntry("file.txt", content.LongLength,
+              () => new MemoryStream(content, writable: false))],
+          ms, progress: null, token: default, currentFile: null,
+          maxDegreeOfParallelism: 0, password: null));
+      byte[] archive = ms.ToArray();
+
+      // 2. Прочитать каталог.
+      using var read = new MemoryStream(archive, writable: false);
+      Assert.Equal(ZipReadResult.Ok,
+          ZipStreamReader.ReadCentralDirectory(read, out ZipStreamEntry[] entries));
+      Assert.Single(entries);
+
+      // 3. Извлечение через публичный API.
+      var result = ZipStreamExtractor.ExtractToDirectory(
+          read, entries, dest, overwrite: false,
+          currentFile: null, token: default, progress: null, password: null);
+
+      // 4. Assertions ДО cleanup.
+      Assert.Equal(ZipExtractResult.Ok, result);
+      string extractedPath = StagedExtractionJournal.ToFileSystemPath(
+          Path.Combine(dest, "file.txt"));
+      Assert.True(File.Exists(extractedPath), "файл должен быть извлечён");
+      Assert.Equal("stream long path content", File.ReadAllText(extractedPath));
+
+      string destFs = StagedExtractionJournal.ToFileSystemPath(dest);
+      Assert.Empty(Directory.GetFiles(destFs, "*.tmp", SearchOption.AllDirectories));
+      Assert.Empty(Directory.GetFiles(destFs, "*.bak", SearchOption.AllDirectories));
+    }
+    finally
+    {
+      string rootFs = StagedExtractionJournal.ToFileSystemPath(uniqueRoot);
+      if (Directory.Exists(rootFs)) Directory.Delete(rootFs, recursive: true);
+    }
+  }
 }
