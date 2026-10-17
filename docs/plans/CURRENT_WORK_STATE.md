@@ -6,8 +6,8 @@ last_verified_date: 2026-10-13
 main_branch: main
 main_commit: 3a55297106e6a978b460faa5bfe3b1a1b85b1041
 active_work_branch: fix/sec002-multivolume-transaction
-active_work_commit: 03adfd8
-next_task: "B4: TX-EX-03 (ZIP in-memory) + валидация отрицательных Zip64-размеров; затем B5 (стадинг 7z)"
+active_work_commit: 6dceae5
+next_task: "B4b: валидация отрицательных Zip64-размеров в ZipStreamReader.cs (283/290/297); затем B5 (стадинг 7z)"
 ---
 
 # LzmaSharp: текущее состояние работ и ближайший план
@@ -219,6 +219,41 @@ platform CI matrix остаются открытыми.
 - full solution: 1918 passed = `Lzma.Ui.Tests` 219 + `Lzma.Core.Tests` 1699;
 - failed: 0; skipped: 0;
 - independent final review: `APPROVE` (SEC002-M6.5-FINAL).
+
+### B4a — покрытие отката in-memory маршрута и потокового маршрута на длинном пути
+
+- Шаг закрывает два пробела покрытия, зафиксированные кросс-семейными ревью B3 и B3b-2b:
+  (1) откат всей операции для ZIP in-memory маршрута (`TX-EX-03` из дизайна SEC-001) — отказ на
+  N-м элементе после успешной публикации первых N−1; (2) обёртка расширенного пути в
+  `ZipStreamExtractor.cs:98`, которая не имела ни одного теста (интеграционные тесты длинных
+  путей шли через in-memory `ExtractCore`).
+- Добавлено (коммит `6dceae5`, только тесты, production-код не изменён): новый файл
+  `tests/Lzma.Core.Tests/Zip/ZipExtractorRollback.Tests.cs` с тремя тестами, вызывающими internal
+  `ExtractCore` (доступен через `InternalsVisibleTo`, `Lzma.Core.csproj:36`), и один тест
+  в `ZipExtractPathLength.Tests.cs` (существующие тесты не правились).
+- Закреплённые инварианты: отказ через `IOException` на втором элементе ⇒ `IOError` и прежние
+  байты ОБОИХ файлов восстановлены (первый был опубликован и откачен); то же для ветви
+  «делегат вернул отрицательный результат» ⇒ `InvalidData`; опубликованный `CreatedNew` удаляется
+  откатом, а существующий файл, которого нет в архиве и у которого нет backup, не трогается никогда;
+  остатков `*.tmp`/`*.bak` после отката нет. Потоковый маршрут: извлечение реальным архивом через
+  публичный `ZipStreamExtractor.ExtractToDirectory` в каталог назначения ~300 символов ⇒ `Ok`,
+  содержимое совпадает, остатков нет.
+- Честная квалификация: тесты зелёные СРАЗУ, потому что `ExtractCore` общий для обоих ZIP-маршрутов
+  и переведён на staged-запись в шаге B3. Это characterization-покрытие (закрепление существующего
+  поведения), а не RED-тесты. Все операции с длинными путями в тестах идут через
+  `StagedExtractionJournal.ToFileSystemPath`, чтобы тест не обходил проверяемый механизм
+  (урок MAJOR 2 ревью B3b-2b).
+- Факты после B4a (Windows): полный Rebuild — 0 ошибок, 67 уникальных предупреждений (baseline);
+  `Lzma.Core.Tests` 1735 passed / 0 failed / 0 skipped; `Lzma.Ui.Tests` 226 / 0 / 0; итого 1961;
+  точечно `ZipExtractorRollback` — 3 passed. `git status --short` не содержит `src/**`
+  (production-код не изменён). CI run `39053033743` (HEAD `6dceae5`) — success.
+  На POSIX ожидается 1728 passed / 5 skipped (всего 1733).
+- Расхождение в отчёте исполнителя зафиксировано честно: заявленное «46 уникальных предупреждений»
+  не подтвердилось — полный Rebuild тимлида даёт 67 (baseline), число не выросло.
+- Не покрыто (отнесено к следующим шагам): валидация отрицательных Zip64-размеров
+  (`ZipStreamReader.cs:283`, `:290`, `:297` приводят `UInt64` к `long` без проверки знака, тогда
+  как Zip64 EOCD на `:242–247` такую проверку имеет) — шаг B4b; откат потокового маршрута при
+  отказе внутри `WriteEntry` покрыт существующими `TX-EX-01`/`TX-EX-02`.
 
 ### B3b-2b — расширенные пути Windows: интерим-ограничение снято
 
