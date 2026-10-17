@@ -45,7 +45,8 @@ public static class ZipExtractor
         destinationDirectory,
         overwrite,
         currentFile,
-        token);
+        token,
+        i => entries[i].Bytes.LongLength);
   }
 
   /// <summary>
@@ -61,7 +62,8 @@ public static class ZipExtractor
       string destinationDirectory,
       bool overwrite,
       IProgress<string>? currentFile,
-      CancellationToken token)
+      CancellationToken token,
+      Func<int, long>? sizeAt = null)
   {
     if (destinationDirectory is null)
       return ZipExtractResult.InvalidData;
@@ -97,6 +99,31 @@ public static class ZipExtractor
         if (!seen.Add(fp))
           return ZipExtractResult.InvalidData;
         fullPaths[i] = fp;
+      }
+
+      // Pre-flight: достаточно ли свободного места на томе назначения. Проверка выполняется
+      // до первой мутации и носит best-effort характер (квоты, резерв ext4, параллельные
+      // процессы), поэтому откат при IOException в середине записи остаётся обязательным.
+      if (sizeAt is not null)
+      {
+        long required = 0;
+        for (int i = 0; i < count; i++)
+        {
+          if (isDirAt(i))
+            continue;
+
+          // Размеры приходят из недоверенного заголовка архива: отрицательные значения
+          // (Zip64 ≥ 2^63 после приведения к long) отбрасываются, а сумма насыщается,
+          // чтобы переполнение не сделало проверку молча неэффективной.
+          long size = sizeAt(i);
+          if (size <= 0)
+            continue;
+
+          required = size > long.MaxValue - required ? long.MaxValue : required + size;
+        }
+
+        if (HasInsufficientSpace(root, required))
+          return ZipExtractResult.InsufficientSpace;
       }
 
       var journal = new StagedExtractionJournal();
@@ -208,4 +235,100 @@ public static class ZipExtractor
       return ZipExtractResult.IOError;
     }
   }
+
+  /// <summary>
+  /// Best-effort измерение свободного места на томе, содержащем <paramref name="root"/>.
+  /// Том выбирается как запись <see cref="DriveInfo.GetDrives"/> с НАИБОЛЕЕ ДЛИННЫМ совпадением
+  /// префикса пути: на Windows это буква диска, на POSIX — точка монтирования. Поэтому назначение
+  /// на смонтированном томе (внешний диск, NAS, отдельный /home) измеряется по своему тому,
+  /// а не по корневой ФС (лексический корень <c>Path.GetPathRoot</c> на POSIX всегда «/»).
+  /// Если совпадения нет (например, UNC-путь) или том не готов, возвращается <c>false</c> —
+  /// проверка места пропускается и операция не блокируется.
+  /// </summary>
+  private static bool TryGetAvailableFreeSpace(string root, out long availableFreeSpace)
+  {
+    availableFreeSpace = 0;
+    try
+    {
+      if (!TryResolveVolumeRoot(root, out string volumeRoot))
+        return false;
+
+      var drive = new DriveInfo(volumeRoot);
+      if (!drive.IsReady)
+        return false;
+
+      availableFreeSpace = drive.AvailableFreeSpace;
+      return true;
+    }
+    catch (ArgumentException) { return false; }
+    catch (IOException) { return false; }
+    catch (UnauthorizedAccessException) { return false; }
+    catch (NotSupportedException) { return false; }
+  }
+
+  /// <summary>
+  /// Определяет корень тома, содержащего <paramref name="path"/>: на Windows это буква диска
+  /// (<c>C:\</c>), на POSIX — точка монтирования (<c>/</c>, <c>/media/user/USB</c>). Выбирается
+  /// запись <see cref="DriveInfo.GetDrives"/> с наиболее длинным совпадением префикса пути;
+  /// при отсутствии совпадения (например, UNC) возвращает <c>false</c>.
+  /// Метод internal: тесты подтверждают разрешение тома на каждой ОС CI, чтобы выбор тома
+  /// не оставался недоказанным допущением.
+  /// </summary>
+  internal static bool TryResolveVolumeRoot(string path, out string volumeRoot)
+  {
+    volumeRoot = string.Empty;
+    try
+    {
+      StringComparison cmp = OperatingSystem.IsWindows()
+          ? StringComparison.OrdinalIgnoreCase
+          : StringComparison.Ordinal;
+
+      string? best = null;
+      foreach (DriveInfo drive in DriveInfo.GetDrives())
+      {
+        string name = drive.Name;
+        if (string.IsNullOrEmpty(name) || !IsSameOrUnderVolume(path, name, cmp))
+          continue;
+
+        if (best is null || name.Length > best.Length)
+          best = name;
+      }
+
+      if (best is null)
+        return false;
+
+      volumeRoot = best;
+      return true;
+    }
+    catch (ArgumentException) { return false; }
+    catch (IOException) { return false; }
+    catch (UnauthorizedAccessException) { return false; }
+    catch (NotSupportedException) { return false; }
+  }
+
+  /// <summary>
+  /// Проверяет, что <paramref name="path"/> совпадает с корнем тома <paramref name="volumeRoot"/>
+  /// или находится под ним. Сравнение выполняется по границе разделителя, чтобы том
+  /// <c>/media/user/USB</c> не совпал с путём <c>/media/user/USBdata</c>.
+  /// </summary>
+  private static bool IsSameOrUnderVolume(string path, string volumeRoot, StringComparison cmp)
+  {
+    string normalized = volumeRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+    // Корень «/» на POSIX после нормализации становится пустой строкой: любой абсолютный путь под ним.
+    if (normalized.Length == 0)
+      return true;
+
+    if (path.Equals(normalized, cmp))
+      return true;
+
+    return path.StartsWith(normalized + Path.DirectorySeparatorChar, cmp);
+  }
+
+  /// <summary>
+  /// Решение о нехватке места: <c>true</c>, если измерение доступно и свободного места меньше
+  /// требуемого. Если измерить не удалось — <c>false</c> (операцию не блокируем).
+  /// </summary>
+  internal static bool HasInsufficientSpace(string root, long requiredBytes)
+      => TryGetAvailableFreeSpace(root, out long available) && available < requiredBytes;
 }

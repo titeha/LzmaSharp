@@ -60,7 +60,8 @@ public static class ZipStreamExtractor
         destinationDirectory,
         overwrite,
         currentFile,
-        token);
+        token,
+        i => entries[i].UncompressedSize);
   }
 
   // Пишет данные одного члена на диск: seek к данным по локальному заголовку → Store-копия/Deflate-декод
