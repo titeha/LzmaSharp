@@ -26,7 +26,9 @@ public sealed class StagedExtractionJournalRollbackTests
   /// <summary>
   /// Публикация заменяет прежний файл (через backup), первый откат возвращает прежние байты,
   /// а повторный откат не меняет состояние: файл остаётся на месте с прежним содержимым,
-  /// остатков <c>.bak</c>/<c>.tmp</c> нет.
+  /// остатков <c>.bak</c>/<c>.tmp</c> нет. С шага B6 (по находке ревью) дополнительно на Windows
+  /// проверяется сохранность атрибутов прежнего файла (<c>ReadOnly|Hidden</c>) через
+  /// публикацию→откат: rename-back возвращает тот же файловый объект.
   /// </summary>
   [Fact]
   public void Откат_ПовторныйВызов_НеУдаляетВосстановленныеПрежниеБайты()
@@ -41,6 +43,11 @@ public sealed class StagedExtractionJournalRollbackTests
       byte[] replacement = [9, 9, 9];
       File.WriteAllBytes(final, original);
 
+      // Атрибуты — только на Windows (на POSIX Hidden нестандартен; capability-probe — todo #39).
+      const FileAttributes Protected = FileAttributes.ReadOnly | FileAttributes.Hidden;
+      if (OperatingSystem.IsWindows())
+        File.SetAttributes(final, Protected);
+
       var journal = new StagedExtractionJournal();
       string staged = journal.CreateStagedPath(final);
       File.WriteAllBytes(staged, replacement);
@@ -53,11 +60,15 @@ public sealed class StagedExtractionJournalRollbackTests
       journal.Rollback();
       Assert.True(File.Exists(final), "после отката прежний файл отсутствует");
       Assert.Equal(original, File.ReadAllBytes(final));
+      if (OperatingSystem.IsWindows())
+        Assert.Equal(Protected, File.GetAttributes(final) & Protected);
 
       // Второй откат не должен ничего сломать (идемпотентность по последствию).
       journal.Rollback();
       Assert.True(File.Exists(final), "повторный откат удалил восстановленный файл");
       Assert.Equal(original, File.ReadAllBytes(final));
+      if (OperatingSystem.IsWindows())
+        Assert.Equal(Protected, File.GetAttributes(final) & Protected);
 
       Assert.Empty(Directory.GetFiles(dest, "*.bak", SearchOption.AllDirectories));
       Assert.Empty(Directory.GetFiles(dest, "*.tmp", SearchOption.AllDirectories));
@@ -65,7 +76,14 @@ public sealed class StagedExtractionJournalRollbackTests
     }
     finally
     {
-      if (Directory.Exists(dest)) Directory.Delete(dest, true);
+      // Снять атрибуты перед удалением, иначе Directory.Delete откажет (Windows).
+      if (Directory.Exists(dest))
+      {
+        foreach (string f in Directory.GetFiles(dest, "*", SearchOption.AllDirectories))
+          File.SetAttributes(f, FileAttributes.Normal);
+
+        Directory.Delete(dest, true);
+      }
     }
   }
 

@@ -1127,9 +1127,6 @@ public static partial class SevenZipArchiveDecoder
           {
             if (!overwrite)
               return SevenZipArchiveDecodeResult.InvalidData;
-
-            if (!TryPrepareExistingFileForOverwrite(fullPath))
-              return SevenZipArchiveDecodeResult.InvalidData;
           }
 
           // Пустой файл: создаём staged рядом с назначением, публикация — после commit.

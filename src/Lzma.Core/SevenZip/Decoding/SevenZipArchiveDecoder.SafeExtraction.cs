@@ -22,32 +22,6 @@ public static partial class SevenZipArchiveDecoder
   }
 
   /// <summary>
-  /// Подготавливает существующий файл к перезаписи.
-  /// Сейчас достаточно снять специальные атрибуты (в первую очередь ReadOnly),
-  /// чтобы обычная запись поверх файла не падала по доступу.
-  /// </summary>
-  internal static bool TryPrepareExistingFileForOverwrite(string fullPath)
-  {
-    try
-    {
-      File.SetAttributes(fullPath, FileAttributes.Normal);
-      return true;
-    }
-    catch (IOException)
-    {
-      return false;
-    }
-    catch (UnauthorizedAccessException)
-    {
-      return false;
-    }
-    catch (ArgumentException)
-    {
-      return false;
-    }
-  }
-
-  /// <summary>
   /// Строит безопасный путь назначения для элемента архива.
   /// Запрещает абсолютные пути, пустые сегменты, "."/"..", и выход за пределы root.
   /// </summary>

@@ -198,4 +198,187 @@ public sealed class SevenZipExtractTransactionalTests
       // best-effort cleanup для тестового каталога
     }
   }
+
+  /// <summary>
+  /// Удаляет дерево каталогов, предварительно снимая ReadOnly/Hidden с файлов
+  /// (иначе <c>Directory.Delete</c> на Windows откажет по ReadOnly-файлам).
+  /// </summary>
+  private static void TryDeleteTreeWithAttributes(string path)
+  {
+    try
+    {
+      if (!Directory.Exists(path))
+        return;
+
+      foreach (string filePath in Directory.GetFiles(path, "*", SearchOption.AllDirectories))
+        File.SetAttributes(filePath, FileAttributes.Normal);
+
+      Directory.Delete(path, recursive: true);
+    }
+    catch
+    {
+      // best-effort cleanup
+    }
+  }
+
+  /// <summary>
+  /// TX-EX-06: при извлечении с <c>overwrite: true</c> и неверным паролем прежние байты
+  /// И атрибуты (ReadOnly | Hidden) всех трёх членов обязаны быть сохранены.
+  /// <para>
+  /// До фикса B6 вызов <c>TryPrepareExistingFileForOverwrite</c> сбрасывал атрибуты
+  /// существующего файла назначения <c>File.SetAttributes(fullPath, FileAttributes.Normal)</c>
+  /// до проверки пароля; при отказе откат возвращал байты, но атрибуты были утрачены.
+  /// </para>
+  /// </summary>
+  [Fact]
+  public void Извлечь_Перезапись_НеверныйПароль_АтрибутыПрежнегоФайлаСохранены()
+  {
+    // 1. Чтение фикстуры (та же, что TX-EX-04).
+    byte[] archive = ReadTestDataBytes("TestData/Real/aes_lzma2_solid_multifile_pwd_mhe_off.7z");
+    Assert.NotEmpty(archive);
+
+    // 2. Setup: sentinel-файлы с атрибутами ReadOnly | Hidden.
+    string dest = CreateTempRoot();
+    try
+    {
+      string alphaPath = Path.Combine(dest, "alpha.txt");
+      string betaPath = Path.Combine(dest, "nested", "beta.txt");
+      string emptyPath = Path.Combine(dest, "empty.bin");
+
+      Directory.CreateDirectory(Path.Combine(dest, "nested"));
+
+      File.WriteAllBytes(alphaPath, SentinelA);
+      File.WriteAllBytes(betaPath, SentinelB);
+      File.WriteAllBytes(emptyPath, SentinelC);
+
+      // Атрибуты устанавливаются только на Windows: на POSIX FileAttributes.Hidden не является
+      // стандартным атрибутом, а поведение SetAttributes зависит от ФС (capability-probe —
+      // todo #39). Байтовая часть теста проверяется на всех ОС (решение по сомнению ревью B6).
+      if (OperatingSystem.IsWindows())
+      {
+        File.SetAttributes(alphaPath, FileAttributes.ReadOnly | FileAttributes.Hidden);
+        File.SetAttributes(betaPath, FileAttributes.ReadOnly | FileAttributes.Hidden);
+        File.SetAttributes(emptyPath, FileAttributes.ReadOnly | FileAttributes.Hidden);
+      }
+
+      // Утверждаем, что sentinel-байты отличаются от содержимого архива.
+      Assert.NotEqual(ArchiveAlphaBytes, SentinelA);
+      Assert.NotEqual(ArchiveBetaBytes, SentinelB);
+      Assert.NotEmpty(SentinelC);
+
+      // 3. Извлечение с неверным паролем и overwrite: true.
+      using SevenZipPassword wrong = SevenZipPassword.FromString("wrong-password");
+      SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.ExtractToDirectory(
+          archive: archive,
+          options: SevenZipDecodeOptions.WithPassword(wrong),
+          destinationDirectory: dest,
+          overwrite: true,
+          bytesConsumed: out _);
+
+      // 4. Утверждения (ДО cleanup).
+      Assert.NotEqual(SevenZipArchiveDecodeResult.Ok, result);
+
+      // Байты всех трёх sentinel-файлов сохранены (все ОС).
+      Assert.True(File.Exists(alphaPath), "прежний файл удалён — потеря данных (SEC-001): alpha.txt");
+      Assert.Equal(SentinelA, File.ReadAllBytes(alphaPath));
+
+      Assert.True(File.Exists(betaPath), "прежний файл удалён — потеря данных (SEC-001): nested/beta.txt");
+      Assert.Equal(SentinelB, File.ReadAllBytes(betaPath));
+
+      Assert.True(File.Exists(emptyPath), "прежний файл удалён — потеря данных (SEC-001): empty.bin");
+      Assert.Equal(SentinelC, File.ReadAllBytes(emptyPath));
+
+      // Атрибуты ReadOnly | Hidden сохранены (Windows: атрибуты надёжны;
+      // POSIX: FileAttributes.Hidden маппится платформой и может не сохраниться,
+      // поэтому проверяем только на Windows).
+      if (OperatingSystem.IsWindows())
+      {
+        Assert.True(
+            (File.GetAttributes(alphaPath) & (FileAttributes.ReadOnly | FileAttributes.Hidden))
+            == (FileAttributes.ReadOnly | FileAttributes.Hidden),
+            $"атрибуты утрачены: expected ReadOnly|Hidden, actual {File.GetAttributes(alphaPath)}");
+
+        Assert.True(
+            (File.GetAttributes(betaPath) & (FileAttributes.ReadOnly | FileAttributes.Hidden))
+            == (FileAttributes.ReadOnly | FileAttributes.Hidden),
+            $"атрибуты утрачены: expected ReadOnly|Hidden, actual {File.GetAttributes(betaPath)}");
+
+        Assert.True(
+            (File.GetAttributes(emptyPath) & (FileAttributes.ReadOnly | FileAttributes.Hidden))
+            == (FileAttributes.ReadOnly | FileAttributes.Hidden),
+            $"атрибуты утрачены: expected ReadOnly|Hidden, actual {File.GetAttributes(emptyPath)}");
+      }
+
+      // Остатков *.tmp и *.bak нет.
+      Assert.Empty(Directory.GetFiles(dest, "*.tmp", SearchOption.AllDirectories));
+      Assert.Empty(Directory.GetFiles(dest, "*.bak", SearchOption.AllDirectories));
+    }
+    finally
+    {
+      TryDeleteTreeWithAttributes(dest);
+    }
+  }
+
+  /// <summary>
+  /// Характеризация (рекомендация ревью B5b): overwrite:true + компонент имени 240 символов
+  /// + прежние байты сохранены. Архив строится штатным <c>SevenZipArchiveWriter</c>;
+  /// sentinel по длинному пути создаётся через <c>StagedExtractionJournal.ToFileSystemPath</c>.
+  /// Извлечение с overwrite:true возвращает <c>PathTooLong</c>, байты sentinel целы,
+  /// остатков .tmp/.bak нет.
+  /// </summary>
+  [Fact]
+  public void Извлечь_Перезапись_КомпонентИмени240_ПрежниеБайтыСохранены_PathTooLong()
+  {
+    // 1. Сборка архива с членом, имя которого 240 символов (236 'x' + ".txt").
+    string name240 = new string('x', 236) + ".txt";
+    Assert.Equal(240, name240.Length);
+    byte[] archive = BuildLzma2((name240, Encoding.UTF8.GetBytes("archive-content")));
+
+    // 2. Setup: sentinel по тому же длинному пути (через расширенную форму).
+    string dest = Path.Combine(
+        Path.GetTempPath(),
+        "LzmaSharpTests",
+        nameof(SevenZipExtractTransactionalTests),
+        "longpath-" + Guid.NewGuid().ToString("N"));
+    try
+    {
+      Directory.CreateDirectory(dest);
+      string targetPath = Path.Combine(dest, name240);
+      string extendedPath = StagedExtractionJournal.ToFileSystemPath(targetPath);
+
+      byte[] sentinel = Encoding.UTF8.GetBytes("sentinel-long-path-content");
+      File.WriteAllBytes(extendedPath, sentinel);
+
+      // 3. Извлечение с overwrite: true.
+      SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.ExtractToDirectory(
+          archive: archive,
+          options: SevenZipDecodeOptions.Default,
+          destinationDirectory: dest,
+          overwrite: true,
+          bytesConsumed: out _);
+
+      // 4. Утверждения.
+      Assert.Equal(SevenZipArchiveDecodeResult.PathTooLong, result);
+
+      // Байты sentinel целы.
+      Assert.True(File.Exists(extendedPath), "sentinel-файл удалён — потеря данных");
+      Assert.Equal(sentinel, File.ReadAllBytes(extendedPath));
+
+      // Остатков .tmp и .bak нет.
+      Assert.Empty(Directory.GetFiles(dest, "*.tmp", SearchOption.AllDirectories));
+      Assert.Empty(Directory.GetFiles(dest, "*.bak", SearchOption.AllDirectories));
+    }
+    finally
+    {
+      TryDeleteTreeWithAttributes(dest);
+    }
+  }
+
+  private static byte[] BuildLzma2(params (string Name, byte[] Data)[] files)
+  {
+    var entries = files.Select(f => new SevenZipArchiveWriterEntry(f.Name, f.Data)).ToArray();
+    Assert.Equal(SevenZipArchiveWriteResult.Ok,
+        SevenZipArchiveWriter.BuildArchive(entries, SevenZipWriterCompressionMethod.Lzma2, out byte[] bytes));
+    return bytes;
+  }
 }
