@@ -6,8 +6,8 @@ last_verified_date: 2026-10-18
 main_branch: main
 main_commit: 3a55297106e6a978b460faa5bfe3b1a1b85b1041
 active_work_branch: fix/sec002-multivolume-transaction
-active_work_commit: 68bbfaf
-next_task: "B5b — pre-flight места и длины пути для 7z (аддитивные InsufficientSpace/PathTooLong)"
+active_work_commit: 13c5243
+next_task: "B5c — обёртка HasFileOnPath/HasFileOnDirectoryPath (снимет ограничение B3b-2b), затем B6 (атрибуты)"
 ---
 
 # LzmaSharp: текущее состояние работ и ближайший план
@@ -219,6 +219,52 @@ platform CI matrix остаются открытыми.
 - full solution: 1918 passed = `Lzma.Ui.Tests` 219 + `Lzma.Core.Tests` 1699;
 - failed: 0; skipped: 0;
 - independent final review: `APPROVE` (SEC002-M6.5-FINAL).
+
+### B5b — pre-flight места и длины пути для 7z (SEC-001)
+
+- Шаг (коммит `13c5243`, дифф 34/0 `SevenZipArchiveDecodeResult.cs` + 67/0
+  `SevenZipArchiveDecoder.cs` + новый тестовый файл): закрывает MAJOR-1/MAJOR-2
+  кросс-семейного ревью B5a. Добавлены СТРОГО В КОНЕЦ `SevenZipArchiveDecodeResult`
+  (значения неявные) два аддитивных значения: `InsufficientSpace` (5) и `PathTooLong` (6) —
+  изменение публичного API утверждено владельцем заранее (D2 = а, PathTooLong подтверждён;
+  контракт — `B1_AMENDMENT_DECISIONS.md` §2.2/§3.3).
+- Pre-flight блок — первое действие внутри внутреннего `try` (покрыт `finally` с
+  `journal.Rollback()`), до создания подкаталогов/стадинга/публикации: место —
+  `ComputeRequiredSpace(plan, selected)` (сумма распакованных размеров выбранных
+  не-каталогов, пропуск ≤ 0 из недоверенного заголовка, насыщение до `long.MaxValue`)
+  + `ZipExtractor.HasInsufficientSpace` (internal, та же сборка; helper намеренно не
+  переносился — минимальный дифф, перенос — долг архитектурного разделения); длина —
+  `IsPathTooLong(root, 0)` + по каждой выбранной записи (файлы с суффиксом стадии
+  21 символ, каталоги 0). Невыбранные записи в проверке длины не участвуют (частичное
+  извлечение не отклоняется из-за неизвлекаемого длинного имени — доводка тимлида + тест).
+- Root-каталог по-прежнему создаётся до проверок (~:932, отслеживается журналом, удаляется
+  откатом) — порядок намеренно не менялся (долг G4); при слишком длинном пути назначения
+  возвращается `InternalError`, а не `PathTooLong` (честно зафиксировано в XML-доке).
+- Тесты (новый файл `SevenZipExtractPreflight.Tests.cs`, 11): end-to-end `PathTooLong`
+  (компонент 300 символов; пороговый компонент 240 — изолирует механизм суффикса стадии
+  по MAJOR-1 ревью B5b), частичное извлечение с невыбранным длинным именем → `Ok`,
+  guard enum (значения 0..6, новые в конце), 7 unit-тестов `ComputeRequiredSpace`
+  (сумма, каталоги, невыбранные, ≤ 0, насыщение, пустой план, EmptyFile). Честная
+  граница: end-to-end-триггер `InsufficientSpace` для 7z отсутствует (нет шва инъекции
+  размеров, заполнение диска запрещено) — аналог «честной границы» ZIP-тестов.
+- Кросс-семейное ревью (`deepseek/deepseek-flash`, read-only, пакет
+  `.agent/reports/B5B_REVIEW_PACKET.md`): **APPROVE_WITH_COMMENTS**, 0 BLOCKING, 1 MAJOR,
+  7 MINOR (отчёт `.agent/reports/B5B_CROSS_FAMILY_REVIEW_deepseek-flash.md`). MAJOR-1
+  (тест-300 не изолирует механизм +21) — закрыт доводкой тимлида (тест компонента 240);
+  MINOR-1/2/3 (точность комментария, off-by-one и ширина XML-дока, оборванный разделитель)
+  — исправлены доводкой (комментарии/док-текст, без изменения поведения); MINOR-4 (UI
+  отображает новые коды общим сообщением «ошибка данных или файл уже существует») —
+  todo #44; MINOR-5 (зависимость SevenZip→Zip) — архитектурный долг; root-порядок
+  (MINOR-6) и родительские каталоги вложенного destination вне журнала (MINOR-7) — долг
+  G4; тест «overwrite:true + компонент 240 + прежние байты сохранены» и проверка
+  компонентов-предков — в B6/отдельный шаг. Production-поведение после ревью не менялось
+  (доводка — только комментарии/XML-доки/тесты).
+- Факты после B5b (Windows, прогон 2026-10-18 на HEAD `13c5243`): Build — 0 ошибок,
+  предупреждений из изменённых файлов нет (baseline 67); `Lzma.Core.Tests` 1751 / 0 / 0;
+  `Lzma.Ui.Tests` 226 / 0 / 0; итого 1977; точечно Preflight + Transactional — 13 passed.
+  RED-доказательство (исполнитель): до pre-flight блока тест длинного имени падал
+  с `InternalError` при ожидаемом `PathTooLong`. CI run `39146269884` (HEAD `13c5243`) —
+  все три job'а success. На POSIX ожидается 1744 passed / 5 skipped (всего 1749).
 
 ### B5/B5a — стадинг и публикация folder-а в 7z-маршруте (SEC-001)
 
