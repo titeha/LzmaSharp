@@ -6,8 +6,8 @@ last_verified_date: 2026-10-18
 main_branch: main
 main_commit: 3a55297106e6a978b460faa5bfe3b1a1b85b1041
 active_work_branch: fix/sec002-multivolume-transaction
-active_work_commit: f903162
-next_task: "B6 — атрибуты прежнего файла (TX-EX-06), включая обёртку File.SetAttributes (MINOR-3 B5a / MINOR-4 B5c)"
+active_work_commit: acda556
+next_task: "B7 — много-членная семантика (TX-EX-05), отмена при перезаписи + долг MINOR-4/5 ревью"
 ---
 
 # LzmaSharp: текущее состояние работ и ближайший план
@@ -219,6 +219,51 @@ platform CI matrix остаются открытыми.
 - full solution: 1918 passed = `Lzma.Ui.Tests` 219 + `Lzma.Core.Tests` 1699;
 - failed: 0; skipped: 0;
 - independent final review: `APPROVE` (SEC002-M6.5-FINAL).
+
+### B6 — атрибуты прежнего файла не мутируются до успеха (TX-EX-06)
+
+- Шаг (коммит `acda556`, дифф 0/26 `SevenZipArchiveDecoder.SafeExtraction.cs` + 0/3
+  `SevenZipArchiveDecoder.cs` + 4/3 комментарии журнала + два тестовых файла): закрывает
+  MINOR-3 ревью B5a и MINOR-4 ревью B5c. Решение (тимлид, internal API): из 7z-маршрута
+  удалён вызов `TryPrepareExistingFileForOverwrite` (ставил `FileAttributes.Normal` на
+  назначение до всяких проверок — откат возвращал байты, но ReadOnly/Hidden утрачивались)
+  и удалён осиротевший helper — выравнивание с ZIP (там вызов удалён в B3: backup-first
+  rename не требует снятия ReadOnly, удаление `.bak` с атрибутом обрабатывает журнал,
+  откат возвращает тот же файловый объект с байтами и атрибутами). Согласованный в B1
+  capability-probe `File.Move` для read-only источника ОТМЕНЁН как избыточный (rename ZIP
+  измерен в CI на трёх ОС с B3) — аддендум в задании `tasks/B_SEC001_TRANSACTIONAL_EXTRACTION.md`
+  §B6 и отметка в §4 этого документа.
+- Краевое следствие (зафиксировано в SDL): при `overwrite: true` файл с запретом записи
+  (ACL), но каталогом с правом rename теперь заменяется (согласованно с ZIP), а
+  заблокированное назначение отказывает на публикации (`InternalError` + корректный откат)
+  вместо раннего `InvalidData`; потери гарантии нет (такая гарантия не заявлялась),
+  тестовое наблюдение — долг B7/probe.
+- Тесты: `TX-EX-06` (реальная фикстура, три sentinel с `ReadOnly|Hidden`, неверный пароль +
+  `overwrite: true` → байты на всех ОС + атрибуты на Windows; RED до фикса «атрибуты
+  утрачены: expected ReadOnly|Hidden, actual Normal»); характеристика «overwrite:true +
+  компонент 240 + прежние байты → PathTooLong» (рекомендация ревью B5b); журнальный
+  `Откат_ПовторныйВызов…` расширен проверкой сохранности атрибутов через публикацию→откат
+  (закрывает пробел ревью «rename-back не измерен»). Установка и проверка атрибутов
+  Windows-guarded (Hidden на POSIX нестандартен — todo #39).
+- Кросс-семейное ревью (`deepseek/deepseek-flash`, read-only, пакет
+  `.agent/reports/B6_REVIEW_PACKET.md`): **APPROVE_WITH_COMMENTS**, 0 BLOCKING, 3 MAJOR,
+  5 MINOR (отчёт `.agent/reports/B6_CROSS_FAMILY_REVIEW_deepseek-flash.md`). Код принят
+  («возврат к прежнему состоянию не требуется»). MAJOR-1/2 (SDL описывал удалённый механизм)
+  — закрыты этим doc-tail; MAJOR-3 (allowlist задания устарел; удаление helper'а сильнее
+  оговорки «не менять сигнатуру») — аддендум в задании + запись решения; ссылка ревьюера
+  «02_ROADMAP.md §5 не проверить» неверна — матрица в `.agent/` (вне git), строка 320 относит
+  decoder к B6. MINOR-1 (XML-док журнала обещал «подключение в B6») — исправлен доводкой
+  (comments-only); MINOR-2 (запись согласования probe) — отменена аддендумом; MINOR-3
+  (устаревший комментарий теста OverwriteMetadata) — отдельный doc-коммит; MINOR-4/5
+  (семантика и смена кода для заблокированного/ACL-назначения) — строки в SDL. Не покрыто
+  (долг): заблокированное назначение и «ACL-замена успех» тестом (B7/probe), отказ второго
+  `Move` внутри Publish (B7), атрибуты на POSIX (#39), частичное извлечение + атрибуты (B7),
+  pre-existing: `InvalidData` из блока метаданных после commit (наблюдение → B7).
+- Факты после B6 (Windows, прогон 2026-10-19 на HEAD `acda556`): Build — 0 ошибок,
+  0 предупреждений из изменённых файлов (baseline); `Lzma.Core.Tests` 1755 / 0 / 0;
+  `Lzma.Ui.Tests` 226 / 0 / 0; итого 1981; точечно JournalRollback + Transactional +
+  Real7zExtractOverwrite — 11 passed. CI run `39157021475` (HEAD `acda556`) — все три job'а
+  success. На POSIX ожидается 1748 passed / 5 skipped (всего 1753).
 
 ### B5c — проверки конфликтов на длинных путях (обёртка HasFileOnPath/HasFileOnDirectoryPath)
 
@@ -659,7 +704,9 @@ platform CI matrix остаются открытыми.
   `LzmaArchiveService.cs:45/59/303/488`); запрещённые формулировки в отчёте отсутствуют.
 - Решения архитектора по вопросам дизайна: общий `internal`-helper вводится в B3 — согласовано;
   `AttributesChanged` остаётся fallback-видом журнала (B6 обязан начать с capability-probe
-  `File.Move` для read-only источника) — согласовано; пустые файлы без временного файла —
+  `File.Move` для read-only источника) — согласовано (ОТМЕНЕНО 2026-10-19 по факту исполнения
+  B6: probe избыточен — backup-first rename ZIP измерен в CI на трёх ОС с B3; см. секцию B6);
+  пустые файлы без временного файла —
   согласовано; вопрос о production-seam для инъекции «настоящего» `IOException` середины записи
   (диск полон) вынесен владельцу — рекомендация архитектора не вводить его сейчас и завести
   отдельную задачу `SEAM-2`.
