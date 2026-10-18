@@ -164,7 +164,105 @@ public sealed class SevenZipExtractPreflightTests
   }
 
   // ────────────────────────────────────────────────────────────────────────────
-  // (c) Пространство: unit-тесты internal helper-а суммы.
+  // (c) Длинные пути: конфликт промежуточного сегмента (B5c — обёртка HasFileOnPath).
+  // ────────────────────────────────────────────────────────────────────────────
+
+  /// <summary>
+  /// B5c: на пути длиннее <c>MAX_PATH</c> промежуточный сегмент уже существует как ФАЙЛ,
+  /// а член архива лежит под ним. Ожидается <see cref="SevenZipArchiveDecodeResult.InvalidData"/>
+  /// (конфликт распознан до первой мутации); байты конфликтующего файла не изменяются.
+  /// <para>
+  /// До фикса <c>HasFileOnPath</c>/<c>HasFileOnDirectoryPath</c> вызывали <c>File.Exists</c>
+  /// без префикса расширенной формы, поэтому на длинных путях конфликт не обнаруживался,
+  /// а <c>Directory.CreateDirectory</c> отказывал с <c>IOException</c> → <c>InternalError</c>
+  /// (откат корректен, но причина маскируется). Фикстура создаётся в расширенной форме
+  /// (<c>StagedExtractionJournal.ToFileSystemPath</c>), поэтому не зависит от long-path
+  /// opt-in хоста. RED на хосте разработки НЕ наблюдаем: <c>LongPathsEnabled=1</c> маскирует
+  /// дефект (сырой <c>File.Exists</c> тоже видит конфликт); тест валиден как регрессия,
+  /// чистое RED-доказательство требует хоста без opt-in или capability-probe (todo #39).
+  /// </para>
+  /// </summary>
+  [Fact]
+  public void ExtractToDirectory_КонфликтСегментаНаДлинномПути_ВозвращаетInvalidData()
+  {
+    string dest = NewTempDir();
+    // Длина сегмента адаптивная: суммарный путь обязан превысить MAX_PATH (259) при любой
+    // длине TEMP, а компонент имени — остаться в пределах 255.
+    string longSegment = new string('d', Math.Clamp(260 - dest.Length, 220, 255));
+    string conflictPath = Path.Combine(dest, longSegment);
+    Assert.True(conflictPath.Length >= 259, "фикстура: путь длиннее MAX_PATH");
+
+    Directory.CreateDirectory(dest);
+    byte[] sentinel = Payload("conflict-file");
+    File.WriteAllBytes(StagedExtractionJournal.ToFileSystemPath(conflictPath), sentinel);
+
+    byte[] archive = BuildLzma2((longSegment + "/member.txt", Payload("data")));
+    try
+    {
+      SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.ExtractToDirectory(
+          archive: archive,
+          options: SevenZipDecodeOptions.Default,
+          destinationDirectory: dest,
+          overwrite: false,
+          bytesConsumed: out _);
+
+      Assert.Equal(SevenZipArchiveDecodeResult.InvalidData, result);
+      Assert.Equal(sentinel,
+          File.ReadAllBytes(StagedExtractionJournal.ToFileSystemPath(conflictPath)));
+      Assert.Empty(Directory.GetFiles(dest, "*.tmp", SearchOption.AllDirectories));
+      Assert.Empty(Directory.GetFiles(dest, "*.bak", SearchOption.AllDirectories));
+      Assert.Single(Directory.EnumerateFileSystemEntries(dest));
+    }
+    finally
+    {
+      File.Delete(StagedExtractionJournal.ToFileSystemPath(conflictPath));
+      if (Directory.Exists(dest)) Directory.Delete(dest, recursive: true);
+    }
+  }
+
+  /// <summary>
+  /// B5c, второй helper: <c>HasFileOnDirectoryPath</c> — сам путь назначения проходит через
+  /// сегмент, уже существующий как ФАЙЛ. Ожидается <see cref="SevenZipArchiveDecodeResult.InvalidData"/>
+  /// из проверки root (<c>SevenZipArchiveDecoder.cs:920</c>) ДО какой-либо мутации: конфликтующий
+  /// файл не изменён, каталог назначения не создан. Граница RED та же, что у теста выше
+  /// (на хосте разработки дефект маскируется <c>LongPathsEnabled=1</c>).
+  /// </summary>
+  [Fact]
+  public void ExtractToDirectory_КореньПодФайломНаДлинномПути_ВозвращаетInvalidData()
+  {
+    string outer = NewTempDir();
+    string conflictPath = Path.Combine(outer, new string('d', Math.Clamp(260 - outer.Length, 220, 255)));
+    string dest = Path.Combine(conflictPath, "sub", "dest");
+
+    Directory.CreateDirectory(outer);
+    byte[] sentinel = Payload("conflict-file");
+    File.WriteAllBytes(StagedExtractionJournal.ToFileSystemPath(conflictPath), sentinel);
+
+    byte[] archive = BuildLzma2(("member.txt", Payload("data")));
+    try
+    {
+      SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.ExtractToDirectory(
+          archive: archive,
+          options: SevenZipDecodeOptions.Default,
+          destinationDirectory: dest,
+          overwrite: false,
+          bytesConsumed: out _);
+
+      Assert.Equal(SevenZipArchiveDecodeResult.InvalidData, result);
+      Assert.Equal(sentinel,
+          File.ReadAllBytes(StagedExtractionJournal.ToFileSystemPath(conflictPath)));
+      Assert.False(Directory.Exists(StagedExtractionJournal.ToFileSystemPath(dest)),
+          "каталог назначения не должен быть создан");
+    }
+    finally
+    {
+      File.Delete(StagedExtractionJournal.ToFileSystemPath(conflictPath));
+      if (Directory.Exists(outer)) Directory.Delete(outer, recursive: true);
+    }
+  }
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // (d) Пространство: unit-тесты internal helper-а суммы.
   // End-to-end-триггер InsufficientSpace для 7z отсутствует (нет шва инъекции размеров).
   // ────────────────────────────────────────────────────────────────────────────
 
