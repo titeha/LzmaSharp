@@ -1226,8 +1226,27 @@ public static partial class SevenZipArchiveDecoder
           }
           finally
           {
+            // MINOR-4 (ревью B5a): exception-safe disposal — если Dispose одного потока
+            // откажет, остальные всё равно закрываются, иначе Rollback не сможет удалить
+            // .tmp (Windows блокирует удаление открытого файла). Первое исключение
+            // запоминается и бросается ПОСЛЕ disposal всех потоков.
+            Exception? firstDisposeError = null;
             foreach (FileStream fs in openStreams)
-              fs.Dispose();
+            {
+              try
+              {
+                fs.Dispose();
+              }
+              catch (Exception ex)
+              {
+                // Запоминаем первое; остальные глушим — все потоки обязаны быть закрыты,
+                // иначе Rollback не сможет удалить .tmp на Windows.
+                firstDisposeError ??= ex;
+              }
+            }
+            if (firstDisposeError is not null)
+              System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(firstDisposeError)
+                  .Throw(); // сохраняем исходный стек-трейс сбоя Dispose (ревью B7, m-3).
           }
 
           // Публикация folder-а: все временные потоки закрыты (R1 — Windows не позволяет
@@ -1251,9 +1270,10 @@ public static partial class SevenZipArchiveDecoder
         committed = true;
 
         // Best-effort удаление backup-файлов; отказ очистки не отменяет успех операции.
-        try { journal.CleanupAfterCommit(); }
-        catch (IOException) { }
-        catch (UnauthorizedAccessException) { }
+        // MINOR-5 (ревью B5a): внешние catch IOException/UnauthorizedAccessException удалены —
+        // CleanupAfterCommit сам глушит эти исключения внутри (плюс NotSupportedException,
+        // ArgumentException, SecurityException), поэтому внешние catch были недостижимы.
+        journal.CleanupAfterCommit();
       }
       finally
       {
