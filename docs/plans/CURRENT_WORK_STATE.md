@@ -6,8 +6,8 @@ last_verified_date: 2026-10-18
 main_branch: main
 main_commit: 3a55297106e6a978b460faa5bfe3b1a1b85b1041
 active_work_branch: fix/sec002-multivolume-transaction
-active_work_commit: 13c5243
-next_task: "B5c — обёртка HasFileOnPath/HasFileOnDirectoryPath (снимет ограничение B3b-2b), затем B6 (атрибуты)"
+active_work_commit: f903162
+next_task: "B6 — атрибуты прежнего файла (TX-EX-06), включая обёртку File.SetAttributes (MINOR-3 B5a / MINOR-4 B5c)"
 ---
 
 # LzmaSharp: текущее состояние работ и ближайший план
@@ -219,6 +219,44 @@ platform CI matrix остаются открытыми.
 - full solution: 1918 passed = `Lzma.Ui.Tests` 219 + `Lzma.Core.Tests` 1699;
 - failed: 0; skipped: 0;
 - independent final review: `APPROVE` (SEC002-M6.5-FINAL).
+
+### B5c — проверки конфликтов на длинных путях (обёртка HasFileOnPath/HasFileOnDirectoryPath)
+
+- Шаг (коммит `f903162`, дифф 9/3 в `SevenZipArchiveDecoder.SafeExtraction.cs` + 99/1 тесты):
+  снимает ограничение, созданное B3b-2b, — общие для ZIP и 7z проверки конфликтов
+  (`HasFileOnPath`, `HasFileOnDirectoryPath`) вызывали `File.Exists`/`Directory.Exists` без
+  расширенной формы, поэтому на хостах без long-path opt-in конфликт промежуточного сегмента
+  на пути от 259 символов давал отказ на уровне ОС (`InternalError`/`IOError`) вместо
+  отличимого `InvalidData`. Правка: FS-вызовы переведены на
+  `StagedExtractionJournal.ToFileSystemPath` (no-op для коротких путей и не-Windows);
+  call sites, журнал, маршруты и публичный API не изменены.
+- Тесты (+2 в `SevenZipExtractPreflight.Tests.cs`, секция (c)): конфликт промежуточного
+  сегмента на длинном пути → `InvalidData` + прежние байты целы + нет остатков `.tmp`/`.bak`;
+  root под файлом на длинном пути (`HasFileOnDirectoryPath`) → `InvalidData` до первой мутации.
+  Честная граница (зафиксирована в комментариях тестов): RED на хосте разработки НЕ наблюдаем —
+  `LongPathsEnabled=1` маскирует дефект; тесты валидны как регрессии; чистая демонстрация
+  дефекта — на хосте без opt-in или capability-probe (todo #39).
+- Кросс-семейное ревью (`deepseek/deepseek-flash`, read-only, пакет
+  `.agent/reports/B5C_REVIEW_PACKET.md`): **APPROVE_WITH_COMMENTS**, 0 BLOCKING, 2 MAJOR,
+  5 MINOR (отчёт `.agent/reports/B5C_CROSS_FAMILY_REVIEW_deepseek-flash.md`). Ревьюер
+  подтвердил: полноту обёртки обоих helper'ов, отсутствие утечки расширенной формы
+  в сравнения/обход, no-op для коротких путей и POSIX, согласованность с уже обёрнутыми
+  вызовами обоих маршрутов, причинность теста (InvalidData может прийти только из :1016),
+  приемлемость границы RED при трёх условиях. MAJOR-1 (комментарий теста заявлял
+  несуществующее RED-доказательство) — исправлен; MAJOR-2 (SDL/Core README противоречат
+  коду после шага) — закрыт этим doc-tail; MINOR-1 (адаптивная длина сегмента фикстуры),
+  MINOR-2 (точность XML-доков: порог 259/Windows), MINOR-3 (утверждения об остатках) —
+  устранены доводкой; MINOR-4 (`File.SetAttributes` в `TryPrepareExistingFileForOverwrite`
+  остаётся необёрнутым — ложный `InvalidData` при overwrite:true на длинных путях на хостах
+  без opt-in; формулировка SDL «файловые вызовы маршрута переводятся» уточнена) — B6;
+  MINOR-5 (терминология пакета) — исправлен. Долг: ветка `includeSelf: true`
+  (запись-каталог) на длинном пути не покрыта, UNC-интеграция (#39), компонент каталога >255
+  в середине пути не ловится `IsPathTooLong` (pre-existing наблюдение → B7/долг).
+- Факты после B5c (Windows, прогон 2026-10-18 на HEAD `f903162`): Build — 0 ошибок,
+  0 предупреждений из изменённых файлов (baseline 67); `Lzma.Core.Tests` 1753 / 0 / 0;
+  `Lzma.Ui.Tests` 226 / 0 / 0; итого 1979; точечно Preflight + Transactional +
+  ZipExtractPathLength — 34 passed. CI run `39153733782` (HEAD `f903162`) — все три job'а
+  success. На POSIX ожидается 1746 passed / 5 skipped (всего 1751).
 
 ### B5b — pre-flight места и длины пути для 7z (SEC-001)
 
@@ -441,6 +479,8 @@ platform CI matrix остаются открытыми.
   поэтому для `root` от 259 символов с сегментом, оканчивающимся точкой или пробелом, префикс
   делает путь литеральным; 7z-маршрут по-прежнему ограничен `MAX_PATH` и не имеет `PathTooLong`
   (несогласованность двух маршрутов закрывается в B5).
+  (Обновлено 2026-10-18: проверки конфликтов обёрнуты в B5c; стадинг 7z и
+  `PathTooLong`/`InsufficientSpace` реализованы в B5a/B5b — см. секции выше.)
 
 ### B3b-2a — PathTooLong и pre-flight проверка длины пути (ZIP)
 
