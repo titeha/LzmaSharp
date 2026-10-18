@@ -6,19 +6,16 @@ using Lzma.Core.SevenZip;
 namespace Lzma.Core.Tests.SevenZip;
 
 /// <summary>
-/// RED-тесты TX-EX-04 для SEC-001 (7z-маршрут): при извлечении с <c>overwrite: true</c>
+/// Блокирующие тесты TX-EX-04 для SEC-001 (7z-маршрут): при извлечении с <c>overwrite: true</c>
 /// отказ операции обязан оставить прежние байты всех затронутых файлов.
 /// <para>
-/// На текущем коде оба теста ПАДАЮТ по правильной причине — потеря прежних байт:
-/// <list type="bullet">
-/// <item><c>:1098</c> — пустой файл (<c>empty.bin</c>) перезаписывается <c>File.WriteAllBytes(fullPath, [])</c>
-///   до всякой проверки пароля/CRC;</item>
-/// <item><c>:1146</c> — data-файлы folder-а обрезаются через <c>FileStream(FileMode.Create)</c>
-///   до проверки <c>routing.IsComplete || SizeOverflow || CrcMismatch</c> (<c>:1178</c>);</item>
-/// <item><c>:1195–1211</c> — откат удаляет их как «созданные», не восстанавливая прежние байты.</item>
-/// </list>
-/// После реализации SEC-001 (стадинг folder-а + публикация только после проверки) оба теста
-/// обязаны пройти.
+/// До фикса B5a (коммит <c>68bbfaf</c>) оба теста ПАДАЛИ по правильной причине — потеря прежних
+/// байт: пустой файл (<c>empty.bin</c>) перезаписывался <c>File.WriteAllBytes(fullPath, [])</c>
+/// до всякой проверки пароля/CRC; data-файлы folder-а обрезались через
+/// <c>FileStream(FileMode.Create)</c> до проверки раскладки; откат удалял их как «созданные»,
+/// не восстанавливая прежние байты. После перевода 7z-маршрута на стадинг
+/// (<c>StagedExtractionJournal</c>) с публикацией folder-а только после закрытия потоков
+/// и проверок результата оба теста зелёные и блокируют регресс.
 /// </para>
 /// </summary>
 public sealed class SevenZipExtractTransactionalTests
@@ -33,8 +30,8 @@ public sealed class SevenZipExtractTransactionalTests
     + "solid AES LZMA2 test payload B\r\n");
 
   // Sentinel-байты: детерминированные, заведомо отличаются от содержимого архива.
-  // Размеры — небольшие (десятки байт), но не пустые (для empty.bin именно это вскрывает
-  // перезапись пустым массивом на :1098).
+  // Размеры — небольшие (десятки байт), но не пустые (для empty.bin именно это вскрывало
+  // перезапись пустым массивом до фикса B5a).
   private static readonly byte[] SentinelA = CreateSentinel(seed: 101, length: 48);
   private static readonly byte[] SentinelB = CreateSentinel(seed: 202, length: 48);
   private static readonly byte[] SentinelC = CreateSentinel(seed: 303, length: 48);
@@ -44,8 +41,8 @@ public sealed class SevenZipExtractTransactionalTests
   /// и <c>overwrite: true</c> прежние байты всех трёх членов (<c>alpha.txt</c>, <c>nested/beta.txt</c>,
   /// <c>empty.bin</c>) обязаны быть сохранены.
   /// <para>
-  /// На текущем коде падает: <c>empty.bin</c> перезаписан пустым массивом (<c>:1098</c>),
-  /// data-файлы обрезаны (<c>:1146</c>) и удалены откатом (<c>:1195–1211</c>).
+  /// До фикса B5a падал: <c>empty.bin</c> перезаписывался пустым массивом, data-файлы
+  /// обрезались и удалялись откатом. Теперь блокирует регресс стадинга 7z-маршрута.
   /// </para>
   /// </summary>
   [Fact]
@@ -114,10 +111,10 @@ public sealed class SevenZipExtractTransactionalTests
   /// <summary>
   /// TX-EX-04, частичное извлечение: при <c>shouldExtract: name => name == "alpha.txt"</c>
   /// и неверном пароле прежние байты <c>alpha.txt</c> обязаны быть сохранены.
-  /// Невыбранные подпотоки идут в <c>Stream.Null</c> (<c>:1153</c>), но folder декодируется
-  /// целиком, и отказ на <c>:1178</c> + откат <c>:1195–1211</c> всё равно уничтожает файл.
+  /// Невыбранные подпотоки идут в <c>Stream.Null</c>, но folder декодируется целиком,
+  /// поэтому отказ при неверном пароле всё равно обязан откатить выбранный член.
   /// <para>
-  /// На текущем коде падает: <c>alpha.txt</c> обрезан (<c>:1146</c>) и удалён откатом.
+  /// До фикса B5a падал: <c>alpha.txt</c> обрезался и удалялся откатом.
   /// </para>
   /// </summary>
   [Fact]
