@@ -39,7 +39,8 @@ public sealed class SevenZipReal7zExtractOverwriteMetadataTests
 
       if (OperatingSystem.IsWindows())
       {
-        // hello.bin делаем read-only, чтобы заодно пройтись по ветке overwrite+снятие атрибутов.
+        // hello.bin делаем read-only, чтобы заодно пройтись по перезаписи ReadOnly-файла
+        // (публикация через rename; снятие атрибутов из маршрута удалено в B6).
         File.SetAttributes(helloPath, FileAttributes.ReadOnly | FileAttributes.Archive);
 
         // empty.txt делаем обычным/не тем, чем он должен стать после извлечения.
