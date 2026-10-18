@@ -2,12 +2,12 @@
 doc_kind: current-work-plan
 status: active
 project: LzmaSharp
-last_verified_date: 2026-10-13
+last_verified_date: 2026-10-18
 main_branch: main
 main_commit: 3a55297106e6a978b460faa5bfe3b1a1b85b1041
 active_work_branch: fix/sec002-multivolume-transaction
-active_work_commit: 440a7b2
-next_task: "B4c (hardening по находкам ревью) или B5 — стадинг 7z-маршрута"
+active_work_commit: 68bbfaf
+next_task: "B5b — pre-flight места и длины пути для 7z (аддитивные InsufficientSpace/PathTooLong)"
 ---
 
 # LzmaSharp: текущее состояние работ и ближайший план
@@ -219,6 +219,58 @@ platform CI matrix остаются открытыми.
 - full solution: 1918 passed = `Lzma.Ui.Tests` 219 + `Lzma.Core.Tests` 1699;
 - failed: 0; skipped: 0;
 - independent final review: `APPROVE` (SEC002-M6.5-FINAL).
+
+### B5/B5a — стадинг и публикация folder-а в 7z-маршруте (SEC-001)
+
+- RED (коммит `9340902`): два блокирующих теста `TX-EX-04`
+  (`tests/Lzma.Core.Tests/SevenZip/SevenZipExtractTransactional.Tests.cs`) на реальном архиве
+  `TestData/Real/aes_lzma2_solid_multifile_pwd_mhe_off.7z` (AES-256 + LZMA2, один solid folder;
+  члены `alpha.txt`, `nested/beta.txt`, `empty.bin`; извлечение с неверным паролем и
+  `overwrite: true`). До фикса падали по правильной причине — потеря прежних байт.
+- Fix (коммит `68bbfaf`, дифф 61/44 в одном production-файле `SevenZipArchiveDecoder.cs`
+  и 204/0 тесты): журнал `StagedExtractionJournal` (введён в B3 для ZIP) заменил списки
+  `createdFiles`/`createdDirs`; data-файлы folder-а пишутся в staged-пути
+  (`{имя}.{16 hex}.tmp`); публикация folder-а выполняется ПОСЛЕ `finally` с `Dispose` всех
+  потоков и только при `decodeFolder == Ok` и
+  `routing.IsComplete && !SizeOverflow && !CrcMismatch`; пустые файлы публикуются в общей
+  фазе после всех folder-ов; откат — `journal.Rollback()` с восстановлением прежних байт
+  из `.bak`; `Commit()` остался до применения метаданных. Доводка тимлида: 10 необёрнутых
+  FS-вызовов ядра переведены на `StagedExtractionJournal.ToFileSystemPath` (`:914`, `:1020`,
+  `:1024`, `:1262/:1264`, `:1291/:1293`, `:1323/:1325`, `:1344`) — устранена асимметрия
+  с журналом, ослаблявшая раннюю охрану `overwrite: false` на длинных путях.
+- Не менялись: `SubstreamRoutingWriter`, `StagedExtractionJournal`, ZIP-маршрут, enum'ы,
+  публичный API, `src/Lzma.Ui`.
+- Кросс-семейное ревью (`deepseek/deepseek-flash`, read-only, пакет
+  `.agent/reports/B5A_REVIEW_PACKET.md`): **APPROVE_WITH_COMMENTS**, 0 BLOCKING, 2 MAJOR,
+  6 MINOR (отчёт `.agent/reports/B5A_CROSS_FAMILY_REVIEW_deepseek-flash.md`). Ревьюер
+  подтвердил: `Dispose` до `Publish` (включая раскрутку стека), сохранность порядка сегментов
+  routing, отсутствие публикаций для невыбранных подпотоков, восстановление уже опубликованных
+  файлов при откате, невозможность «частичной публикации» пустых файлов. Решения тимлида
+  по находкам: MAJOR-1 (имя стадии +21 символ, pre-flight длины пути для 7z отсутствует —
+  компонент имени 235–255 может дать `InternalError` вместо прежнего `Ok`) и MAJOR-2
+  (пик места ~2× при перезаписи, pre-flight места отсутствует) — зафиксированы как
+  ограничения в `docs/SDL.md`, закрываются шагом B5b; MINOR-3 (атрибуты прежнего файла
+  не восстанавливаются из-за `TryPrepareExistingFileForOverwrite`) — B6; MINOR-4
+  (Dispose-цикл не exception-safe) и MINOR-5 (недостижимый внешний catch
+  `CleanupAfterCommit`) — долг к B6/B7; MINOR-2 (устаревшие комментарии RED-тестов) —
+  исправлены отдельным doc-коммитом; MINOR-1 (пакет ревью устарел относительно HEAD) —
+  аддендум в пакете; MINOR-6 (rename меняет идентичность заменяемого файла) — строка
+  в `docs/SDL.md`.
+- Факты после B5a (Windows, прогон 2026-10-16 на HEAD `68bbfaf`): Rebuild — 0 ошибок,
+  67 уникальных предупреждений (baseline); `Lzma.Core.Tests` 1740 passed / 0 failed /
+  0 skipped; `Lzma.Ui.Tests` 226 / 0 / 0; итого 1966; точечно
+  `SevenZipExtractTransactional` — 2 passed; `FullyQualifiedName~SevenZip` — 1222 passed.
+  CI run `39141016587` (HEAD `68bbfaf`) — все три job'а success (ubuntu/windows/macos).
+  На POSIX ожидается 1733 passed / 5 skipped (всего 1738).
+- Честные границы после B5a: SEC-001 для 7z реализован в части стадинга и отката прежних
+  байт; НЕ реализованы: pre-flight места и длины пути (B5b), обёртка
+  `HasFileOnPath`/`HasFileOnDirectoryPath` (B5c, ограничение общее с ZIP, создано B3b-2b),
+  восстановление атрибутов прежнего файла (B6), много-членная семантика, отмена при
+  перезаписи и откат созданных каталогов с опубликованными файлами (B7). Отказ второго
+  folder-а после публикации первого и отказ второго `Move` внутри `Publish` подтверждены
+  чтением кода и ревью, но не наблюдением в тесте (`TX-EX-05` → B7; seam не вводится по
+  решению проекта). Не заявляются: атомарность набора имён на уровне ОС, восстановление
+  после обесточивания, гарантированная очистка (остатки `.tmp`/`.bak` при аварии возможны).
 
 ### B4b — отклонение Zip64-размеров, не помещающихся в Int64
 
@@ -477,6 +529,8 @@ platform CI matrix остаются открытыми.
   (ubuntu/windows/macos), включая Build, evidence 7-Zip, Test и Upload TRX.
 - Честные границы после B3: SEC-001 реализован **только для ZIP-маршрута**; 7z-маршрут по-прежнему
   открывает конечные файлы до проверки (`SevenZipArchiveDecoder.cs:1098`, `:1146`) — шаги B5/B6/B7.
+  (Обновлено 2026-10-18: стадинг и публикация после проверок реализованы в B5a — см. секцию
+  выше; остаются B5b/B5c/B6/B7.)
   Не заявляются: атомарность набора имён на уровне ОС, восстановление после обесточивания,
   гарантированная очистка (при аварии остатки `.tmp`/`.bak` возможны). Отказ второго переноса
   (`staged → final`) не покрыт тестом: для прямой инъекции нужен seam (`SEAM-2`, рекомендовано
