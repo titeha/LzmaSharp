@@ -1028,6 +1028,8 @@ public static partial class SevenZipArchiveDecoder
       // Создаём каталоги/пустые файлы и пишем данные потоково с ОТКАТОМ при сбое: если декод
       // какого-либо folder-а не удался (неверный пароль / неподдерживаемый метод / битый CRC),
       // удаляем всё созданное — на диске «ничего не остаётся» (как при декоде-в-память до записи).
+      // Флаг committed объявлен здесь (до pre-flight проверок), чтобы при раннем return из
+      // pre-flight finally вызвал journal.Rollback() и удалил root-каталог.
       bool committed = false;
 
       // Создаёт недостающие уровни каталога, запоминая каждый созданный (для отката).
@@ -1050,6 +1052,40 @@ public static partial class SevenZipArchiveDecoder
 
       try
       {
+        // Pre-flight: достаточно ли свободного места на томе назначения. Проверка выполняется
+        // до первой мутации (кроме root-каталога, созданного ранее и отслеживаемого журналом)
+        // и носит best-effort характер (квоты, резерв ФС, параллельные процессы), поэтому откат
+        // при IOException в середине записи остаётся обязательным.
+        {
+          long required = ComputeRequiredSpace(plan, selected);
+          if (Lzma.Core.Zip.ZipExtractor.HasInsufficientSpace(root, required))
+            return SevenZipArchiveDecodeResult.InsufficientSpace;
+        }
+
+        // Pre-flight: длина пути. Проверка выполняется до первой мутации, чтобы не начинать
+        // операцию, которая откажет на уровне ОС уже после публикации предыдущих элементов
+        // (и вернула бы общий InternalError вместо отличимого состояния).
+        // Каталоги проверяются без суффикса стадии (он добавляется только к именам файлов),
+        // потому что Directory.CreateDirectory на длинном пути тоже отказывает.
+        if (StagedExtractionJournal.IsPathTooLong(root, 0))
+          return SevenZipArchiveDecodeResult.PathTooLong;
+
+        // Невыбранные записи не стадируются и не публикуются, поэтому в проверке длины они
+        // не участвуют: частичное извлечение не должно отклоняться из-за длинного имени,
+        // которое не извлекается. Известная граница: промежуточные компоненты пути выбранного
+        // файла (создаваемые CreateDirsTracked) этой проверкой не покрываются — при превышении
+        // лимита отказ придёт на уровне ОС как InternalError (откат корректен; долг отдельного
+        // шага проверки компонентов-предков).
+        for (int i = 0; i < entries.Length; i++)
+        {
+          if (!selected[i])
+            continue;
+
+          int extra = entries[i].IsDirectory ? 0 : StagedExtractionJournal.StagedSuffixLength;
+          if (StagedExtractionJournal.IsPathTooLong(fullPaths[i], extra))
+            return SevenZipArchiveDecodeResult.PathTooLong;
+        }
+
         // Пустые файлы: данных для проверки нет (empty-stream CRC проверен на этапе плана),
         // поэтому отдельная проверка не нужна, но публикация выполняется вместе с остальными —
         // после успешного декодирования всех folder-ов.
@@ -1458,5 +1494,36 @@ public static partial class SevenZipArchiveDecoder
 
     finalSize = folderUnpackSizes[finalOutIndex];
     return SevenZipArchiveDecodeResult.Ok;
+  }
+
+  /// <summary>
+  /// Вычисляет требуемое свободное место на томе назначения: сумма <c>Size</c> выбранных
+  /// не-каталогов из плана. Значения ≤ 0 (недоверенный заголовок) пропускаются;
+  /// сумма насыщается до <see cref="long.MaxValue"/>, чтобы переполнение не сделало
+  /// проверку молча неэффективной.
+  /// </summary>
+  /// <remarks>
+  /// Выделен в internal static: используется pre-flight-проверкой и напрямую покрывается
+  /// unit-тестами (насыщение, фильтр каталогов, пропуск ≤ 0, фильтр selected).
+  /// End-to-end-триггер <c>InsufficientSpace</c> для 7z отсутствует: нет шва инъекции
+  /// размеров в публичный API, а заполнение диска запрещено.
+  /// </remarks>
+  internal static long ComputeRequiredSpace(ExtractPlanEntry[] plan, bool[] selected)
+  {
+    long required = 0;
+    for (int i = 0; i < plan.Length; i++)
+    {
+      if (!selected[i])
+        continue;
+      if (plan[i].Kind == ExtractEntryKind.Directory)
+        continue;
+
+      long size = plan[i].Size;
+      if (size <= 0)
+        continue;
+
+      required = size > long.MaxValue - required ? long.MaxValue : required + size;
+    }
+    return required;
   }
 }
