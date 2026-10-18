@@ -6,8 +6,8 @@ last_verified_date: 2026-10-18
 main_branch: main
 main_commit: 3a55297106e6a978b460faa5bfe3b1a1b85b1041
 active_work_branch: fix/sec002-multivolume-transaction
-active_work_commit: acda556
-next_task: "B7 — много-членная семантика (TX-EX-05), отмена при перезаписи + долг MINOR-4/5 ревью"
+active_work_commit: 47b9cf4
+next_task: "todo #44 — сообщения UI для InsufficientSpace/PathTooLong (до merge A12), затем B8/B9"
 ---
 
 # LzmaSharp: текущее состояние работ и ближайший план
@@ -219,6 +219,52 @@ platform CI matrix остаются открытыми.
 - full solution: 1918 passed = `Lzma.Ui.Tests` 219 + `Lzma.Core.Tests` 1699;
 - failed: 0; skipped: 0;
 - independent final review: `APPROVE` (SEC002-M6.5-FINAL).
+
+### B7 — наблюдение много-членной семантики (TX-EX-05), отмены и hardening отката
+
+- Шаг (коммит `47b9cf4`, дифф 24/4 в `SevenZipArchiveDecoder.cs` + 420/9 тесты):
+  production — exception-safe Dispose-цикл потоков folder'а (MINOR-4 ревью B5a: каждый
+  поток в отдельном try/catch, первое исключение запоминается и перебрасывается после
+  закрытия всех — откат может удалить `.tmp`; переброс через `ExceptionDispatchInfo`
+  с сохранением исходного стека — доводка по m-3 ревью B7) и удаление недостижимых внешних
+  catch `CleanupAfterCommit` (MINOR-5; недостижимость подтверждена ревью по коду журнала —
+  внутренние catch глушат IOException/UACE/NotSupported/Argument/Security).
+- Тесты (+5, все — честные характеризации: механизм отката реализован в B3/B5a/B6,
+  RED отсутствует, что зафиксировано в отчёте): TX-EX-05 multi-folder (Copy-фикстура,
+  порча сырых байтов второго члена → CRC-mismatch второго folder'а ПОСЛЕ публикации
+  первого → `InvalidData`; опубликованный `Replaced` восстановлен из `.bak` — байты и
+  атрибуты; ветвь, ранее подтверждённая только чтением, теперь наблюдается); отмена ПОСЛЕ
+  публикации первого folder'а (инициируется первым ненулевым отчётом прогресса —
+  `OperationCanceledException` пробрасывается, опубликованный член восстановлен); отмена
+  заранее отменённым token (OCE, sentinel цел); заблокированное назначение
+  (`FileShare.None`, Windows; POSIX — видимый skip) → `InternalError` + откат; частичное
+  извлечение + атрибуты (долг ревью B6). Доводка тимлида: коды результатов зафиксированы
+  точно (`InvalidData`/`InternalError`) + утверждение локализации порчи во втором
+  pack-потоке (m-2 ревью B7).
+- Кросс-семейное ревью (`deepseek/deepseek-flash`, read-only, пакет
+  `.agent/reports/B7_REVIEW_PACKET.md`): **APPROVE_WITH_COMMENTS**, 0 BLOCKING, 2 MAJOR,
+  6 MINOR (отчёт `.agent/reports/B7_CROSS_FAMILY_REVIEW_deepseek-flash.md`). M-1 (отмена
+  после публикации не наблюдалась) — закрыта доводкой (новый тест, seam не вводился —
+  progress-callback); M-2/m-5 (формулировка «root удалён откатом» и путь структурного теста
+  в пакете) — исправлены; m-1 (посторонние символы в комментарии теста) — удалены; m-2 —
+  коды зафиксированы; m-3 — `ExceptionDispatchInfo`; m-6 — формулировка теста 4. Ревьюер
+  подтвердил: маскирование первичного исключения броском из `finally` — pre-existing класс;
+  `catch (Exception)` не может проглотить OCE (перебрасывается после цикла); удаление
+  внешних catch безопасно (подмножество внутренних); возврат `InvalidData` из блока
+  метаданных после commit НЕДОСТИЖИМ (`IsValidFileTime` полностью дублирует построчные
+  проверки) — прежний долг снят; Q10=а не требует диагностики «какие файлы опубликованы».
+  Долг m-4: формулировки корня «атомарн» в комментариях ядра (:809, :1427) — в B9.
+- Не покрыто (долг): отказ второго `Move` внутри `Publish` — без seam практически
+  не индуцируем → SEAM-2; Dispose-hardening без регрессионного наблюдения (нет seam для
+  инъекции сбоя `FileStream.Dispose`) — принятый риск, зафиксирован здесь и в SDL как
+  «hardening без регрессионного наблюдения»; атрибуты на POSIX (#39); частичное извлечение +
+  отказ второго ВЫБРАННОГО члена (кандидат B8); UNC/FullPathLimit-сценарии (#39).
+- Факты после B7 (Windows, прогон 2026-10-19 на HEAD `47b9cf4`): Build — 0 ошибок,
+  0 предупреждений из изменённых файлов (baseline); `Lzma.Core.Tests` 1760 / 0 / 0;
+  `Lzma.Ui.Tests` 226 / 0 / 0; итого 1986; точечно Transactional + Journal + Preflight —
+  25 passed. CI run `39160779414` (HEAD `47b9cf4`) — все три job'а success. На POSIX
+  ожидается 1752 passed / 6 skipped (всего 1758; новый видимый skip — заблокированное
+  назначение).
 
 ### B6 — атрибуты прежнего файла не мутируются до успеха (TX-EX-06)
 
