@@ -16,9 +16,6 @@ internal enum StagedEntryKind
 
   /// <summary>Каталог создан операцией извлечения.</summary>
   CreatedDir,
-
-  /// <summary>Атрибуты файла были изменены (fallback-сценарий).</summary>
-  AttributesChanged,
 }
 
 /// <summary>
@@ -37,9 +34,6 @@ internal sealed class StagedExtractionJournal
 
   // Записи о каталогах (в порядке создания).
   private readonly List<string> _dirs = new();
-
-  // Записи об изменённых атрибутах (fallback).
-  private readonly List<AttributeEntry> _attrChanges = new();
 
   // Флаг точки фиксации: после Commit откат не выполняется (one-shot).
   private bool _committed;
@@ -197,8 +191,6 @@ internal sealed class StagedExtractionJournal
   /// <item><see cref="StagedEntryKind.Replaced"/> — удалить опубликованный новый файл,
   /// затем восстановить backup (bak → final);</item>
   /// <item>Неопубликованные staged-файлы — удалить;</item>
-  /// <item><see cref="StagedEntryKind.AttributesChanged"/> — восстановить исходное значение
-  /// (до удаления каталогов);</item>
   /// <item><see cref="StagedEntryKind.CreatedDir"/> — удалить в обратном порядке (только пустые).</item>
   /// </list>
   /// <para>Файл, существовавший до операции и НЕ имеющий backup, не удаляется НИКОГДА.</para>
@@ -280,20 +272,7 @@ internal sealed class StagedExtractionJournal
       catch (UnauthorizedAccessException) { }
     }
 
-    // c) Атрибуты — восстанавливаем (fallback).
-    for (int i = _attrChanges.Count - 1; i >= 0; i--)
-    {
-      var attr = _attrChanges[i];
-      try
-      {
-        if (FileExists(attr.Path))
-          SetAttributes(attr.Path, attr.OriginalAttributes);
-      }
-      catch (IOException) { }
-      catch (UnauthorizedAccessException) { }
-    }
-
-    // d) Каталоги — удаляем в обратном порядке (только пустые).
+    // c) Каталоги — удаляем в обратном порядке (только пустые).
     for (int i = _dirs.Count - 1; i >= 0; i--)
     {
       try
@@ -324,20 +303,6 @@ internal sealed class StagedExtractionJournal
   public void RemoveUnpublishedStaged(string stagedPath)
   {
     _unpublishedStaged.Remove(stagedPath);
-  }
-
-  /// <summary>
-  /// Регистрирует изменение атрибутов файла (для fallback-восстановления при откате).
-  /// В текущих маршрутах не используется: ZIP (с B3) и 7z (с B6) не мутируют атрибуты
-  /// назначения до успеха — backup-first rename переносит атрибуты вместе с файлом,
-  /// поэтому fallback-восстановление не требуется. Сохранён как точка расширения для
-  /// сценариев, где backup выполняется копированием, а не переименованием.
-  /// </summary>
-  /// <param name="path">Путь файла.</param>
-  /// <param name="originalAttributes">Исходные атрибуты.</param>
-  public void TrackAttributeChange(string path, FileAttributes originalAttributes)
-  {
-    _attrChanges.Add(new AttributeEntry { Path = path, OriginalAttributes = originalAttributes });
   }
 
   // Неопубликованные staged-файлы (созданы, но запись не удалась).
@@ -483,11 +448,5 @@ internal sealed class StagedExtractionJournal
     public string StagedPath { get; } = stagedPath;
     public string? BackupPath { get; } = backupPath;
     public bool Published { get; set; }
-  }
-
-  private struct AttributeEntry
-  {
-    public string Path;
-    public FileAttributes OriginalAttributes;
   }
 }
