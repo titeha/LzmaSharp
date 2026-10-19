@@ -2,12 +2,12 @@
 doc_kind: current-work-plan
 status: active
 project: LzmaSharp
-last_verified_date: 2026-10-18
+last_verified_date: 2026-10-19
 main_branch: main
 main_commit: 3a55297106e6a978b460faa5bfe3b1a1b85b1041
 active_work_branch: fix/sec002-multivolume-transaction
-active_work_commit: 47b9cf4
-next_task: "todo #44 — сообщения UI для InsufficientSpace/PathTooLong (до merge A12), затем B8/B9"
+active_work_commit: 78ccc2d
+next_task: "B9 — платформенная матрица и документация (долг: раздел 6 этого файла, комментарии ядра «атомарн», XML-док ZipExtractResult.PathTooLong, мёртвая ветвь TrackAttributeChange); merge A12 — вручную владельцем"
 ---
 
 # LzmaSharp: текущее состояние работ и ближайший план
@@ -219,6 +219,52 @@ platform CI matrix остаются открытыми.
 - full solution: 1918 passed = `Lzma.Ui.Tests` 219 + `Lzma.Core.Tests` 1699;
 - failed: 0; skipped: 0;
 - independent final review: `APPROVE` (SEC002-M6.5-FINAL).
+
+### todo #44 + B8 — сообщения UI об отказах pre-flight и интеграция маршрутов сервиса
+
+- Шаг todo #44 (коммит `1c09fe1`, дифф 14/2 в `MainViewModel.cs` + 94/0 тесты; MINOR-4 ревью B5b):
+  UI показывает отдельные человекочитаемые сообщения для `InsufficientSpace` и `PathTooLong`
+  в обоих маршрутах — 7z (`ExtractStatus`) и ZIP (`ZipExtractStatus`); раньше оба кода попадали
+  в общую ветвь «ошибка данных или файл уже существует» / «небезопасный путь, конфликт имён».
+  В `StreamingExtractStatus` отказы предварительных проверок обрабатываются ДО ветви `encrypted`:
+  иначе зашифрованный 7z со слишком длинным именем или без свободного места сообщал бы «неверный
+  пароль или повреждённый архив», хотя ядро возвращает эти коды до декодирования и с паролем они
+  не связаны. Видимость `ExtractStatus` и `StreamingExtractStatus` расширена `private → internal`
+  (по образцу уже `internal` `ZipExtractStatus`; `InternalsVisibleTo Lzma.Ui.Tests` в csproj) —
+  публичный API не изменён. Тесты: `tests/Lzma.Ui.Tests/MainViewModelExtractStatusTests.cs`
+  (10 тест-кейсов, включая guards прежних формулировок `Ok`/`InvalidData`/`IOError` и подсказки
+  про пароль).
+- Шаг B8 (коммит `78ccc2d`, только тесты 191/0; production-код НЕ менялся): аудит call graph всех
+  семи extract-методов `LzmaArchiveService` (таблица «метод → файл:строка → точка входа ядра →
+  staged-ядро → overwrite» и grep-факты — в отчёте `.agent/reports/B8_CALL_GRAPH_REPORT.md`;
+  каталог `.agent/` в git не входит). Вывод: оба потоковых маршрута идут через те же staged-ядра,
+  что и in-memory (`ZipStreamExtractor.ExtractToDirectory` → `ZipExtractor.ExtractCore`;
+  `SevenZipArchiveDecoder.ExtractToDirectoryFromStream` → `ExtractHeaderToDirectory`); других
+  потребителей у ядер нет; сервис не выполняет прямых записей на диск; UI вне сервиса ядро не
+  вызывает (9 extract-вызовов `MainViewModel` — только через `IArchiveService`); `overwrite: false`
+  во всех семи маршрутах. Единственная запись на диск вне журнала стадии —
+  `VolumeSpanningWriteStream` (маршрут создания архива, SEC-002).
+- Интеграционные тесты отказов через сервис
+  (`tests/Lzma.Ui.Tests/LzmaArchiveServiceExtractTransactionalTests.cs`) — characterizeции уже
+  реализованного поведения (RED отсутствует, механизм отката и pre-flight существовали до шага):
+  порча данных второго члена ZIP (Store, CRC) → `InvalidData`, опубликованный первый член снят
+  откатом (не-вакуумность подтверждена порядком отчётов `currentFile` = `[a.bin, b.bin]`), прежние
+  байты соседнего файла целы, остатков `.tmp`/`.bak` нет; конфликт имени при `overwrite: false` →
+  прежний файл не изменён и не уехал в `.bak`; 7z потоково (`ExtractArchiveFileAsync`) с именем
+  300 символов → `PathTooLong` виден через сервис (раньше предварительная проверка длины была
+  покрыта только in-memory на уровне ядра).
+- Не покрыто (долг): 7z-сценарий «частичное извлечение + отказ второго ВЫБРАННОГО члена» без seam
+  не индуцируется (solid-folder декодируется целиком) — остаётся вместе с SEAM-2; аудит call graph
+  — снимок строк на `78ccc2d`. Раздел 6 этого файла («текущий рабочий пакет») по-прежнему описывает
+  только SEC-002 и исключает extraction — устарел, исправляется в B9.
+- Кросс-семейное ревью этих двух шагов не проводилось: B8 не меняет production-код (ревью нужны
+  только для production-диффов), production-дифф todo #44 — 14/2 в маппинге сообщений; отдельной
+  команды на запуск ревью не было. Зафиксировано честно.
+- Факты после шагов (Windows, прогон 2026-10-19 на HEAD `78ccc2d`): Build — 0 ошибок,
+  67 предупреждений (baseline; из новых файлов — 0); `Lzma.Ui.Tests` 239 / 0 / 0 (+13 к 226);
+  `Lzma.Core.Tests` 1760 / 0 / 0; итого 1999. CI run `39287836382` (HEAD `78ccc2d`, оба коммита
+  одним push) — все три job'а success (ubuntu, windows, macos). На POSIX ожидается
+  1752 passed / 6 skipped в `Lzma.Core.Tests` (дельта не менялась: ядро не правилось).
 
 ### B7 — наблюдение много-членной семантики (TX-EX-05), отмены и hardening отката
 
