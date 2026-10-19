@@ -6,8 +6,8 @@ last_verified_date: 2026-10-19
 main_branch: main
 main_commit: 3a55297106e6a978b460faa5bfe3b1a1b85b1041
 active_work_branch: fix/sec002-multivolume-transaction
-active_work_commit: aa63a59
-next_task: "решение владельца: A12 merge в main (вручную) либо один из отложенных пунктов — capability-probe (todo #39), SEAM-1/SEAM-2, B4c (todo #47), xUnit1051 (todo #35), G8, DOC-017; отдельный кандидат — мёртвый член enum StagedEntryKind.CreatedDir"
+active_work_commit: d382b6a
+next_task: "прочитать в CI (под авторизацией) причины видимых пропусков capability-probe на macos-latest и при подтверждении расхождения поправить FullPathLimit для macOS; далее по решению владельца: остаток B4c (тестовая гигиена), G8, DOC-017, SEAM-1/2, xUnit1051 (todo #35) либо A12 merge в main"
 ---
 
 # LzmaSharp: текущее состояние работ и ближайший план
@@ -219,6 +219,52 @@ platform CI matrix остаются открытыми.
 - full solution: 1918 passed = `Lzma.Ui.Tests` 219 + `Lzma.Core.Tests` 1699;
 - failed: 0; skipped: 0;
 - independent final review: `APPROVE` (SEC002-M6.5-FINAL).
+
+### Отложенные долги: микрошаг CreatedDir, capability-probe (todo #39), B4c-1 и B4c-2
+
+- Владелец разрешил микрошаг по находке B9c и работу по отложенным долгам (2026-10-19).
+- **Мёртвый член enum** (коммит `6ad7d40`, 2/4 в `StagedExtractionJournal.cs`): удалён
+  `StagedEntryKind.CreatedDir` — каталоги журнал ведёт отдельным списком `_dirs` через
+  `TrackCreatedDirectory`, значение не создавалось ни в одном маршруте; пункт XML-дока `Rollback`
+  переформулирован без ссылки на enum. Поведение не меняется.
+- **capability-probe (todo #39)**, коммиты `dc36122` → `b04ddc5` → `b2cc1e2` → `d382b6a`
+  (новый файл `tests/Lzma.Core.Tests/Platform/PlatformCapabilityProbe.Tests.cs`, 6 тестов):
+  измеряются предел длины компонента имени (255), предел полного пути против `FullPathLimit`,
+  rename `ReadOnly`-файла и перенос атрибутов в обе стороны (основа гарантии B6/`TX-EX-06`),
+  удаление `ReadOnly`-файла (обоснование ветви `CleanupAfterCommit`), регистрозависимость тома
+  (обоснование выбора компаратора). UNC и хост с `LongPathsEnabled=0` в CI не воспроизводятся —
+  зафиксировано в шапке файла как честная граница.
+  Принцип жёсткости (выработан после двух красных прогонов CI): probe ПАДАЕТ только если
+  платформа строже принятой модели (тогда pre-flight пропустил бы отказывающую операцию);
+  расхождение в консервативную сторону и невозможность замера в данном окружении дают видимый
+  пропуск с измеренным значением (правило 7 `03_TEST_QUALITY.md`: явная причина, не тихий `return`).
+  Что дало измерение: на `macos-latest` граница полного пути расходится с принятой моделью 1024 —
+  путь длины 1023 отклонён; точное фактическое значение содержится в тексте видимого пропуска,
+  но анонимно не читается (логи и TRX CI — 403, «Sign in to view logs»). Последствие: вблизи
+  границы на macOS отказ может прийти как `InternalError` вместо `PathTooLong`; откат корректен,
+  данные не теряются. Правка `FullPathLimit` для macOS без подтверждённого замера НЕ вносилась.
+  На `windows-latest` и `ubuntu-latest` расхождений, блокирующих прогон, нет.
+- **B4c-1** (коммит `89e8de0`, `ZipStreamExtractor.cs` 21/2 + 5 тестов): публичный API потокового
+  извлечения принимает вручную собранные `ZipStreamEntry`, и отрицательные/запредельные
+  `LocalHeaderOffset`, `CompressedSize`, `UncompressedSize` давали необработанное исключение
+  (`ArgumentOutOfRangeException` на seek, `OverflowException` на `new byte[…]`). RED наблюдался
+  (3 падения из 5 тестов), после fix — `InvalidData`; граница «данные помещаются в поток» считается
+  вычитанием, а не сложением недоверенных величин (переполнение `long` больше не пропускает
+  проверку). Позитивный контроль: записи из каталога реального архива извлекаются успешно.
+- **B4c-2** (коммит `f56df70`, `ZipStreamReader.cs` 7/2 + 1 тест): guard'ы смещений ZIP64
+  (`:60` каталог, `:225` locator) переведены на вычитание. Гипотеза ревью B4b подтверждена
+  измерением: при смещении locator'а около `long.MaxValue` сумма переполнялась, guard пропускал
+  значение, и seek для `MemoryStream` бросал `ArgumentOutOfRangeException` наружу из публичного
+  API (RED наблюдался) — теперь контролируемый `InvalidData`.
+- Верификация (Windows, прогон 2026-10-19 на `d382b6a`): Build Release — 0 ошибок,
+  62 предупреждения в `Lzma.Core` (= baseline); `Lzma.Core.Tests` 1771 passed / 1 skipped /
+  1772 всего; `Lzma.Ui.Tests` 239 / 0 / 0; точечно Journal + Transactional — 15 / 0 / 0.
+  CI: run `39309326965` (`f56df70`) — windows/macos failure (probe), `39311566569` (`b04ddc5`) —
+  macos failure, `39313179672` (`b2cc1e2`) — macos failure, `39314494108` (`d382b6a`) —
+  ВСЕ три job'а success. Каждый push сверялся отдельным `git ls-remote` по обоим remote.
+- Кросс-семейное ревью не проводилось (команды не было); субагентов 0. Остаток B4c (тестовая
+  гигиена по MINOR ревью B4b: позитивный контроль билдера фикстуры, частично сентинельная ветвь,
+  принимаемое `long.MaxValue`, тавтологичный `Assert.Empty`, дублирование билдера) — отдельный шаг.
 
 ### B9b + B9c — точные формулировки в комментариях ядра и удаление мёртвой ветви журнала
 
