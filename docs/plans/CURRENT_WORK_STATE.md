@@ -7,7 +7,7 @@ main_branch: main
 main_commit: 3a55297106e6a978b460faa5bfe3b1a1b85b1041
 active_work_branch: fix/sec002-multivolume-transaction
 active_work_commit: 78ccc2d
-next_task: "B9 — платформенная матрица и документация (долг: раздел 6 этого файла, комментарии ядра «атомарн», XML-док ZipExtractResult.PathTooLong, мёртвая ветвь TrackAttributeChange); merge A12 — вручную владельцем"
+next_task: "B9 (остаток, отдельные шаги в production-файлах): комментарии ядра «атомарн» (:809, :1427) и «ничего не остаётся» (:808–810, :1408–1409), XML-док ZipExtractResult.PathTooLong, мёртвая ветвь TrackAttributeChange; capability-probe (todo #39) отложен владельцем; merge A12 — вручную владельцем"
 ---
 
 # LzmaSharp: текущее состояние работ и ближайший план
@@ -219,6 +219,32 @@ platform CI matrix остаются открытыми.
 - full solution: 1918 passed = `Lzma.Ui.Tests` 219 + `Lzma.Core.Tests` 1699;
 - failed: 0; skipped: 0;
 - independent final review: `APPROVE` (SEC002-M6.5-FINAL).
+
+### B9 (документационная часть) — платформенная матрица и актуализация рабочего пакета
+
+- Шаг docs-only (production-код и тесты не менялись): раздел 6 этого файла приведён к фактическому
+  состоянию (текущий пакет — SEC-001, а не SEC-002; «documentation synchronization» исключён из
+  «вне scope» — doc-tail выполняется после каждого шага), front matter актуализирован.
+- Documentation lint по списку `docs/plans/04_DOCUMENTATION_AUDIT.md` §7 на current-документах:
+  запрещённых формулировок нет (0 совпадений); все вхождения корня «атомарн» — отрицания или
+  запреты («атомарности набора имён на уровне ОС нет», «не заявляются»). DOC-001 в части
+  документации закрыт; остаток — формулировки в комментариях ядра (ниже).
+- Платформенная матрица (отчёт `.agent/reports/B9_PLATFORM_MATRIX.md`; каталог `.agent/` в git
+  не входит). Windows 11 Pro (10.0.28000), SDK 10.0.112 при `global.json` 10.0.101, HEAD `b714dc5`:
+  `Lzma.Core.Tests` 1760 / 0 / 0, `Lzma.Ui.Tests` 239 / 0 / 0, целевые SEC-001 (Transactional,
+  Journal, Preflight, PathLength, PreFlight) 55 / 0 / 0. Linux и macOS — CI runs `39287836382`
+  (`78ccc2d`) и `39290490314` (`b714dc5`): ubuntu, windows, macos — success; точные числа по ОС
+  недоступны (анонимный доступ к логам и TRX — 403), поэтому в документации они приводятся как
+  «ожидается»: `Lzma.Core.Tests` 1752 passed / 6 skipped (всего 1758).
+- Не измерено (долг): capability-probe `NAME_MAX`/`PATH_MAX`, семантика `File.Move` и атрибутов
+  на ubuntu/macos, хост с `LongPathsEnabled=0`, UNC — todo #39, отложен отдельным решением
+  владельца; пункт 2 плана B9 в этой сессии не выполнялся.
+- Остаток B9 — отдельные шаги в production-файлах (вне allowlist docs-шага, требуют решения):
+  комментарии ядра «с атомарным откатом» (`SevenZipArchiveDecoder.cs:809`), «атомарный откат»
+  в XML-доке потокового маршрута (`:1428`), «на диске «ничего не остаётся»» (`:1030`),
+  неточный XML-док `ZipExtractResult.PathTooLong` (`Zip/ZipExtractResult.cs:31–43`),
+  мёртвая ветвь `TrackAttributeChange` (`StagedExtractionJournal.cs:338`, вызовов в `src` и
+  `tests` нет). Comments-only правки и удаление кода — разные шаги (`AGENTS.md` §5).
 
 ### todo #44 + B8 — сообщения UI об отказах pre-flight и интеграция маршрутов сервиса
 
@@ -1199,24 +1225,31 @@ F4 disposition (принято владельцем, без преувеличе
 
 ## 6. Текущий рабочий пакет
 
-Текущий пакет ограничен только:
+Текущий пакет (фаза B) ограничен только:
 
 ```text
-SEC-002 / multi-volume transactional publication
+SEC-001 / transactional extraction (стадинг, публикация после проверки,
+                                  откат с восстановлением прежних байт)
 ```
 
-Вне scope:
+Предыдущий пакет `SEC-002 / multi-volume transactional publication` (M4B–M9, F3, глобальный gate
+`APPROVE_WITH_FINDINGS`) завершён по production-коду; merge в `main` выполняется вручную владельцем
+(A12) и на момент этой записи не выполнен.
 
-- extraction;
-- ZIP internals;
-- codecs;
-- cryptography;
-- resource budget;
-- package separation;
-- mobile heads;
-- style cleanup;
-- warnings cleanup;
-- documentation synchronization до завершения production-пакета.
+Вне scope текущего пакета:
+
+- архитектурное разделение (Compression / Cryptography / Containers / ArchiveIO);
+- ZIP internals и кодеки вне маршрута извлечения;
+- криптография (KDF/AES — фаза E) и политика ошибок (фаза F);
+- resource budget (RES-001/002/003 — фаза C);
+- package separation, mobile heads;
+- style cleanup, warnings cleanup;
+- отложенное отдельным решением владельца: B4c (todo #47), SEAM-1/SEAM-2, xUnit1051 (todo #35),
+  G8 (SBOM/advisory/pinning), DOC-017, capability-probe (todo #39).
+
+Синхронизация документации из «вне scope» исключена: doc-tail выполняется после каждого шага
+(правило владельца от 2026-10-12; процедура — `docs/plans/DOC_B_DOCUMENTATION_SYNC_PLAN.md`
+и реестр `docs/plans/04_DOCUMENTATION_AUDIT.md`).
 
 ## 7. Обязательный принцип маленьких шагов
 
