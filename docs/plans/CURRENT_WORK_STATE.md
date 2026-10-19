@@ -6,8 +6,8 @@ last_verified_date: 2026-10-19
 main_branch: main
 main_commit: 3a55297106e6a978b460faa5bfe3b1a1b85b1041
 active_work_branch: fix/sec002-multivolume-transaction
-active_work_commit: 78ccc2d
-next_task: "B9 (остаток, отдельные шаги в production-файлах): комментарии ядра «атомарн» (:809, :1427) и «ничего не остаётся» (:808–810, :1408–1409), XML-док ZipExtractResult.PathTooLong, мёртвая ветвь TrackAttributeChange; capability-probe (todo #39) отложен владельцем; merge A12 — вручную владельцем"
+active_work_commit: aa63a59
+next_task: "решение владельца: A12 merge в main (вручную) либо один из отложенных пунктов — capability-probe (todo #39), SEAM-1/SEAM-2, B4c (todo #47), xUnit1051 (todo #35), G8, DOC-017; отдельный кандидат — мёртвый член enum StagedEntryKind.CreatedDir"
 ---
 
 # LzmaSharp: текущее состояние работ и ближайший план
@@ -220,6 +220,42 @@ platform CI matrix остаются открытыми.
 - failed: 0; skipped: 0;
 - independent final review: `APPROVE` (SEC002-M6.5-FINAL).
 
+### B9b + B9c — точные формулировки в комментариях ядра и удаление мёртвой ветви журнала
+
+- Разрешение владельца получено 2026-10-19 («1 — Разрешаю, 2 — c-full»): остаток B9 выполнен
+  двумя отдельными шагами в production-файлах ядра (spec-pack `.agent/tasks/B9B_SPEC_PACK.md`).
+- **B9b** (коммит `f3fba7f`, comments-only, 18/13 в двух файлах, ни одной исполняемой строки —
+  проверено фильтром диффа): `SevenZipArchiveDecoder.cs` — «с атомарным откатом при сбое»
+  заменено на «с откатом всей операции через журнал стадии» (`:809`), «атомарный откат» в XML-доке
+  `ExtractToDirectoryFromStream` — на «откат через журнал стадии» (`:1428`), «на диске «ничего
+  не остаётся»» (`:1030`) — на точное описание (созданное удаляется, заменённое возвращается из
+  backup; атомарности набора имён на уровне ОС нет, восстановление после обесточивания не
+  обеспечивается); `Zip/ZipExtractResult.cs` — XML-док `PathTooLong`: лимит Windows 32759
+  (32767 − 8 на префикс `\\?\` / `\\?\UNC\`) вместо 32767, строгая семантика проверок
+  («длина + суффикс ≥ лимита» для пути, «&gt; 255» для компонента → для файла запас 22 символа,
+  для каталога 1), снято неверное объяснение про «завершающий ноль», добавлена оговорка, что
+  фактические `NAME_MAX`/`PATH_MAX` на ubuntu/macos не измерены (capability-probe).
+  DOC-001 закрыт полностью: неточные заявления об атомарности в current-документации отсутствовали
+  (проверено grep'ом в шаге `886ea32`), в коде — сняты этим шагом.
+- **B9c** (коммит `aa63a59`, 1/42 в `StagedExtractionJournal.cs`, вариант c-full): удалён мёртвый
+  механизм fallback-восстановления атрибутов — `TrackAttributeChange` (вызовов в `src` и `tests`
+  не было с B6: backup-first rename переносит атрибуты вместе с файлом), поле `_attrChanges`,
+  цикл «c) Атрибуты» в `Rollback` (следующий пункт переименован d) → c)), структура
+  `AttributeEntry`, пункт XML-дока `Rollback` и член enum `StagedEntryKind.AttributesChanged`.
+  Поведение не меняется: писателей в список не было, поэтому цикл всегда выполнялся по пустому
+  списку. Класс `internal`, публичный API не затронут. Упоминания `AttributesChanged` как
+  «fallback-вида журнала» в разделах этого файла про B5a/B6 — исторические и с этого шага
+  недействительны.
+- Новая находка (в разрешение не входила, НЕ тронута): член enum `StagedEntryKind.CreatedDir`
+  тоже мёртв — каталоги отслеживаются отдельным списком `_dirs` через `TrackCreatedDirectory`,
+  значение не создаётся ни в одном маршруте. Кандидат отдельного микрошага по решению владельца.
+- Верификация (Windows, прогон 2026-10-19 на `aa63a59`): Build Release — 0 ошибок,
+  62 предупреждения в `Lzma.Core` (= baseline, новых нет); `Lzma.Core.Tests` 1760 / 0 / 0;
+  точечно Journal + Transactional — 15 / 0 / 0; `Lzma.Ui.Tests` 239 / 0 / 0; `git diff --check`
+  чисто; grep по `TrackAttributeChange|_attrChanges|AttributeEntry|AttributesChanged` в `src` и
+  `tests` — 0 совпадений. Push на оба remote сверен отдельным `git ls-remote` (github = gitflic =
+  `aa63a59`). CI run `39301133459` (HEAD `aa63a59`) — все три job'а success.
+
 ### B9 (документационная часть) — платформенная матрица и актуализация рабочего пакета
 
 - Шаг docs-only (production-код и тесты не менялись): раздел 6 этого файла приведён к фактическому
@@ -239,12 +275,9 @@ platform CI matrix остаются открытыми.
 - Не измерено (долг): capability-probe `NAME_MAX`/`PATH_MAX`, семантика `File.Move` и атрибутов
   на ubuntu/macos, хост с `LongPathsEnabled=0`, UNC — todo #39, отложен отдельным решением
   владельца; пункт 2 плана B9 в этой сессии не выполнялся.
-- Остаток B9 — отдельные шаги в production-файлах (вне allowlist docs-шага, требуют решения):
-  комментарии ядра «с атомарным откатом» (`SevenZipArchiveDecoder.cs:809`), «атомарный откат»
-  в XML-доке потокового маршрута (`:1428`), «на диске «ничего не остаётся»» (`:1030`),
-  неточный XML-док `ZipExtractResult.PathTooLong` (`Zip/ZipExtractResult.cs:31–43`),
-  мёртвая ветвь `TrackAttributeChange` (`StagedExtractionJournal.cs:338`, вызовов в `src` и
-  `tests` нет). Comments-only правки и удаление кода — разные шаги (`AGENTS.md` §5).
+- Остаток B9 — отдельные шаги в production-файлах (вне allowlist docs-шага) — ВЫПОЛНЕН после
+  разрешения владельца двумя шагами `f3fba7f` (B9b, comments-only) и `aa63a59` (B9c, удаление
+  мёртвой ветви); состав и верификация — в разделе «B9b + B9c» выше.
 
 ### todo #44 + B8 — сообщения UI об отказах pre-flight и интеграция маршрутов сервиса
 
