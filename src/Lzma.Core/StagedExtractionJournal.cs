@@ -13,9 +13,6 @@ internal enum StagedEntryKind
 
   /// <summary>Файл заменил прежний (существующий был перемещён в .bak).</summary>
   Replaced,
-
-  /// <summary>Каталог создан операцией извлечения.</summary>
-  CreatedDir,
 }
 
 /// <summary>
@@ -191,7 +188,8 @@ internal sealed class StagedExtractionJournal
   /// <item><see cref="StagedEntryKind.Replaced"/> — удалить опубликованный новый файл,
   /// затем восстановить backup (bak → final);</item>
   /// <item>Неопубликованные staged-файлы — удалить;</item>
-  /// <item><see cref="StagedEntryKind.CreatedDir"/> — удалить в обратном порядке (только пустые).</item>
+  /// <item>Созданные операцией каталоги (отдельный список журнала) — удалить в обратном порядке
+  /// (только пустые).</item>
   /// </list>
   /// <para>Файл, существовавший до операции и НЕ имеющий backup, не удаляется НИКОГДА.</para>
   /// <para>Откат выполняется один раз: повторный вызов не удаляет уже восстановленные прежние байты.</para>
