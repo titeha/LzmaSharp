@@ -806,8 +806,8 @@ public static partial class SevenZipArchiveDecoder
 
   // Общее ядро извлечения на диск: из ГОТОВОГО header строит план, валидирует пути/метаданные,
   // создаёт каталоги/пустые файлы и потоково пишет данные folder-за-folder-ом (декод — через
-  // decodeFolder), с атомарным откатом при сбое и применением времён/атрибутов. Едино для span-
-  // и stream-путей; различаются только чтение header и реализация decodeFolder.
+  // decodeFolder), с откатом всей операции через журнал стадии и применением времён/атрибутов.
+  // Едино для span- и stream-путей; различаются только чтение header и реализация decodeFolder.
   private static SevenZipArchiveDecodeResult ExtractHeaderToDirectory(
       SevenZipHeader header,
       string destinationDirectory,
@@ -1027,7 +1027,10 @@ public static partial class SevenZipArchiveDecoder
 
       // Создаём каталоги/пустые файлы и пишем данные потоково с ОТКАТОМ при сбое: если декод
       // какого-либо folder-а не удался (неверный пароль / неподдерживаемый метод / битый CRC),
-      // удаляем всё созданное — на диске «ничего не остаётся» (как при декоде-в-память до записи).
+      // операция откатывается журналом стадии: созданное удаляется, заменённое возвращается из
+      // backup (прежние байты и атрибуты) — назначение остаётся в состоянии до операции.
+      // Атомарности набора имён на уровне ОС нет, восстановление после обесточивания не
+      // обеспечивается (при аварии остатки .tmp/.bak могут сохраниться).
       // Флаг committed объявлен здесь (до pre-flight проверок), чтобы при раннем return из
       // pre-flight finally вызвал journal.Rollback() и удалил root-каталог.
       bool committed = false;
@@ -1425,10 +1428,10 @@ public static partial class SevenZipArchiveDecoder
   /// Извлекает архив из seekable <see cref="Stream"/> (напр. <see cref="FileStream"/>) на диск,
   /// НЕ загружая архив в память — позволяет распаковывать архивы больше 2 ГиБ. Структура читается
   /// потоково (<see cref="SevenZipArchiveStreamReader"/>), а каждый folder декодируется прямо из
-  /// потока по смещению. Общая логика (план, проверки путей/метаданных, атомарный откат, времена/
-  /// атрибуты) — в общем ядре <see cref="ExtractHeaderToDirectory"/>; здесь только чтение header и
-  /// потоковый декод folder-а. Поддерживает архивы из одиночных LZMA2-folder-ов (наш writer такие и
-  /// пишет); прочие формы дают <see cref="SevenZipArchiveDecodeResult.NotSupported"/>.
+  /// потока по смещению. Общая логика (план, проверки путей/метаданных, откат через журнал стадии,
+  /// времена/атрибуты) — в общем ядре <see cref="ExtractHeaderToDirectory"/>; здесь только чтение
+  /// header и потоковый декод folder-а. Поддерживает архивы из одиночных LZMA2-folder-ов (наш writer
+  /// такие и пишет); прочие формы дают <see cref="SevenZipArchiveDecodeResult.NotSupported"/>.
   /// </summary>
   public static SevenZipArchiveDecodeResult ExtractToDirectoryFromStream(
       Stream archive,
