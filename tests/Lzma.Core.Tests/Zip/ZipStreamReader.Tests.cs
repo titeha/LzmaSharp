@@ -338,6 +338,49 @@ public sealed class ZipStreamReaderTests
     Assert.Empty(entries);
   }
 
+  // --- B4c: overflow-safe guard смещения ZIP64 EOCD -------------------------------------------
+
+  /// <summary>
+  /// Locator ZIP64 EOCD со смещением, при котором <c>offset + Zip64EocdMinSize</c> переполняет
+  /// <c>long</c>: guard обязан сравнивать без сложения недоверенных величин, иначе переполнение
+  /// даёт отрицательное значение, проверка пропускается, а seek на огромное значение для
+  /// <see cref="MemoryStream"/> бросает <see cref="ArgumentOutOfRangeException"/> вместо
+  /// контролируемого <see cref="ZipReadResult.InvalidData"/>.
+  /// </summary>
+  [Fact]
+  public void ZIP64_Locator_СмещениеСПереполнением_InvalidDataБезИсключения()
+  {
+    byte[] fixture = BuildZip64FixtureWithExtraValues(
+        uncompExtra: (ulong)29,
+        compExtra: (ulong)29,
+        offsetExtra: 0);
+    // long.MaxValue - 8 + 56 переполняет long и даёт отрицательное значение.
+    PatchZip64LocatorOffset(fixture, (ulong)(long.MaxValue - 8));
+
+    using var ms = new MemoryStream(fixture, writable: false);
+    ZipReadResult result = ZipStreamReader.ReadCentralDirectory(ms, out ZipStreamEntry[] entries);
+
+    Assert.Equal(ZipReadResult.InvalidData, result);
+    Assert.Empty(entries);
+  }
+
+  /// <summary>Перезаписывает 8-байтовое смещение ZIP64 EOCD в locator-е (сигнатура 0x07064b50),
+  /// поиск с конца — locator стоит перед EOCD.</summary>
+  private static void PatchZip64LocatorOffset(byte[] fixture, ulong offset)
+  {
+    for (int i = fixture.Length - 20; i >= 0; i--)
+    {
+      if (fixture[i] == 0x50 && fixture[i + 1] == 0x4b && fixture[i + 2] == 0x06 && fixture[i + 3] == 0x07)
+      {
+        for (int b = 0; b < 8; b++)
+          fixture[i + 8 + b] = (byte)(offset >> (b * 8));
+        return;
+      }
+    }
+
+    Assert.Fail("locator ZIP64 EOCD не найден в фикстуре");
+  }
+
   private static void WriteU16(List<byte> buf, ushort v)
   {
     buf.Add((byte)v);
