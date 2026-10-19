@@ -70,6 +70,18 @@ public static class ZipStreamExtractor
       Stream archive, ZipStreamEntry entry, string stagedPath, CancellationToken token,
       IProgress<SevenZipProgress>? progress, long total, long[] processed, byte[]? password)
   {
+    // Поля записи могут прийти из вручную собранного списка (публичный API принимает
+    // IReadOnlyList<ZipStreamEntry>), поэтому недоверенные значения отклоняются ДО seek и ДО
+    // аллокаций: Stream.Position с отрицательным значением бросает ArgumentOutOfRangeException,
+    // а сложение двух недоверенных величин переполняет long и пропускает проверку границы.
+    long archiveLength = archive.Length;
+
+    if (entry.LocalHeaderOffset < 0 || entry.CompressedSize < 0 || entry.UncompressedSize < 0)
+      return ZipExtractResult.InvalidData;
+
+    if (entry.LocalHeaderOffset > archiveLength - LocalHeaderSize)
+      return ZipExtractResult.InvalidData;
+
     // Длины имени/extra берём из ЛОКАЛЬНОГО заголовка (могут отличаться от центрального).
     archive.Position = entry.LocalHeaderOffset;
 
@@ -88,9 +100,16 @@ public static class ZipStreamExtractor
 
     int nameLen = BinaryPrimitives.ReadUInt16LittleEndian(local.Slice(26, 2));
     int extraLen = BinaryPrimitives.ReadUInt16LittleEndian(local.Slice(28, 2));
-    long dataStart = entry.LocalHeaderOffset + LocalHeaderSize + nameLen + extraLen;
 
-    if (dataStart + entry.CompressedSize > archive.Length)
+    // Смещение данных: headerExtra ограничен сверху (30 + 2×65535), поэтому вычитание из длины
+    // потока не переполняется; при нехватке запаса возвращаем отказ вместо seek за конец потока.
+    long headerExtra = LocalHeaderSize + (long)nameLen + extraLen;
+    if (entry.LocalHeaderOffset > archiveLength - headerExtra)
+      return ZipExtractResult.InvalidData;
+
+    long dataStart = entry.LocalHeaderOffset + headerExtra;
+
+    if (entry.CompressedSize > archiveLength - dataStart)
       return ZipExtractResult.InvalidData;
 
     archive.Position = dataStart;
