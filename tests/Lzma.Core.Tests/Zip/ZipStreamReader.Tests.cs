@@ -215,13 +215,27 @@ public sealed class ZipStreamReaderTests
 
   // Строит ZIP-фикстуру с Zip64 extra по образцу теста выше, но с параметризованными значениями
   // в extra-поле (uncomp, comp, offset). Используется для проверки отклонения значений ≥ 2^63.
-  private static byte[] BuildZip64FixtureWithExtraValues(ulong uncompExtra, ulong compExtra, ulong offsetExtra)
+  private static byte[] BuildZip64FixtureWithExtraValues(
+      ulong uncompExtra,
+      ulong compExtra,
+      ulong offsetExtra,
+      bool uncompSentinel = true,
+      bool compSentinel = true,
+      bool offsetSentinel = true)
   {
     byte[] content = Encoding.UTF8.GetBytes("zip64 sign validation payload");
     uint crc = Crc32.Compute(content);
     byte[] name = Encoding.ASCII.GetBytes("z64sign.txt");
 
     var buf = new List<byte>();
+
+    // Данные ZIP64 extra: только те поля, которые помечены сентинелом, в порядке APPNOTE
+    // (uncompressed, compressed, offset). Это позволяет покрыть частично сентинельные ветви
+    // разбора (MINOR ревью B4b): при needUncomp=false первое поле extra — compressed.
+    var extraData = new List<byte>();
+    if (uncompSentinel) WriteU64(extraData, uncompExtra);
+    if (compSentinel) WriteU64(extraData, compExtra);
+    if (offsetSentinel) WriteU64(extraData, offsetExtra);
 
     long localOffset = buf.Count; // 0
     WriteU32(buf, 0x04034b50);                 // local file header
@@ -247,21 +261,19 @@ public sealed class ZipStreamReaderTests
     WriteU16(buf, 0);                          // mod time
     WriteU16(buf, 0x21);                       // mod date
     WriteU32(buf, crc);
-    WriteU32(buf, 0xFFFFFFFF);                 // comp size = сентинел → в extra
-    WriteU32(buf, 0xFFFFFFFF);                 // uncomp size = сентинел → в extra
+    WriteU32(buf, compSentinel ? 0xFFFFFFFF : (uint)content.Length);   // comp size
+    WriteU32(buf, uncompSentinel ? 0xFFFFFFFF : (uint)content.Length); // uncomp size
     WriteU16(buf, (ushort)name.Length);
-    WriteU16(buf, 28);                         // extra len (4 + 3×8)
+    WriteU16(buf, (ushort)(4 + extraData.Count)); // extra len
     WriteU16(buf, 0);                          // comment len
     WriteU16(buf, 0);                          // disk start
     WriteU16(buf, 0);                          // internal attrs
     WriteU32(buf, 0);                          // external attrs
-    WriteU32(buf, 0xFFFFFFFF);                 // local offset = сентинел → в extra
+    WriteU32(buf, offsetSentinel ? 0xFFFFFFFF : (uint)localOffset);   // local offset
     buf.AddRange(name);
     WriteU16(buf, 0x0001);                     // ZIP64 extra id
-    WriteU16(buf, 24);                         // размер данных extra
-    WriteU64(buf, uncompExtra);                // uncompressed (порядок по APPNOTE)
-    WriteU64(buf, compExtra);                  // compressed
-    WriteU64(buf, offsetExtra);                // offset
+    WriteU16(buf, (ushort)extraData.Count);    // размер данных extra
+    buf.AddRange(extraData);
     long cdSize = buf.Count - cdStart;
 
     long zip64EocdOffset = buf.Count;
@@ -360,6 +372,36 @@ public sealed class ZipStreamReaderTests
     Assert.Equal("z64sign.txt", entry.Name);
     Assert.Equal(29, entry.UncompressedSize);
     Assert.Equal(29, entry.CompressedSize);
+    Assert.Equal(0, entry.LocalHeaderOffset);
+  }
+
+  /// <summary>
+  /// Частично сентинельная ветвь (MINOR ревью B4b): сентинелем помечен ТОЛЬКО сжатый размер,
+  /// поэтому в ZIP64 extra ровно одно поле — compressed, а uncompressed и local offset берутся
+  /// из 32-битных полей каталога. Проверяет, что разбор extra не читает лишнего и порядок полей
+  /// по APPNOTE соблюдается (needUncomp=false, needComp=true, needOffset=false).
+  /// </summary>
+  [Fact]
+  public void ZIP64_Extra_ТолькоСжатыйРазмерСентинел_ЗначениеБерётсяИзExtra()
+  {
+    byte[] fixture = BuildZip64FixtureWithExtraValues(
+        uncompExtra: ulong.MaxValue,               // не используется: поле не сентинель
+        compExtra: 29,                             // единственное поле в extra (= content.Length)
+        offsetExtra: ulong.MaxValue,               // не используется
+        uncompSentinel: false,
+        compSentinel: true,
+        offsetSentinel: false);
+
+    using var ms = new MemoryStream(fixture, writable: false);
+    ZipReadResult result = ZipStreamReader.ReadCentralDirectory(ms, out ZipStreamEntry[] entries);
+
+    Assert.Equal(ZipReadResult.Ok, result);
+    ZipStreamEntry entry = Assert.Single(entries);
+    // Сжатый размер пришёл из extra (в 32-битном поле был сентинел 0xFFFFFFFF). Если бы разбор
+    // читал первое поле extra как uncompressed, здесь осталось бы значение сентинела или
+    // вернулось InvalidData из-за ulong.MaxValue в uncompExtra.
+    Assert.Equal(29, entry.CompressedSize);
+    Assert.Equal(29, entry.UncompressedSize);
     Assert.Equal(0, entry.LocalHeaderOffset);
   }
 
