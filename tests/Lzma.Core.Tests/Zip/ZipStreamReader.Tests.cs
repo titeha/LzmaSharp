@@ -338,6 +338,55 @@ public sealed class ZipStreamReaderTests
     Assert.Empty(entries);
   }
 
+  /// <summary>
+  /// Позитивный контроль билдера фикстуры (MINOR ревью B4b): на валидных значениях extra
+  /// каталог читается успешно и размеры/смещение берутся именно из extra. Без этого контроля
+  /// поломка билдера оставила бы три теста на отклонение сентинелей «зелёными» по посторонней
+  /// причине (InvalidData возвращался бы из-за испорченной фикстуры, а не из-за знака значения).
+  /// </summary>
+  [Fact]
+  public void ZIP64_Extra_ВалидныеЗначения_КаталогЧитается()
+  {
+    byte[] fixture = BuildZip64FixtureWithExtraValues(
+        uncompExtra: 29,                         // = content.Length
+        compExtra: 29,                           // method = store
+        offsetExtra: 0);                         // реальный local offset
+
+    using var ms = new MemoryStream(fixture, writable: false);
+    ZipReadResult result = ZipStreamReader.ReadCentralDirectory(ms, out ZipStreamEntry[] entries);
+
+    Assert.Equal(ZipReadResult.Ok, result);
+    ZipStreamEntry entry = Assert.Single(entries);
+    Assert.Equal("z64sign.txt", entry.Name);
+    Assert.Equal(29, entry.UncompressedSize);
+    Assert.Equal(29, entry.CompressedSize);
+    Assert.Equal(0, entry.LocalHeaderOffset);
+  }
+
+  /// <summary>
+  /// Граница проверки знака (MINOR ревью B4b): <see cref="long.MaxValue"/> — наибольшее
+  /// допустимое значение, оно принимается (отклоняются только значения ≥ 2^63, которые
+  /// unchecked-приведение из <see cref="ulong"/> переинтерпретирует как отрицательные).
+  /// Читатель каталога размеры не интерпретирует, поэтому результат — Ok с теми же значениями.
+  /// </summary>
+  [Fact]
+  public void ZIP64_Extra_LongMaxValue_ПринимаетсяКакПоложительное()
+  {
+    byte[] fixture = BuildZip64FixtureWithExtraValues(
+        uncompExtra: (ulong)long.MaxValue,
+        compExtra: (ulong)long.MaxValue,
+        offsetExtra: (ulong)long.MaxValue);
+
+    using var ms = new MemoryStream(fixture, writable: false);
+    ZipReadResult result = ZipStreamReader.ReadCentralDirectory(ms, out ZipStreamEntry[] entries);
+
+    Assert.Equal(ZipReadResult.Ok, result);
+    ZipStreamEntry entry = Assert.Single(entries);
+    Assert.Equal(long.MaxValue, entry.UncompressedSize);
+    Assert.Equal(long.MaxValue, entry.CompressedSize);
+    Assert.Equal(long.MaxValue, entry.LocalHeaderOffset);
+  }
+
   // --- B4c: overflow-safe guard смещения ZIP64 EOCD -------------------------------------------
 
   /// <summary>
