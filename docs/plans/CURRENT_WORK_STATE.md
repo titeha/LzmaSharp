@@ -6,7 +6,7 @@ last_verified_date: 2026-10-19
 main_branch: main
 main_commit: 3a55297106e6a978b460faa5bfe3b1a1b85b1041
 active_work_branch: fix/sec002-multivolume-transaction
-active_work_commit: e38ecb5
+active_work_commit: 0d81d9c
 next_task: "прочитать в CI (под авторизацией) причины видимых пропусков capability-probe на macos-latest и при подтверждении расхождения поправить FullPathLimit для macOS; далее по решению владельца: остаток B4c (тестовая гигиена), G8, DOC-017, SEAM-1/2, xUnit1051 (todo #35) либо A12 merge в main"
 ---
 
@@ -277,6 +277,17 @@ platform CI matrix остаются открытыми.
   регрессионной силы не имеет); дублирование ~60 строк билдера — техдолг.
   Факты после шага (Windows, `e38ecb5`): `Lzma.Core.Tests` 1773 passed / 1 skipped / 1774 всего;
   точечно `ZipStreamReader` — 12 / 0 / 0; Build Release 0 ошибок / 62 предупреждения (= baseline).
+
+- Остаток B4c закрыт ещё на один пункт, коммит `0d81d9c` (B4c-4, один test-файл, production не
+  менялся): билдер ZIP64-фикстуры параметризован по сентинелям (какие из трёх полей каталога
+  помечены 0xFFFFFFFF), а содержимое extra строится только из помеченных полей в порядке APPNOTE —
+  покрыта частично сентинельная ветвь разбора (`needComp = true` при `needUncomp = false`:
+  в extra ровно одно поле, и если бы разбор читал его как uncompressed, тест бы упал).
+  Факты после шага (Windows, `0d81d9c`): `Lzma.Core.Tests` 1774 passed / 1 skipped / 1775 всего;
+  точечно `ZipStreamReader` — 13 / 0 / 0; `Lzma.Ui.Tests` 239 / 0 / 0; Build Release 0 ошибок /
+  62 предупреждения (= baseline). Из списка MINOR ревью B4b остались только дублирование ~60 строк
+  второго билдера фикстуры (техдолг, на покрытие не влияет) и осознанно оставленный
+  `Assert.Empty(entries)`.
 
 ### B9b + B9c — точные формулировки в комментариях ядра и удаление мёртвой ветви журнала
 
