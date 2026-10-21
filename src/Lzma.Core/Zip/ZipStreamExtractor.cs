@@ -224,7 +224,7 @@ public static class ZipStreamExtractor
   {
     // Потоковый ВХОД: читаем ровно CompressedSize байт прямо из архива (позиция уже на начале данных),
     // выход пишем через окно. Ни сжатые, ни распакованные данные целиком в памяти не держим → член
-    // любого размера, в т.ч. >2 ГиБ.
+    // произвольного размера (кроме зашифрованного WinZip-AES — там предел 2 ГиБ, см. :146).
     var crcStream = new Crc32WriteStream(file, progress, total, processed);
     DeflateDecodeResult result;
     long written;
