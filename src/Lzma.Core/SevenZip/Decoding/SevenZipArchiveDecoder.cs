@@ -929,6 +929,12 @@ public static partial class SevenZipArchiveDecoder
       // успешной проверки folder-а и Dispose потоков, откат с восстановлением прежних байт при сбое.
       var journal = new StagedExtractionJournal();
 
+      // G4: длина пути назначения проверяется ДО создания root-каталога. Иначе слишком длинное
+      // destination отказывает на уровне ОС (Directory.CreateDirectory), и потребитель получает
+      // общий InternalError вместо отличимого PathTooLong; журнал при этом пуст, откат не нужен.
+      if (StagedExtractionJournal.IsPathTooLong(root, 0))
+        return SevenZipArchiveDecodeResult.PathTooLong;
+
       if (!Directory.Exists(StagedExtractionJournal.ToFileSystemPath(root)))
       {
         Directory.CreateDirectory(StagedExtractionJournal.ToFileSystemPath(root));
@@ -1065,13 +1071,10 @@ public static partial class SevenZipArchiveDecoder
             return SevenZipArchiveDecodeResult.InsufficientSpace;
         }
 
-        // Pre-flight: длина пути. Проверка выполняется до первой мутации, чтобы не начинать
-        // операцию, которая откажет на уровне ОС уже после публикации предыдущих элементов
-        // (и вернула бы общий InternalError вместо отличимого состояния).
+        // Pre-flight: длина пути выбранных записей. Длина root проверена выше — до создания
+        // каталога назначения (G4), поэтому здесь остаются только пути элементов.
         // Каталоги проверяются без суффикса стадии (он добавляется только к именам файлов),
         // потому что Directory.CreateDirectory на длинном пути тоже отказывает.
-        if (StagedExtractionJournal.IsPathTooLong(root, 0))
-          return SevenZipArchiveDecodeResult.PathTooLong;
 
         // Невыбранные записи не стадируются и не публикуются, поэтому в проверке длины они
         // не участвуют: частичное извлечение не должно отклоняться из-за длинного имени,

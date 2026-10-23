@@ -382,4 +382,50 @@ public sealed class SevenZipExtractPreflightTests
     long required = SevenZipArchiveDecoder.ComputeRequiredSpace(plan, selected);
     Assert.Equal(42, required);
   }
+
+  /// <summary>
+  /// G4: слишком длинное назначение. Путь длиннее фактического предела ОС, но в пределах
+  /// <c>Path.GetFullPath</c>. До фикса root-каталог создавался ДО проверки длины, поэтому
+  /// <c>Directory.CreateDirectory</c> отказывал на уровне ОС и возвращался общий
+  /// <c>InternalError</c>; теперь длина назначения проверяется до первой мутации и возвращается
+  /// отличимый <see cref="SevenZipArchiveDecodeResult.PathTooLong"/>, каталог не создаётся.
+  /// </summary>
+  [Fact]
+  public void ExtractToDirectory_СлишкомДлинноеНазначение_PathTooLong_ИКаталогНеСоздаётся()
+  {
+    int limit = StagedExtractionJournal.FullPathLimit;
+    // На Windows расширенная форма добавляет 4 символа, поэтому запас 6: путь заведомо длиннее
+    // предела ОС (32767 вместе с префиксом), но не длиннее допуска Path.GetFullPath.
+    int extra = OperatingSystem.IsWindows() ? 6 : 1;
+
+    string destination = BuildLongDestination(limit + extra);
+    byte[] archive = BuildLzma2(("a.txt", Payload("data")));
+
+    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.ExtractToDirectory(
+        archive: archive,
+        options: SevenZipDecodeOptions.Default,
+        destinationDirectory: destination,
+        overwrite: false,
+        bytesConsumed: out _);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.PathTooLong, result);
+    Assert.False(Directory.Exists(StagedExtractionJournal.ToFileSystemPath(destination)),
+        "каталог назначения не должен создаваться: отказ до первой мутации");
+  }
+
+  /// <summary>Строит путь заданной длины из компонентов по 255 символов (НЕ создавая его на диске).</summary>
+  private static string BuildLongDestination(int targetLength)
+  {
+    var sb = new StringBuilder(Path.Combine(Path.GetTempPath(), "lzs-g4-" + Guid.NewGuid().ToString("N")));
+    int remaining = targetLength - sb.Length;
+
+    while (remaining > 256)
+    {
+      sb.Append(Path.DirectorySeparatorChar).Append('d', 255);
+      remaining -= 256;
+    }
+
+    sb.Append(Path.DirectorySeparatorChar).Append('d', Math.Max(1, remaining - 1));
+    return sb.ToString();
+  }
 }
