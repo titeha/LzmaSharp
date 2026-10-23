@@ -46,10 +46,45 @@ public sealed class PlatformCapabilityProbeTests
   /// на 8 символов длиннее построенного. Без приведения к реальному пути измерение расходится
   /// с тем, что проверяет ядро системы (обнаружено падением probe в CI на macos-latest).
   /// </summary>
+  /// <summary>
+  /// Канонический корень для измерения длин. На macOS <c>Path.GetTempPath()</c> возвращает
+  /// <c>/var/folders/…</c>, а <c>/var</c> — symlink на <c>/private/var</c>, то есть ядро видит путь
+  /// на 8 символов длиннее построенного. <c>Directory.ResolveLinkTarget</c> разрешает только
+  /// КОНЕЧНЫЙ компонент, поэтому предыдущая версия probe получала null и не канонизировала путь —
+  /// из-за этого измерение дало 1016 вместо ожидаемых 1023 (расхождение было артефактом probe,
+  /// а не платформы). Здесь путь разрешается покомпонентно сверху.
+  /// </summary>
+  private static string Canonicalize(string path)
+  {
+    string root = Path.GetPathRoot(path) ?? Path.DirectorySeparatorChar.ToString();
+    // Корень сохраняем С разделителем («C:\», «/»): Path.Combine("C:", "dir") = "C:\dir",
+    // а без разделителя получился бы drive-relative «C:dir».
+    string result = root;
+
+    foreach (string part in path.Substring(root.Length).Split(
+                 Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+    {
+      string candidate = Path.Combine(result, part);
+      try
+      {
+        result = Directory.ResolveLinkTarget(candidate, returnFinalTarget: true)?.FullName ?? candidate;
+      }
+      catch (IOException)
+      {
+        result = candidate; // компонент не существует/не читается — оставляем как есть
+      }
+      catch (UnauthorizedAccessException)
+      {
+        result = candidate;
+      }
+    }
+
+    return result;
+  }
+
   private static string NewRoot(string tag)
   {
-    string temp = Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar);
-    string canonical = Directory.ResolveLinkTarget(temp, returnFinalTarget: true)?.FullName ?? temp;
+    string canonical = Canonicalize(Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar));
 
     string root = Path.Combine(canonical, $"lzsp-{tag}-{Guid.NewGuid():N}");
     Directory.CreateDirectory(StagedExtractionJournal.ToFileSystemPath(root));
