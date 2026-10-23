@@ -7,7 +7,7 @@ main_branch: main
 main_commit: 3a55297106e6a978b460faa5bfe3b1a1b85b1041
 active_work_branch: fix/sec002-multivolume-transaction
 active_work_commit: 0d81d9c
-next_task: "G4 (root до проверки длины, родительские каталоги вне журнала, длинное destination → PathTooLong), затем G8 перед публикацией (advisory+pinning, Description пакета), затем A12 merge вручную и тег core/1.1.0; по решению владельца — SEAM-2 и кросс-семейное ревью трёх production-диффов"
+next_task: "G8 перед публикацией (advisory-гейт + pinning зависимостей, обновление Description пакета), затем A12 merge вручную и тег core/1.1.0; по решению владельца — SEAM-2, кросс-семейное ревью production-диффов, промежуточные компоненты пути выбранного файла (G4-остаток)"
 ---
 
 # LzmaSharp: текущее состояние работ и ближайший план
@@ -219,6 +219,25 @@ platform CI matrix остаются открытыми.
 - full solution: 1918 passed = `Lzma.Ui.Tests` 219 + `Lzma.Core.Tests` 1699;
 - failed: 0; skipped: 0;
 - independent final review: `APPROVE` (SEC002-M6.5-FINAL).
+
+### G4 — длина пути назначения проверяется до создания root-каталога (7z)
+
+- Шаг (коммит `67eecb2`, дифф 8/5 в `SevenZipArchiveDecoder.cs` + 46/0 тесты): в 7z-маршруте
+  `Directory.CreateDirectory(root)` выполнялся ДО проверки `IsPathTooLong(root, 0)`, поэтому
+  слишком длинное назначение отказывало на уровне ОС и возвращался общий `InternalError`.
+  Проверка перенесена до создания каталога (журнал в этот момент пуст, откат не нужен);
+  дублирующая проверка ниже удалена, комментарии обновлены. ZIP-маршрут уже имел правильный
+  порядок (`ZipExtractor.cs:134` до `:149`) — не менялся.
+- RED наблюдался: тест с назначением длины `FullPathLimit + 6` (Windows; `+1` на POSIX) до фикса
+  возвращал `InternalError`, после фикса — `PathTooLong`, каталог назначения не создаётся.
+  Запас на Windows выбран так, чтобы путь был за пределом ОС (32767 вместе с префиксом `\?\`),
+  но в пределах допуска `Path.GetFullPath`.
+- Верификация (Windows, `67eecb2`): Build Release 0 ошибок / 62 предупреждения (= baseline);
+  `Lzma.Core.Tests` 1775 passed / 1 skipped / 1776; `Lzma.Ui.Tests` 239 / 0 / 0.
+- Остаток G4 (записан, не закрыт): промежуточные компоненты пути выбранного файла pre-flight
+  не проверяются (отказ придёт как `InternalError`, откат корректен); родительские каталоги
+  вложенного назначения создаются `Directory.CreateDirectory(root)` вне журнала — pre-existing
+  поведение, при откате удаляется только отслеженный root.
 
 ### Итог capability-probe: модель пределов подтверждена, расхождение на macOS было артефактом probe
 
