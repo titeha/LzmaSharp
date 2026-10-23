@@ -84,6 +84,25 @@ jobs:
             fi
           fi
 
+      # G8: гейт по известным уязвимостям зависимостей (прямые и транзитивные). Падение блокирует
+      # merge и публикацию; список уязвимых пакетов печатается в лог. Источники — nuget.org.
+      - name: "Аудит уязвимостей зависимостей (G8)"
+        shell: bash
+        run: |
+          set -uo pipefail
+          status=0
+          for proj in src/Lzma.Core/Lzma.Core.csproj src/Lzma.Ui/Lzma.Ui.csproj                       tests/Lzma.Core.Tests/Lzma.Core.Tests.csproj tests/Lzma.Ui.Tests/Lzma.Ui.Tests.csproj; do
+            echo "=== $proj ==="
+            out="$(dotnet list "$proj" package --vulnerable --include-transitive 2>&1 || true)"
+            echo "$out"
+            if echo "$out" | grep -qE '^[[:space:]]*>[[:space:]]'; then status=1; fi
+          done
+          if [ "$status" -ne 0 ]; then
+            echo "::error::Найдены уязвимые зависимости (список выше) — merge и публикация заблокированы"
+            exit 1
+          fi
+          echo "Уязвимых зависимостей не найдено."
+
       - name: Test (${{ matrix.os }}, Release)
         run: dotnet test -c Release --no-build --verbosity quiet --logger "trx;LogFileName=results.trx" --results-directory TestResults
 
