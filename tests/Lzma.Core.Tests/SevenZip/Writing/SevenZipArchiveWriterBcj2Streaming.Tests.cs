@@ -5,6 +5,7 @@ using System.IO;
 using System.Text;
 
 using Lzma.Core.SevenZip;
+using Lzma.Core.Tests.Helpers;
 
 namespace Lzma.Core.Tests.SevenZip;
 
@@ -117,9 +118,7 @@ public sealed class SevenZipArchiveWriterBcj2StreamingTests
   [Fact]
   public void ПотоковыйAuto_Bcj2_Читается7Zip()
   {
-    const string sevenZip = @"C:\Program Files\7-Zip\7z.exe";
-    if (!File.Exists(sevenZip))
-      return;
+    string sevenZip = SevenZipInterop.RequireExecutable();
 
     byte[] pe = MakePeExecutable(40000, 0x5A5A);
     var entries = new List<SevenZipStreamingEntry> { new("app.exe", pe.LongLength, () => new MemoryStream(pe)) };

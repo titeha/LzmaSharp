@@ -27,7 +27,7 @@
 | ID | Риск | Статус |
 |---|---|---|
 | SEC-001 | потеря существующих файлов при extract + overwrite | открыт |
-| SEC-002 | создание архива напрямую в конечный путь | закрыт 2026-08-12 (HEAD `10377e2`; блокирующие регрессионные тесты зелёные; независимый критик APPROVE) |
+| SEC-002 | создание архива напрямую в конечный путь | транзакционное создание реализовано (M4B/M5/M6/M7 + F1/F2/F3); глобальный gate 2026-10-13 на HEAD `412c563` — `APPROVE_WITH_FINDINGS` (BLOCKING/MAJOR нет; прогон 1924 passed / 0 failed / 0 skipped). Ранняя отметка «закрыт 2026-08-12 (HEAD `10377e2`)» относилась к первой фазе и была подтверждена повторно этим gate. Остаточные ограничения: нет crash/power-loss recovery, нет атомарности набора томов, CI-матрица добавлена, но не прогнана |
 | SEC-003 | symlink/junction/reparse/TOCTOU | открыт |
 | SEC-004 | отсутствие общего resource budget | открыт |
 | SEC-005 | KDF CPU/memory DoS и слабая отменяемость | открыт |
@@ -111,7 +111,7 @@
 
 ### RH-001. Закрыть контракт `ThrowBeforeCrossingWriteStream`
 
-Статус: закрыт на уровне test harness (HEAD `70c0493`). Это harness-статус, а не production-fix: SEC-001/SEC-002 остаются открытыми. Решение по пункту 7 закреплено тестом: `Write` после `Dispose` бросает `ObjectDisposedException`.
+Статус: закрыт на уровне test harness (HEAD `70c0493`). Это harness-статус, а не production-fix. Уточнение 2026-10-13: для SEC-002 production-реализация существует и прошла глобальный gate (HEAD `412c563`, `APPROVE_WITH_FINDINGS`); SEC-001 (транзакционное извлечение) остаётся открытым. Решение по пункту 7 закреплено тестом: `Write` после `Dispose` бросает `ObjectDisposedException`.
 
 Выполненные микрошаги:
 
@@ -244,7 +244,11 @@ Create_DestinationWriteFailure_PreservesExistingArchive
 
 Независимая проверка: APPROVE (вердикт `c:\Temp\SEC-002_phase_critic_review.md`,
 2 minor + 2 nit, без critical/major; оба minor отражены в ограничениях выше).
-SEC-002 закрыт 2026-08-12 на HEAD `10377e2`.
+SEC-002 закрыт 2026-08-12 на HEAD `10377e2` (первая фаза). Подтверждено повторно 2026-10-13
+глобальным gate на HEAD `412c563`: обходных маршрутов создания архива нет, все create entry
+points идут через staging, прогон 1924 passed / 0 failed / 0 skipped. Границы: нет
+crash/power-loss recovery, нет атомарности набора томов, CI-матрица ОС добавлена (`e04c90e`),
+но не прогнана (push не выполнялся); SEC-001 (извлечение) остаётся открытым.
 
 ## 5. SEC-001 — транзакционное извлечение
 

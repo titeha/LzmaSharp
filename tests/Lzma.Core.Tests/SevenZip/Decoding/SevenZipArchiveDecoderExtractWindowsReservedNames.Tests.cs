@@ -30,7 +30,7 @@ public sealed class SevenZipArchiveDecoderExtractWindowsReservedNamesTests
   {
     // Эти правила относятся именно к Windows.
     if (!OperatingSystem.IsWindows())
-      return;
+      Assert.Skip("Зарезервированные имена Windows (CON, NUL и подобные) и обрезка пробелов/точек — правила Windows; на других ОС не применяются.");
 
     byte[] plain = MakePattern(128, mul: 31, add: 7);
     byte[] archive = BuildArchiveSingleFileCopy(plain, entryName);

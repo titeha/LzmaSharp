@@ -10,13 +10,41 @@ namespace Lzma.Ui.Services;
 /// <see cref="Commit"/> после успешного завершения операции.
 /// </summary>
 /// <remarks>
-/// Шаги 10.1–10.3: staged-база вычисляется рядом с назначением, manifest
+/// <para>Шаги 10.1–10.3: staged-база вычисляется рядом с назначением, manifest
 /// заполняется через <see cref="SetVolumes"/>, <see cref="Commit"/> переносит
 /// тома в конечные имена, <see cref="Dispose"/> убирает staged-тома без
-/// публикации. Подключение к сервису — шаг 10.4.
+/// публикации. Подключение к сервису — шаг 10.4.</para>
+/// <para>SEC002-M6.1B: тип управляет lifecycle через внутреннее состояние
+/// (Created → Ready → Committing → Committed/Failed → Disposed). Commit —
+/// one-shot: любой выход кроме успеха фиксирует Failed и запрещает повтор.
+/// <b>Не является потокобезопасным</b>: единственный владелец, без локов.</para>
 /// </remarks>
 internal sealed class StagedVolumeSet : System.IDisposable
 {
+  /// <summary>
+  /// SEC002-M6.1B: внутреннее состояние транзакции. Commit — one-shot;
+  /// любой выход кроме успеха запрещает повторный Commit/SetVolumes.
+  /// </summary>
+  private enum State
+  {
+    Created,
+    Ready,
+    Committing,
+    Committed,
+    Failed,
+    Disposed
+  }
+  /// <summary>
+  /// SEC002-M6.2B: platform-specific comparer для нормализованных путей.
+  /// Windows: OrdinalIgnoreCase (NTFS case-insensitive по умолчанию).
+  /// Other: Ordinal (POSIX case-sensitive).
+  /// </summary>
+  private static readonly StringComparer PathComparer =
+      OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
+  /// <summary>Seam файловых операций (инъекция для тестов/детерминированных отказов).</summary>
+  private readonly IStagedVolumeFileOperations _fileOperations;
+
   /// <summary>Базовый путь назначения; тома получают суффиксы .001/.002/…</summary>
   private readonly string _destinationBasePath;
 
@@ -26,8 +54,19 @@ internal sealed class StagedVolumeSet : System.IDisposable
   /// <summary>Manifest: staged-тома, зафиксированные для commit/cleanup.</summary>
   private readonly List<string> _manifest = [];
 
-  /// <summary>Была ли успешная публикация staged-томов в назначение.</summary>
-  private bool _committed;
+  /// <summary>
+  /// Замороженные (frozen) operational-пути staged-томов: канонические абсолютные пути,
+  /// вычисленные один раз в <see cref="SetVolumes"/> через <see cref="Path.GetFullPath(string)"/>
+  /// после прохождения всех проверок. Используются всеми поздними файловыми операциями
+  /// (precheck, Move-источник, cleanup staged, Dispose) вместо исходных строк manifest,
+  /// чтобы изменение CWD между <see cref="SetVolumes"/> и <see cref="Commit"/> не могло
+  /// перенаправить относительные пути на непроверенный каталог.
+  /// Порядок элементов совпадает с порядком <see cref="_manifest"/>.
+  /// </summary>
+  private readonly List<string> _operationalPaths = [];
+
+  /// <summary>Текущее состояние транзакции (SEC002-M6.1B).</summary>
+  private State _state;
 
   /// <summary>
   /// Инициализирует новый экземпляр класса <see cref="StagedVolumeSet"/>
@@ -36,12 +75,27 @@ internal sealed class StagedVolumeSet : System.IDisposable
   /// <param name="destinationBasePath">Базовый путь назначения многотомного архива.</param>
   /// <exception cref="ArgumentException">Базовый путь пуст или состоит из пробелов.</exception>
   public StagedVolumeSet(string destinationBasePath)
+      : this(destinationBasePath, new StagedVolumeFileOperations())
   {
+  }
+
+  /// <summary>
+  /// Конструктор для тестовой инъекции seam файловых операций.
+  /// </summary>
+  /// <param name="destinationBasePath">Базовый путь назначения многотомного архива.</param>
+  /// <param name="fileOperations">Seam файловых операций (не может быть null).</param>
+  /// <exception cref="ArgumentNullException">fileOperations равен null.</exception>
+  /// <exception cref="ArgumentException">Базовый путь пуст или состоит из пробелов.</exception>
+  internal StagedVolumeSet(string destinationBasePath, IStagedVolumeFileOperations fileOperations)
+  {
+    ArgumentNullException.ThrowIfNull(fileOperations);
+
     if (string.IsNullOrWhiteSpace(destinationBasePath))
     {
       throw new ArgumentException("Базовый путь томов не может быть пустым.", nameof(destinationBasePath));
     }
 
+    _fileOperations = fileOperations;
     _destinationBasePath = destinationBasePath;
     _stagedBasePath = BuildStagedBasePath(destinationBasePath);
   }
@@ -53,76 +107,406 @@ internal sealed class StagedVolumeSet : System.IDisposable
   public string StagedBasePath => _stagedBasePath;
 
   /// <summary>Manifest: staged-тома, зафиксированные для commit/cleanup.</summary>
-  public IReadOnlyList<string> Manifest => _manifest;
+  public IReadOnlyList<string> Manifest => _manifest.AsReadOnly();
 
   /// <summary>
   /// Фиксирует в manifest созданные staged-тома. Вызывается после полного
   /// завершения записи, до <see cref="Commit"/>.
   /// </summary>
   /// <param name="stagedVolumePaths">Пути созданных staged-томов в порядке .001, .002, …</param>
-  /// <exception cref="InvalidOperationException">Manifest уже заполнен.</exception>
+  /// <exception cref="ObjectDisposedException">Объект уже диспозирован.</exception>
+  /// <exception cref="InvalidOperationException">Manifest уже заполнен или Commit уже выполнен/отклонён.</exception>
+  /// <exception cref="ArgumentException">
+  /// Список пуст, содержит null/empty/whitespace элементы, дубликаты (после нормализации),
+  /// или staged-путь коллидирует с финальным путём.
+  /// </exception>
   public void SetVolumes(IReadOnlyList<string> stagedVolumePaths)
   {
+    // SEC002-M6.1B: lifecycle guards.
+    if (_state == State.Disposed)
+    {
+      throw new ObjectDisposedException(nameof(StagedVolumeSet));
+    }
+
     ArgumentNullException.ThrowIfNull(stagedVolumePaths);
 
-    if (_manifest.Count > 0)
+    if (_state != State.Created)
     {
-      throw new InvalidOperationException("Manifest staged-томов уже заполнен.");
+      throw new InvalidOperationException(
+          $"SetVolumes разрешён только в состоянии Created (текущее: {_state}).");
     }
 
-    _manifest.AddRange(stagedVolumePaths);
-  }
-
-  /// <summary>
-  /// Коммитит staged-тома в конечные имена <c>{DestinationBasePath}.NNN</c> с заменой
-  /// существующих и удаляет лишние старые тома, если новый набор короче.
-  /// Вызывать только после успешного завершения операции и <see cref="SetVolumes"/>.
-  /// Ошибки переноса/удаления пробрасываются: частичная публикация или лишний старый
-  /// том делают многотомный набор нечитаемым.
-  /// </summary>
-  /// <exception cref="InvalidOperationException">Manifest не заполнен.</exception>
-  public void Commit()
-  {
-    if (_manifest.Count == 0)
+    // SEC002-M6.2B: shape validation — reject empty list.
+    if (stagedVolumePaths.Count == 0)
     {
-      throw new InvalidOperationException("Manifest staged-томов не заполнен.");
+      throw new ArgumentException("Список staged-путей не может быть пустым.", nameof(stagedVolumePaths));
     }
 
-    // Перенос staged-томов в конечные имена с заменой существующих.
-    for (int i = 0; i < _manifest.Count; i++)
-    {
-      File.Move(_manifest[i], VolumeSpanningWriteStream.VolumePath(_destinationBasePath, i), overwrite: true);
-    }
+    // SEC002-M6.2B: shape validation — reject null/empty/whitespace, duplicates, collisions.
+    var normalizedPaths = new HashSet<string>(PathComparer);
+    var frozenPaths = new List<string>(stagedVolumePaths.Count);
 
-    // Устаревшие тома: старый набор мог быть длиннее нового. Имена томов идут
-    // без пропусков (.001/.002/…), поэтому чистим подряд до первого отсутствующего.
-    for (int i = _manifest.Count; ; i++)
+    for (int i = 0; i < stagedVolumePaths.Count; i++)
     {
-      string stale = VolumeSpanningWriteStream.VolumePath(_destinationBasePath, i);
-      if (!File.Exists(stale))
+      string path = stagedVolumePaths[i];
+
+      // Reject null/empty/whitespace.
+      if (string.IsNullOrWhiteSpace(path))
       {
-        break;
+        throw new ArgumentException(
+            $"Staged-путь не может быть null/empty/whitespace (индекс {i}).",
+            nameof(stagedVolumePaths));
       }
 
-      File.Delete(stale);
+      // Normalize for comparison.
+      string normalized = Path.GetFullPath(path);
+      frozenPaths.Add(normalized);
+
+      // Reject duplicates.
+      if (!normalizedPaths.Add(normalized))
+      {
+        throw new ArgumentException(
+            $"Staged-путь дублируется после нормализации: {path} (индекс {i}).",
+            nameof(stagedVolumePaths));
+      }
+
+      // Reject collision with final paths.
+      for (int j = 0; j < stagedVolumePaths.Count; j++)
+      {
+        string finalPath = VolumeSpanningWriteStream.VolumePath(_destinationBasePath, j);
+        string normalizedFinal = Path.GetFullPath(finalPath);
+
+        if (PathComparer.Equals(normalized, normalizedFinal))
+        {
+          throw new ArgumentException(
+              $"Staged-путь коллидирует с финальным путём: {path} (индекс {i}) == {finalPath}.",
+              nameof(stagedVolumePaths));
+        }
+      }
     }
 
-    _committed = true;
+    // Все проверки пройдены: сохраняем оригинальные строки и переходим в Ready.
+    _manifest.AddRange(stagedVolumePaths);
+    _operationalPaths.AddRange(frozenPaths);
+    _state = State.Ready;
   }
 
   /// <summary>
-  /// Rollback/cleanup: если <see cref="Commit"/> не было, удаляет staged-тома.
-  /// Кроме manifest сканирует диск: запись могла прерваться до <see cref="SetVolumes"/>.
-  /// Ошибки удаления глотаются — очистка не должна маскировать исходную ошибку операции.
+  /// Коммитит staged-тома в конечные имена <c>{DestinationBasePath}.NNN</c>.
+  /// Вызывать только после успешного завершения операции и <see cref="SetVolumes"/>.
+  /// Перед первой мутацией назначения проверяет, существует ли первый нумерованный
+  /// путь вне нового manifest (<c>{base}.{N+1:D3}</c>, где <c>N</c> = число staged-томов).
+  /// Если такой файл существует, операция отклоняется с
+  /// <see cref="StagedVolumeConflictException"/> до создания backup, публикации или
+  /// удаления. Файлы за разрывом нумерации не обнаруживаются и не модифицируются.
+  /// Мутируются только пути, журналированные текущей операцией (manifest + backup +
+  /// опубликованные тома). Ошибки переноса пробрасываются: частичная публикация
+  /// делает многотомный набор нечитаемым.
+  /// </summary>
+  /// <exception cref="ObjectDisposedException">Объект уже диспозирован.</exception>
+  /// <exception cref="InvalidOperationException">
+  /// Commit уже был выполнен/отклонён, или manifest не заполнен.
+  /// Транзакция one-shot: повторный Commit запрещён в любом состоянии кроме Ready.
+  /// </exception>
+  /// <exception cref="StagedVolumeConflictException">
+  /// Непосредственно за новым manifest существует дополнительный нумерованный файл
+  /// с недоказанным ownership.
+  /// </exception>
+  /// <exception cref="FileNotFoundException">
+  /// Staged-файл тома не найден на диске. Свойство <c>FileName</c> содержит
+  /// канонический (frozen) путь, зафиксированный при <see cref="SetVolumes"/>,
+  /// а не исходную строку manifest — это гарантирует детерминированную диагностику
+  /// независимо от текущего рабочего каталога процесса.
+  /// </exception>
+  public void Commit()
+  {
+    // SEC002-M6.1B: lifecycle guards. Disposed и «не Ready» отклоняются до
+    // любых файловых операций; one-shot Commit запрещает retry даже после
+    // чистого rollback.
+    if (_state == State.Disposed)
+    {
+      throw new ObjectDisposedException(nameof(StagedVolumeSet));
+    }
+
+    if (_state != State.Ready)
+    {
+      throw new InvalidOperationException(
+          _manifest.Count == 0
+              ? "Manifest staged-томов не заполнен."
+              : $"Commit разрешён только в состоянии Ready (текущее: {_state}). Повторный Commit запрещён.");
+    }
+
+    _state = State.Committing;
+    try
+    {
+
+    // SEC002-M6.3B: pre-mutation existence check. Каждый staged-файл manifest
+    // проверяется через существующий seam до conflict probe, backup, publish и
+    // Delete: отсутствующий источник —FileNotFoundException до первой мутации
+    // назначения (каталог считается отсутствующим, т.к. File.Exists для него false).
+    // M6.1 finally фиксирует Failed — повторный Commit запрещён.
+    foreach (string stagedPath in _operationalPaths)
+    {
+      if (!_fileOperations.Exists(stagedPath))
+      {
+        throw new FileNotFoundException(
+            "Staged-файл тома не найден; публикация отклонена до первой мутации назначения.",
+            stagedPath);
+      }
+    }
+
+    // SEC002-M5.2: pre-mutation conflict check. Проверяем только первый нумерованный
+    // путь за новым manifest. Если он существует — это дополнительный файл с
+    // недоказанным ownership; отклоняем до первой мутации назначения.
+    string firstAdditional = VolumeSpanningWriteStream.VolumePath(_destinationBasePath, _manifest.Count);
+    if (_fileOperations.Exists(firstAdditional))
+    {
+      throw new StagedVolumeConflictException(firstAdditional);
+    }
+
+    // Резервная фаза: до публикации ни одного нового тома переносим все существующие
+    // управляемые конечные тома в уникальные backup-пути (в том же каталоге).
+    var backups = new List<(string FinalPath, string BackupPath)>();
+    try
+    {
+      BackupFinalVolumes(backups);
+    }
+    catch (Exception backupFailure) when (IsControlledFailure(backupFailure))
+    {
+      // Сбой внутри backup-фазы: новые тома ещё не публиковались, откатываем уже
+      // созданные резервные копии в обратном порядке (best-effort: каждый элемент
+      // ловится отдельно, цикл продолжается). SEC002-M7: после restore выполняется
+      // best-effort staged-cleanup по frozen-путям _operationalPaths. Ошибки обоих
+      // этапов собираются в общий агрегат. Данные важнее чистоты: при отказе restore
+      // уцелевшие .bak остаются (M7-Q5). Не-контролируемое исключение пробрасывается
+      // как есть и не агрегируется (граница M6.4B).
+      var restoreErrors = RestoreBackups(backups);
+
+      var cleanupErrors = new List<Exception>();
+      foreach (string staged in _operationalPaths)
+      {
+        TryDelete(staged, cleanupErrors);
+      }
+
+      if (restoreErrors.Count > 0 || cleanupErrors.Count > 0)
+      {
+        throw new AggregateException(
+            "Ошибка backup-фазы с последующим сбоем отката резервных копий.",
+            [backupFailure, .. restoreErrors, .. cleanupErrors]);
+      }
+
+      throw;
+    }
+
+    // Публикация: перенос staged-томов в конечные имена. После успешной резервной
+    // фазы управляемые конечные имена уже освобождены, поэтому используем
+    // overwrite:false — не затираем неожиданно появившийся объект.
+    var published = new List<string>();
+    try
+    {
+      for (int i = 0; i < _manifest.Count; i++)
+      {
+        string finalPath = VolumeSpanningWriteStream.VolumePath(_destinationBasePath, i);
+        _fileOperations.Move(_operationalPaths[i], finalPath, overwrite: false);
+        published.Add(finalPath);
+      }
+    }
+    catch (Exception publishFailure) when (IsControlledFailure(publishFailure))
+    {
+      // Сбой публикации: удаляем уже опубликованные новые конечные тома (в обратном
+      // порядке), восстанавливаем все успешные backup и чистим staged-файлы best-effort.
+      // Первичное исключение публикации сохраняется; ошибки отката не глотаются.
+      var rollbackErrors = new List<Exception>();
+      RollbackPublish(published, backups, rollbackErrors);
+
+      if (rollbackErrors.Count == 0)
+      {
+        throw;
+      }
+
+      throw new AggregateException(
+          "Ошибка публикации томов с последующим сбоем отката.",
+          [publishFailure, .. rollbackErrors]);
+    }
+
+    // Commit point (SEC002-M4B + SEC002-M6.1B): состояние фиксируется ДО
+    // backup cleanup; отказ cleanup не откатывает Committed.
+    _state = State.Committed;
+
+    // Коммит-поинт пройден: удаляем только backups текущей операции (журнал backups),
+    // best-effort. Контролируемый отказ cleanup не откатывает уже опубликованный набор
+    // и не должен делать Commit транзакционно неуспешным.
+    foreach ((string _, string backupPath) in backups)
+    {
+      try
+      {
+        _fileOperations.Delete(backupPath);
+      }
+      catch (Exception ex) when (IsControlledFailure(ex))
+      {
+        // Cleanup best-effort: отказавший backup может остаться на диске.
+      }
+    }
+    }
+    finally
+    {
+      // SEC002-M6.1B: любой нештатный выход из Commit (контролируемый отказ,
+      // rollback-failure, non-controlled exception) фиксирует Failed и
+      // запрещает повторный Commit. Успех уже зафиксировал Committed выше.
+      if (_state == State.Committing)
+      {
+        _state = State.Failed;
+      }
+    }
+  }
+
+  /// <summary>
+  /// Откатывает сбой публикации в фиксированном порядке: удаляет опубликованные новые
+  /// конечные тома в обратном порядке публикации, затем восстанавливает backup-копии в
+  /// обратном порядке резервирования, затем best-effort чистит staged-файлы manifest.
+  /// Ошибки каждой операции собираются в <paramref name="errors"/> без проброса.
+  /// </summary>
+  private void RollbackPublish(
+      List<string> published,
+      List<(string FinalPath, string BackupPath)> backups,
+      List<Exception> errors)
+  {
+    // 1. Удаляем только успешно опубликованные новые конечные тома, в обратном порядке.
+    for (int i = published.Count - 1; i >= 0; i--)
+    {
+      TryDelete(published[i], errors);
+    }
+
+    // 2. Восстанавливаем все успешно созданные backup-копии в обратном порядке.
+    for (int i = backups.Count - 1; i >= 0; i--)
+    {
+      (string finalPath, string backupPath) = backups[i];
+      try
+      {
+        _fileOperations.Move(backupPath, finalPath, overwrite: false);
+      }
+      catch (Exception ex) when (IsControlledFailure(ex))
+      {
+        errors.Add(ex);
+      }
+    }
+
+    // 3. Best-effort чистим оставшиеся staged-файлы текущего manifest.
+    foreach (string staged in _operationalPaths)
+    {
+      TryDelete(staged, errors);
+    }
+  }
+
+  /// <summary>
+  /// Удаляет файл, собирая контролируемые ошибки файловой системы в <paramref name="errors"/>.
+  /// </summary>
+  private void TryDelete(string path, List<Exception> errors)
+  {
+    try
+    {
+      _fileOperations.Delete(path);
+    }
+    catch (Exception ex) when (IsControlledFailure(ex))
+    {
+      errors.Add(ex);
+    }
+  }
+
+  /// <summary>
+  /// Контролируемые отказы файловой системы, для которых выполняется rollback.
+  /// Фатальные ошибки процесса (OOM/StackOverflow/AccessViolation и т.п.) не перехватываются.
+  /// </summary>
+  private static bool IsControlledFailure(Exception ex)
+      => ex is IOException or UnauthorizedAccessException;
+
+  /// <summary>
+  /// Переносит все существующие управляемые конечные тома (по числу записей staged
+  /// manifest) в уникальные backup-пути в том же каталоге. Успешно созданная резервная
+  /// копия регистрируется в <paramref name="backups"/> сразу после каждого Move.
+  /// </summary>
+  private void BackupFinalVolumes(List<(string FinalPath, string BackupPath)> backups)
+  {
+    for (int i = 0; i < _manifest.Count; i++)
+    {
+      string finalPath = VolumeSpanningWriteStream.VolumePath(_destinationBasePath, i);
+      if (!_fileOperations.Exists(finalPath))
+      {
+        continue;
+      }
+
+      string backupPath = BuildBackupPath(finalPath);
+      _fileOperations.Move(finalPath, backupPath, overwrite: false);
+      backups.Add((finalPath, backupPath));
+    }
+  }
+
+  /// <summary>
+  /// Best-effort откат созданных резервных копий в обратном порядке: backup → исходный
+  /// конечный путь. Каждый перенос обёрнут в per-item catch для контролируемых отказов
+  /// (M7-Q3): цикл продолжается после сбоя, ошибки собираются в возвращаемый список.
+  /// Non-controlled исключение пробрасывается как есть и не агрегируется (граница M6.4B).
+  /// Конечные пути, для которых backup не был создан, и посторонние файлы не затрагиваются.
+  /// Уцелевшие резервные копии (.bak) не удаляются (M7-Q5).
+  /// </summary>
+  private List<Exception> RestoreBackups(List<(string FinalPath, string BackupPath)> backups)
+  {
+    var errors = new List<Exception>();
+    for (int i = backups.Count - 1; i >= 0; i--)
+    {
+      (string finalPath, string backupPath) = backups[i];
+      try
+      {
+        _fileOperations.Move(backupPath, finalPath, overwrite: false);
+      }
+      catch (Exception ex) when (IsControlledFailure(ex))
+      {
+        errors.Add(ex);
+      }
+    }
+    return errors;
+  }
+
+  /// <summary>
+  /// Строит уникальный backup-путь в том же каталоге, что и конечный том.
+  /// </summary>
+  private static string BuildBackupPath(string finalPath)
+  {
+    string? directory = Path.GetDirectoryName(finalPath);
+    if (string.IsNullOrEmpty(directory))
+    {
+      directory = ".";
+    }
+
+    string fileName = Path.GetFileName(finalPath);
+    return Path.Combine(directory, $"{fileName}.{Guid.NewGuid():N}.bak");
+  }
+
+  /// <summary>
+  /// Rollback/cleanup: удаляет staged-тома best-effort, если транзакция не
+  /// завершилась успешно. После Committed не выполняет файловых
+  /// операций (опубликованный набор не затрагивается). Идемпотентен.
+  /// Read-only свойства остаются читаемыми после Dispose.
   /// </summary>
   public void Dispose()
   {
-    if (_committed)
+    // SEC002-M6.1B: идемпотентность.
+    if (_state == State.Disposed)
     {
       return;
     }
 
-    var victims = new List<string>(_manifest);
+    // SEC002-M6.1B: после успешного commit файловых операций нет.
+    if (_state == State.Committed)
+    {
+      _state = State.Disposed;
+      return;
+    }
+
+    // Created/Ready/Committing/Failed: существующая best-effort staged cleanup.
+    // Committing — только при concurrent misuse (не thread-safe, документировано).
+
+    var victims = new List<string>(_operationalPaths);
     foreach (string path in ProbeStagedVolumes())
     {
       if (!victims.Contains(path))
@@ -135,7 +519,7 @@ internal sealed class StagedVolumeSet : System.IDisposable
     {
       try
       {
-        File.Delete(path);
+        _fileOperations.Delete(path);
       }
       catch (IOException)
       {
@@ -146,6 +530,8 @@ internal sealed class StagedVolumeSet : System.IDisposable
         // Очистка best-effort: нет доступа к staged-тому.
       }
     }
+
+    _state = State.Disposed;
   }
 
   /// <summary>
@@ -157,7 +543,7 @@ internal sealed class StagedVolumeSet : System.IDisposable
     for (int i = 0; ; i++)
     {
       string path = VolumeSpanningWriteStream.VolumePath(_stagedBasePath, i);
-      if (!File.Exists(path))
+      if (!_fileOperations.Exists(path))
       {
         break;
       }
@@ -184,5 +570,25 @@ internal sealed class StagedVolumeSet : System.IDisposable
 
     string fileName = Path.GetFileName(destinationBasePath);
     return Path.Combine(directory, $"{fileName}.{Guid.NewGuid():N}.volumes.tmp");
+  }
+}
+
+/// <summary>
+/// Конфликт назначения: дополнительный нумерованный файл существует непосредственно
+/// за новым manifest, но его ownership не может быть доказан текущим контрактом.
+/// Исключение выбрасывается ДО первой мутации назначения; никакие файлы не
+/// создаются, не перемещаются и не удаляются. Наследует <see cref="IOException"/>,
+/// чтобы существующая граница ошибок сервиса продолжала маппить его в
+/// <c>SevenZipArchiveWriteResult.InternalError</c>.
+/// </summary>
+internal sealed class StagedVolumeConflictException : IOException
+{
+  /// <summary>Путь конфликтующего нумерованного файла.</summary>
+  public string ConflictingPath { get; }
+
+  internal StagedVolumeConflictException(string conflictingPath)
+      : base($"Дополнительный нумерованный файл существует и его ownership не доказан: {conflictingPath}")
+  {
+    ConflictingPath = conflictingPath;
   }
 }

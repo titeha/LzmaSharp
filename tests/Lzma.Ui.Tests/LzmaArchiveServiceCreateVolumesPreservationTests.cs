@@ -80,12 +80,19 @@ public sealed class LzmaArchiveServiceCreateVolumesPreservationTests
   }
 
   /// <summary>
-  /// SEC-002 (§4.4 шаги 10.4–10.5): успешное создание многотомного архива поверх
-  /// существующего набора БОЛЬШЕГО размера: новые тома публикуются, лишние старые
-  /// тома удаляются, опубликованный архив извлекается с совпадением содержимого.
+  /// SEC-002 (§4.4, SEC002-M5.3; замена прежнего теста
+  /// <c>CreateVolumes_SuccessOverLargerOldSet_PublishesAndRemovesStaleVolumes</c>
+  /// после утверждения conservative ownership policy): дополнительный нумерованный
+  /// файл непосредственно за новым manifest имеет недоказанный ownership, поэтому
+  /// операция отклоняется ДО первой мутации назначения. Сервис в текущей границы
+  /// ошибок маппит конфликт (производное от <see cref="IOException"/>) в
+  /// <see cref="SevenZipArchiveWriteResult.InternalError"/>. Все тома существовавшего
+  /// набора остаются байт-в-байт неизменными, staged/backup-остатки отсутствуют,
+  /// старый набор остаётся читаемым. Утверждения об атомарности на уровне ФС здесь
+  /// не делаются.
   /// </summary>
   [Fact]
-  public async Task CreateVolumes_SuccessOverLargerOldSet_PublishesAndRemovesStaleVolumes()
+  public async Task CreateVolumes_AdditionalNumberedFiles_PreservesExistingSetAndReportsConflict()
   {
     var service = new LzmaArchiveService();
 
@@ -95,7 +102,7 @@ public sealed class LzmaArchiveServiceCreateVolumesPreservationTests
     {
       string basePath = Path.Combine(dir, "existing.7z");
 
-      // Исходный многотомный набор: содержимое больше одного тома.
+      // Исходный многотомный набор: содержимое заведомо больше одного тома.
       byte[] oldContent = new byte[3000];
       for (int i = 0; i < oldContent.Length; i++)
       {
@@ -110,9 +117,17 @@ public sealed class LzmaArchiveServiceCreateVolumesPreservationTests
       SevenZipArchiveWriteResult first = await service.CreateArchiveToFileAsync(
           oldEntries, basePath, SevenZipWriterCompressionMethod.Copy, dictionarySize: 1 << 16, volumeSize: 1024);
       Assert.Equal(SevenZipArchiveWriteResult.Ok, first);
-      Assert.True(Directory.GetFiles(dir).Length >= 2);
 
-      // Успешное создание поверх той же базы меньшим архивом (один том).
+      // Снимок доказательств сохранности ДО второй операции: точные пути томов,
+      // точные байты каждого тома и полный отсортированный список файлов каталога.
+      string[] oldVolumes = Directory.GetFiles(dir).OrderBy(p => p).ToArray();
+      Assert.True(oldVolumes.Length >= 2, "Исходный набор должен быть действительно многотомным.");
+      string[] beforeFiles = (string[])oldVolumes.Clone();
+      var originalBytes = oldVolumes.ToDictionary(p => p, File.ReadAllBytes);
+
+      // Попытка создать меньший однотомный архив поверх той же базы: непосредственно
+      // за новым manifest существует archive.002 с недоказанным ownership → отказ
+      // до первой мутации. Никакого исключения наружу сервиса не ожидается.
       byte[] newContent = Encoding.UTF8.GetBytes("маленький архив на один том");
 
       SevenZipStreamingEntry[] newEntries =
@@ -122,17 +137,28 @@ public sealed class LzmaArchiveServiceCreateVolumesPreservationTests
 
       SevenZipArchiveWriteResult second = await service.CreateArchiveToFileAsync(
           newEntries, basePath, SevenZipWriterCompressionMethod.Copy, dictionarySize: 1 << 16, volumeSize: 1024);
-      Assert.Equal(SevenZipArchiveWriteResult.Ok, second);
+      Assert.Equal(SevenZipArchiveWriteResult.InternalError, second);
 
-      // Опубликован только том .001; лишние старые тома удалены.
-      string firstVolume = basePath + ".001";
-      Assert.Equal([firstVolume], Directory.GetFiles(dir));
+      // Точный состав каталога равен снимку до операции: не осталось ни staged-тома,
+      // ни .bak, ни частичного нового final, ни дополнительного нумерованного файла,
+      // ни иного артефакта. Ничего не отфильтровывается.
+      Assert.Equal(beforeFiles, Directory.GetFiles(dir).OrderBy(p => p).ToArray());
 
-      // Round-trip через первый том: содержимое совпадает байт-в-байт.
+      // Каждый исходный том существует и байт-в-байт равен себе прежнему;
+      // точное равенство байтов одновременно доказывает, что в томах нет данных
+      // попытки новой записи.
+      foreach (string volume in oldVolumes)
+      {
+        Assert.True(File.Exists(volume));
+        Assert.Equal(originalBytes[volume], File.ReadAllBytes(volume));
+      }
+
+      // Старый набор остаётся читаемым: склейка томов от первого тома,
+      // исходная запись совпадает байт-в-байт.
       string extractDir = Path.Combine(dir, "extract");
-      SevenZipArchiveDecodeResult decoded = await service.ExtractArchiveFileAsync(firstVolume, extractDir);
+      SevenZipArchiveDecodeResult decoded = await service.ExtractArchiveFileAsync(oldVolumes[0], extractDir);
       Assert.Equal(SevenZipArchiveDecodeResult.Ok, decoded);
-      Assert.Equal(newContent, File.ReadAllBytes(Path.Combine(extractDir, "new.txt")));
+      Assert.Equal(oldContent, File.ReadAllBytes(Path.Combine(extractDir, "old.bin")));
     }
     finally
     {

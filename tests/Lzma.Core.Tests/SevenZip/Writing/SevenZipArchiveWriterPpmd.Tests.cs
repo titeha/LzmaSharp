@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 
 using Lzma.Core.SevenZip;
+using Lzma.Core.Tests.Helpers;
 
 namespace Lzma.Core.Tests.SevenZip;
 
@@ -88,9 +89,7 @@ public sealed class SevenZipArchiveWriterPpmdTests
   [Fact]
   public void BuildArchive_Ppmd_РаспаковываетсяНастоящим7Zip()
   {
-    const string sevenZip = @"C:\Program Files\7-Zip\7z.exe";
-    if (!File.Exists(sevenZip))
-      return;
+    string sevenZip = SevenZipInterop.RequireExecutable();
 
     byte[] content = Encoding.UTF8.GetBytes(
         string.Concat(Enumerable.Repeat(

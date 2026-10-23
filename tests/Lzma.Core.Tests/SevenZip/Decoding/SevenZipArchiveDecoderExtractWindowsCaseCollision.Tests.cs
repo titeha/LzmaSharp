@@ -13,7 +13,7 @@ public sealed class SevenZipArchiveDecoderExtractWindowsCaseCollisionTests
   public void ExtractToDirectory_TwoEntries_DifferOnlyByCase_Windows_InvalidData_AndNothingExtracted(bool overwrite)
   {
     if (!OperatingSystem.IsWindows())
-      return;
+      Assert.Skip("Коллизия имён, различающихся только регистром, возможна на Windows (NTFS case-insensitive); на других ОС правило не применяется.");
 
     byte[] bytesA = MakePattern(64, mul: 17, add: 3);
     byte[] bytesB = MakePattern(64, mul: 29, add: 5);

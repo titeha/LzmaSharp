@@ -68,9 +68,19 @@ public sealed class LzmaArchiveServiceWriteArchiveTests
   }
 
   /// <summary>
-  /// Отказ записи: назначение только для чтения, поэтому публикация (File.Move поверх
-  /// read-only файла) падает; существующий архив остаётся байт-в-байт прежним,
-  /// staged-файлов не остаётся.
+  /// Отказ записи: инъекция платформенно-зависимого отказа.
+  /// Windows: FileAttributes.ReadOnly на файле — File.Move(overwrite:true) не может
+  /// перезаписать read-only файл → UnauthorizedAccessException.
+  /// POSIX: права на файл не блокируют unlink/rename (решают права каталога),
+  /// поэтому лишаем прав записи КАТАЛОГ — File.SetUnixFileMode без UserWrite.
+  /// Это блокирует создание staged-файла в каталоге → UnauthorizedAccessException.
+  /// Инварианты: written == false, байты назначения целы, в каталоге только назначение.
+  /// Ограничения POSIX-ветки (честно, покрытие неполное):
+  /// 1) отказ возникает ДО публикации (на OpenWrite), поэтому сама фаза публикации
+  ///    (<see cref="StagedDestination.Commit"/> → File.Move) на POSIX этим тестом не покрывается;
+  ///    для точной инъекции отказа публикации нужен отдельный шов (отслеживается отдельным шагом);
+  /// 2) процесс с правами root игнорирует права каталога, поэтому в таком окружении инъекция
+  ///    не сработает (CI-раннеры GitHub работают под непривилегированным пользователем).
   /// </summary>
   [Fact]
   public async Task WriteArchive_PublishFailure_PreservesExistingArchiveAndCleansStaging()
@@ -83,7 +93,18 @@ public sealed class LzmaArchiveServiceWriteArchiveTests
       string destination = Path.Combine(dir, "existing.7z");
       byte[] original = Encoding.UTF8.GetBytes("исходное содержимое");
       File.WriteAllBytes(destination, original);
-      File.SetAttributes(destination, FileAttributes.ReadOnly);
+
+      if (OperatingSystem.IsWindows())
+      {
+        File.SetAttributes(destination, FileAttributes.ReadOnly);
+      }
+      else
+      {
+        // POSIX: отказ через права каталога (не файла).
+        // Убираем UserWrite — нельзя создать staged-файл в каталоге.
+        File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+      }
+
       try
       {
         byte[] archive = Encoding.UTF8.GetBytes("новое содержимое, которое не должно опубликоваться");
@@ -96,7 +117,15 @@ public sealed class LzmaArchiveServiceWriteArchiveTests
       }
       finally
       {
-        File.SetAttributes(destination, FileAttributes.Normal);
+        if (OperatingSystem.IsWindows())
+        {
+          File.SetAttributes(destination, FileAttributes.Normal);
+        }
+        else
+        {
+          // Восстанавливаем права каталога для корректной очистки.
+          File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
       }
     }
     finally

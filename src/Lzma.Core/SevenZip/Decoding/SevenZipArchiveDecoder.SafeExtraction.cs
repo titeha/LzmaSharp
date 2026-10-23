@@ -22,32 +22,6 @@ public static partial class SevenZipArchiveDecoder
   }
 
   /// <summary>
-  /// Подготавливает существующий файл к перезаписи.
-  /// Сейчас достаточно снять специальные атрибуты (в первую очередь ReadOnly),
-  /// чтобы обычная запись поверх файла не падала по доступу.
-  /// </summary>
-  internal static bool TryPrepareExistingFileForOverwrite(string fullPath)
-  {
-    try
-    {
-      File.SetAttributes(fullPath, FileAttributes.Normal);
-      return true;
-    }
-    catch (IOException)
-    {
-      return false;
-    }
-    catch (UnauthorizedAccessException)
-    {
-      return false;
-    }
-    catch (ArgumentException)
-    {
-      return false;
-    }
-  }
-
-  /// <summary>
   /// Строит безопасный путь назначения для элемента архива.
   /// Запрещает абсолютные пути, пустые сегменты, "."/"..", и выход за пределы root.
   /// </summary>
@@ -220,6 +194,10 @@ public static partial class SevenZipArchiveDecoder
   /// которые уже существуют как файл.
   /// Для каталогов includeSelf=true, чтобы поймать случай
   /// "в архиве каталог, а на диске по тому же пути уже файл".
+  /// FS-вызовы переводятся на расширенную форму
+  /// (<see cref="StagedExtractionJournal.ToFileSystemPath"/>), поэтому конфликт распознаётся
+  /// и на путях от 259 символов независимо от long-path opt-in хоста (B5c); короткие пути,
+  /// относительные пути и другие ОС не затрагиваются.
   /// </summary>
   internal static bool HasFileOnPath(
       string root,
@@ -234,7 +212,7 @@ public static partial class SevenZipArchiveDecoder
       if (string.Equals(current, root, comparison))
         return false;
 
-      if (File.Exists(current))
+      if (File.Exists(StagedExtractionJournal.ToFileSystemPath(current)))
         return true;
 
       string? parent = Path.GetDirectoryName(current);
@@ -251,6 +229,8 @@ public static partial class SevenZipArchiveDecoder
   /// Проверяет, что путь каталога не совпадает с файлом
   /// и что среди его родительских сегментов нет файлов.
   /// Если по пути уже встречается существующий каталог, дальше вверх можно не идти.
+  /// FS-вызовы переводятся на расширенную форму
+  /// (<see cref="StagedExtractionJournal.ToFileSystemPath"/>) — см. <see cref="HasFileOnPath"/>.
   /// </summary>
   internal static bool HasFileOnDirectoryPath(string fullDirectoryPath, StringComparison comparison)
   {
@@ -258,10 +238,10 @@ public static partial class SevenZipArchiveDecoder
 
     while (current is not null)
     {
-      if (File.Exists(current))
+      if (File.Exists(StagedExtractionJournal.ToFileSystemPath(current)))
         return true;
 
-      if (Directory.Exists(current))
+      if (Directory.Exists(StagedExtractionJournal.ToFileSystemPath(current)))
         return false;
 
       string? parent = Path.GetDirectoryName(current);

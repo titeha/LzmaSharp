@@ -9,8 +9,14 @@ on:
 
 jobs:
   build-test:
-    # ubuntu — заодно доказывает кроссплатформенную managed-сборку (ядро без нативных зависимостей).
-    runs-on: ubuntu-latest
+    name: build-test (${{ matrix.os }})
+    # Матрица ОС: ubuntu, windows, macos — доказываем кроссплатформенную managed-сборку
+    # (ядро без нативных зависимостей).
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -26,5 +32,84 @@ jobs:
       - name: Build (Release)
         run: dotnet build -c Release --no-restore
 
-      - name: Test (Release)
-        run: dotnet test -c Release --no-build --verbosity quiet
+      # --- 7-Zip: установка и evidence -------------------------------------------
+      # Official console 7-Zip (7zz) — для Linux/macOS из релиза на GitHub;
+      # Windows — используем предустановленный 7z.exe или ставим через Chocolatey.
+      # Идемпотентно: не падает, если 7-Zip уже есть.
+      - name: Установить 7-Zip
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            # Official 7-Zip console for Linux x64 (archive .tar.xz from github.com/ip7z)
+            mkdir -p "$HOME/7zip"
+            curl -fsSL --retry 3 "https://github.com/ip7z/7zip/releases/download/26.04/7z2604-linux-x64.tar.xz" \
+              -o "$HOME/7zip/7zip.tar.xz"
+            tar -xJf "$HOME/7zip/7zip.tar.xz" -C "$HOME/7zip"
+            rm -f "$HOME/7zip/7zip.tar.xz"
+            echo "$HOME/7zip" >> "$GITHUB_PATH"
+          elif [ "${{ runner.os }}" = "macOS" ]; then
+            # Official 7-Zip console for macOS (arm64/x86-64, universal)
+            mkdir -p "$HOME/7zip"
+            curl -fsSL --retry 3 "https://github.com/ip7z/7zip/releases/download/26.04/7z2604-mac.tar.xz" \
+              -o "$HOME/7zip/7zip.tar.xz"
+            tar -xJf "$HOME/7zip/7zip.tar.xz" -C "$HOME/7zip"
+            rm -f "$HOME/7zip/7zip.tar.xz"
+            echo "$HOME/7zip" >> "$GITHUB_PATH"
+          elif [ "${{ runner.os }}" = "Windows" ]; then
+            # windows-latest: 7-Zip pre-installed; fallback — Chocolatey
+            if ! command -v 7z >/dev/null 2>&1 && [ ! -f "C:/Program Files/7-Zip/7z.exe" ]; then
+              choco install 7zip -y
+            fi
+          fi
+
+      - name: "7-Zip: версия и путь (evidence)"
+        shell: bash
+        run: |
+          # Выводим версию и путь для каждого кандидата; не роняем job при отсутствии.
+          for candidate in 7zz 7z; do
+            echo "--- candidate: $candidate ---"
+            if command -v "$candidate" >/dev/null 2>&1; then
+              echo "path: $(command -v "$candidate")"
+              "$candidate" i 2>&1 | head -5 || true
+            else
+              echo "(not found in PATH)"
+            fi
+          done
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            echo "--- Windows-specific ---"
+            if [ -f "C:/Program Files/7-Zip/7z.exe" ]; then
+              echo "path: C:/Program Files/7-Zip/7z.exe"
+              "C:/Program Files/7-Zip/7z.exe" i 2>&1 | head -5 || true
+            fi
+          fi
+
+      # G8: гейт по известным уязвимостям зависимостей (прямые и транзитивные). Падение блокирует
+      # merge и публикацию; список уязвимых пакетов печатается в лог. Источники — nuget.org.
+      - name: "Аудит уязвимостей зависимостей (G8)"
+        shell: bash
+        run: |
+          set -uo pipefail
+          status=0
+          for proj in src/Lzma.Core/Lzma.Core.csproj src/Lzma.Ui/Lzma.Ui.csproj                       tests/Lzma.Core.Tests/Lzma.Core.Tests.csproj tests/Lzma.Ui.Tests/Lzma.Ui.Tests.csproj; do
+            echo "=== $proj ==="
+            out="$(dotnet list "$proj" package --vulnerable --include-transitive 2>&1 || true)"
+            echo "$out"
+            if echo "$out" | grep -qE '^[[:space:]]*>[[:space:]]'; then status=1; fi
+          done
+          if [ "$status" -ne 0 ]; then
+            echo "::error::Найдены уязвимые зависимости (список выше) — merge и публикация заблокированы"
+            exit 1
+          fi
+          echo "Уязвимых зависимостей не найдено."
+
+      - name: Test (${{ matrix.os }}, Release)
+        run: dotnet test -c Release --no-build --verbosity quiet --logger "trx;LogFileName=results.trx" --results-directory TestResults
+
+      - name: Upload TRX (${{ matrix.os }})
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trx-${{ matrix.os }}-${{ github.sha }}
+          path: TestResults/
+          retention-days: 14

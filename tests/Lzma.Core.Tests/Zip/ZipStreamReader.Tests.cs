@@ -211,6 +211,267 @@ public sealed class ZipStreamReaderTests
     Assert.Equal(0, entry.Method);
   }
 
+  // --- B4b: валидация отрицательных Zip64-размеров --------------------------------------------
+
+  // Строит ZIP-фикстуру с Zip64 extra по образцу теста выше, но с параметризованными значениями
+  // в extra-поле (uncomp, comp, offset). Используется для проверки отклонения значений ≥ 2^63.
+  private static byte[] BuildZip64FixtureWithExtraValues(
+      ulong uncompExtra,
+      ulong compExtra,
+      ulong offsetExtra,
+      bool uncompSentinel = true,
+      bool compSentinel = true,
+      bool offsetSentinel = true)
+  {
+    byte[] content = Encoding.UTF8.GetBytes("zip64 sign validation payload");
+    uint crc = Crc32.Compute(content);
+    byte[] name = Encoding.ASCII.GetBytes("z64sign.txt");
+
+    var buf = new List<byte>();
+
+    // Данные ZIP64 extra: только те поля, которые помечены сентинелом, в порядке APPNOTE
+    // (uncompressed, compressed, offset). Это позволяет покрыть частично сентинельные ветви
+    // разбора (MINOR ревью B4b): при needUncomp=false первое поле extra — compressed.
+    var extraData = new List<byte>();
+    if (uncompSentinel) WriteU64(extraData, uncompExtra);
+    if (compSentinel) WriteU64(extraData, compExtra);
+    if (offsetSentinel) WriteU64(extraData, offsetExtra);
+
+    long localOffset = buf.Count; // 0
+    WriteU32(buf, 0x04034b50);                 // local file header
+    WriteU16(buf, 45);                         // version needed (ZIP64)
+    WriteU16(buf, 0);                          // flags
+    WriteU16(buf, 0);                          // method = store
+    WriteU16(buf, 0);                          // mod time
+    WriteU16(buf, 0x21);                       // mod date
+    WriteU32(buf, crc);
+    WriteU32(buf, (uint)content.Length);       // comp size (в локальном — реальные)
+    WriteU32(buf, (uint)content.Length);       // uncomp size
+    WriteU16(buf, (ushort)name.Length);
+    WriteU16(buf, 0);                          // extra len
+    buf.AddRange(name);
+    buf.AddRange(content);
+
+    long cdStart = buf.Count;
+    WriteU32(buf, 0x02014b50);                 // central header
+    WriteU16(buf, 45);                         // version made by
+    WriteU16(buf, 45);                         // version needed
+    WriteU16(buf, 0);                          // flags
+    WriteU16(buf, 0);                          // method
+    WriteU16(buf, 0);                          // mod time
+    WriteU16(buf, 0x21);                       // mod date
+    WriteU32(buf, crc);
+    WriteU32(buf, compSentinel ? 0xFFFFFFFF : (uint)content.Length);   // comp size
+    WriteU32(buf, uncompSentinel ? 0xFFFFFFFF : (uint)content.Length); // uncomp size
+    WriteU16(buf, (ushort)name.Length);
+    WriteU16(buf, (ushort)(4 + extraData.Count)); // extra len
+    WriteU16(buf, 0);                          // comment len
+    WriteU16(buf, 0);                          // disk start
+    WriteU16(buf, 0);                          // internal attrs
+    WriteU32(buf, 0);                          // external attrs
+    WriteU32(buf, offsetSentinel ? 0xFFFFFFFF : (uint)localOffset);   // local offset
+    buf.AddRange(name);
+    WriteU16(buf, 0x0001);                     // ZIP64 extra id
+    WriteU16(buf, (ushort)extraData.Count);    // размер данных extra
+    buf.AddRange(extraData);
+    long cdSize = buf.Count - cdStart;
+
+    long zip64EocdOffset = buf.Count;
+    WriteU32(buf, 0x06064b50);                 // ZIP64 EOCD record
+    WriteU64(buf, 44);                         // размер записи (56 - 12)
+    WriteU16(buf, 45);
+    WriteU16(buf, 45);
+    WriteU32(buf, 0);                          // disk number
+    WriteU32(buf, 0);                          // disk with CD
+    WriteU64(buf, 1);                          // entries this disk
+    WriteU64(buf, 1);                          // total entries
+    WriteU64(buf, (ulong)cdSize);
+    WriteU64(buf, (ulong)cdStart);
+
+    WriteU32(buf, 0x07064b50);                 // ZIP64 EOCD locator
+    WriteU32(buf, 0);                          // disk with ZIP64 EOCD
+    WriteU64(buf, (ulong)zip64EocdOffset);
+    WriteU32(buf, 1);                          // total disks
+
+    WriteU32(buf, 0x06054b50);                 // EOCD
+    WriteU16(buf, 0);
+    WriteU16(buf, 0);
+    WriteU16(buf, 0xFFFF);                     // entries this disk = сентинел
+    WriteU16(buf, 0xFFFF);                     // total entries = сентинел
+    WriteU32(buf, 0xFFFFFFFF);                 // CD size = сентинел
+    WriteU32(buf, 0xFFFFFFFF);                 // CD offset = сентинел
+    WriteU16(buf, 0);                          // comment len
+
+    return buf.ToArray();
+  }
+
+  [Fact]
+  public void ZIP64_Extra_ОтрицательныйUncompressedSize_InvalidData()
+  {
+    byte[] fixture = BuildZip64FixtureWithExtraValues(
+        uncompExtra: ulong.MaxValue,                  // ≥ 2^63 → отрицательный long
+        compExtra: (ulong)29,                         // валидное
+        offsetExtra: 0);                              // валидное
+
+    using var ms = new MemoryStream(fixture, writable: false);
+    ZipReadResult result = ZipStreamReader.ReadCentralDirectory(ms, out ZipStreamEntry[] entries);
+
+    Assert.Equal(ZipReadResult.InvalidData, result);
+    Assert.Empty(entries);
+  }
+
+  [Fact]
+  public void ZIP64_Extra_ОтрицательныйCompressedSize_InvalidData()
+  {
+    byte[] fixture = BuildZip64FixtureWithExtraValues(
+        uncompExtra: (ulong)29,                         // валидное
+        compExtra: 1UL << 63,                           // ≥ 2^63 → отрицательный long
+        offsetExtra: 0);                                // валидное
+
+    using var ms = new MemoryStream(fixture, writable: false);
+    ZipReadResult result = ZipStreamReader.ReadCentralDirectory(ms, out ZipStreamEntry[] entries);
+
+    Assert.Equal(ZipReadResult.InvalidData, result);
+    Assert.Empty(entries);
+  }
+
+  [Fact]
+  public void ZIP64_Extra_ОтрицательныйLocalOffset_InvalidData()
+  {
+    byte[] fixture = BuildZip64FixtureWithExtraValues(
+        uncompExtra: (ulong)29,                         // валидное
+        compExtra: (ulong)29,                           // валидное
+        offsetExtra: ulong.MaxValue);                   // ≥ 2^63 → отрицательный long
+
+    using var ms = new MemoryStream(fixture, writable: false);
+    ZipReadResult result = ZipStreamReader.ReadCentralDirectory(ms, out ZipStreamEntry[] entries);
+
+    Assert.Equal(ZipReadResult.InvalidData, result);
+    Assert.Empty(entries);
+  }
+
+  /// <summary>
+  /// Позитивный контроль билдера фикстуры (MINOR ревью B4b): на валидных значениях extra
+  /// каталог читается успешно и размеры/смещение берутся именно из extra. Без этого контроля
+  /// поломка билдера оставила бы три теста на отклонение сентинелей «зелёными» по посторонней
+  /// причине (InvalidData возвращался бы из-за испорченной фикстуры, а не из-за знака значения).
+  /// </summary>
+  [Fact]
+  public void ZIP64_Extra_ВалидныеЗначения_КаталогЧитается()
+  {
+    byte[] fixture = BuildZip64FixtureWithExtraValues(
+        uncompExtra: 29,                         // = content.Length
+        compExtra: 29,                           // method = store
+        offsetExtra: 0);                         // реальный local offset
+
+    using var ms = new MemoryStream(fixture, writable: false);
+    ZipReadResult result = ZipStreamReader.ReadCentralDirectory(ms, out ZipStreamEntry[] entries);
+
+    Assert.Equal(ZipReadResult.Ok, result);
+    ZipStreamEntry entry = Assert.Single(entries);
+    Assert.Equal("z64sign.txt", entry.Name);
+    Assert.Equal(29, entry.UncompressedSize);
+    Assert.Equal(29, entry.CompressedSize);
+    Assert.Equal(0, entry.LocalHeaderOffset);
+  }
+
+  /// <summary>
+  /// Частично сентинельная ветвь (MINOR ревью B4b): сентинелем помечен ТОЛЬКО сжатый размер,
+  /// поэтому в ZIP64 extra ровно одно поле — compressed, а uncompressed и local offset берутся
+  /// из 32-битных полей каталога. Проверяет, что разбор extra не читает лишнего и порядок полей
+  /// по APPNOTE соблюдается (needUncomp=false, needComp=true, needOffset=false).
+  /// </summary>
+  [Fact]
+  public void ZIP64_Extra_ТолькоСжатыйРазмерСентинел_ЗначениеБерётсяИзExtra()
+  {
+    byte[] fixture = BuildZip64FixtureWithExtraValues(
+        uncompExtra: ulong.MaxValue,               // не используется: поле не сентинель
+        compExtra: 29,                             // единственное поле в extra (= content.Length)
+        offsetExtra: ulong.MaxValue,               // не используется
+        uncompSentinel: false,
+        compSentinel: true,
+        offsetSentinel: false);
+
+    using var ms = new MemoryStream(fixture, writable: false);
+    ZipReadResult result = ZipStreamReader.ReadCentralDirectory(ms, out ZipStreamEntry[] entries);
+
+    Assert.Equal(ZipReadResult.Ok, result);
+    ZipStreamEntry entry = Assert.Single(entries);
+    // Сжатый размер пришёл из extra (в 32-битном поле был сентинел 0xFFFFFFFF). Если бы разбор
+    // читал первое поле extra как uncompressed, здесь осталось бы значение сентинела или
+    // вернулось InvalidData из-за ulong.MaxValue в uncompExtra.
+    Assert.Equal(29, entry.CompressedSize);
+    Assert.Equal(29, entry.UncompressedSize);
+    Assert.Equal(0, entry.LocalHeaderOffset);
+  }
+
+  /// <summary>
+  /// Граница проверки знака (MINOR ревью B4b): <see cref="long.MaxValue"/> — наибольшее
+  /// допустимое значение, оно принимается (отклоняются только значения ≥ 2^63, которые
+  /// unchecked-приведение из <see cref="ulong"/> переинтерпретирует как отрицательные).
+  /// Читатель каталога размеры не интерпретирует, поэтому результат — Ok с теми же значениями.
+  /// </summary>
+  [Fact]
+  public void ZIP64_Extra_LongMaxValue_ПринимаетсяКакПоложительное()
+  {
+    byte[] fixture = BuildZip64FixtureWithExtraValues(
+        uncompExtra: (ulong)long.MaxValue,
+        compExtra: (ulong)long.MaxValue,
+        offsetExtra: (ulong)long.MaxValue);
+
+    using var ms = new MemoryStream(fixture, writable: false);
+    ZipReadResult result = ZipStreamReader.ReadCentralDirectory(ms, out ZipStreamEntry[] entries);
+
+    Assert.Equal(ZipReadResult.Ok, result);
+    ZipStreamEntry entry = Assert.Single(entries);
+    Assert.Equal(long.MaxValue, entry.UncompressedSize);
+    Assert.Equal(long.MaxValue, entry.CompressedSize);
+    Assert.Equal(long.MaxValue, entry.LocalHeaderOffset);
+  }
+
+  // --- B4c: overflow-safe guard смещения ZIP64 EOCD -------------------------------------------
+
+  /// <summary>
+  /// Locator ZIP64 EOCD со смещением, при котором <c>offset + Zip64EocdMinSize</c> переполняет
+  /// <c>long</c>: guard обязан сравнивать без сложения недоверенных величин, иначе переполнение
+  /// даёт отрицательное значение, проверка пропускается, а seek на огромное значение для
+  /// <see cref="MemoryStream"/> бросает <see cref="ArgumentOutOfRangeException"/> вместо
+  /// контролируемого <see cref="ZipReadResult.InvalidData"/>.
+  /// </summary>
+  [Fact]
+  public void ZIP64_Locator_СмещениеСПереполнением_InvalidDataБезИсключения()
+  {
+    byte[] fixture = BuildZip64FixtureWithExtraValues(
+        uncompExtra: (ulong)29,
+        compExtra: (ulong)29,
+        offsetExtra: 0);
+    // long.MaxValue - 8 + 56 переполняет long и даёт отрицательное значение.
+    PatchZip64LocatorOffset(fixture, (ulong)(long.MaxValue - 8));
+
+    using var ms = new MemoryStream(fixture, writable: false);
+    ZipReadResult result = ZipStreamReader.ReadCentralDirectory(ms, out ZipStreamEntry[] entries);
+
+    Assert.Equal(ZipReadResult.InvalidData, result);
+    Assert.Empty(entries);
+  }
+
+  /// <summary>Перезаписывает 8-байтовое смещение ZIP64 EOCD в locator-е (сигнатура 0x07064b50),
+  /// поиск с конца — locator стоит перед EOCD.</summary>
+  private static void PatchZip64LocatorOffset(byte[] fixture, ulong offset)
+  {
+    for (int i = fixture.Length - 20; i >= 0; i--)
+    {
+      if (fixture[i] == 0x50 && fixture[i + 1] == 0x4b && fixture[i + 2] == 0x06 && fixture[i + 3] == 0x07)
+      {
+        for (int b = 0; b < 8; b++)
+          fixture[i + 8 + b] = (byte)(offset >> (b * 8));
+        return;
+      }
+    }
+
+    Assert.Fail("locator ZIP64 EOCD не найден в фикстуре");
+  }
+
   private static void WriteU16(List<byte> buf, ushort v)
   {
     buf.Add((byte)v);

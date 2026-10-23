@@ -57,7 +57,9 @@ public static class ZipStreamReader
     if (eocd != ZipReadResult.Ok)
       return eocd;
 
-    if (cdOffset < 0 || cdSize < 0 || cdOffset > length || cdOffset + cdSize > length)
+    // Границы считаются вычитанием, а не сложением: cdSize/cdOffset приходят из недоверенного
+    // заголовка (в ZIP64 — из UInt64), поэтому сумма могла бы переполнить long и пропустить проверку.
+    if (cdOffset < 0 || cdSize < 0 || cdOffset > length || cdSize > length - cdOffset)
       return ZipReadResult.InvalidData;
 
     // Центральный каталог — метаданные (много меньше данных архива), читаем его целиком в память.
@@ -222,7 +224,10 @@ public static class ZipStreamReader
       return ZipReadResult.InvalidData;
 
     long zip64EocdOffset = (long)BinaryPrimitives.ReadUInt64LittleEndian(locator.Slice(8, 8));
-    if (zip64EocdOffset < 0 || zip64EocdOffset + Zip64EocdMinSize > archive.Length)
+    // Вычитание вместо сложения: смещение приходит из UInt64 недоверенного locator-а, и сумма
+    // «offset + 56» переполняла long, guard пропускал значение, а seek на огромное смещение
+    // для MemoryStream бросал ArgumentOutOfRangeException наружу из публичного API (B4c).
+    if (zip64EocdOffset < 0 || zip64EocdOffset > archive.Length - Zip64EocdMinSize)
       return ZipReadResult.InvalidData;
 
     Span<byte> record = stackalloc byte[Zip64EocdMinSize];
@@ -252,6 +257,7 @@ public static class ZipStreamReader
   /// <summary>
   /// Разбирает ZIP64 extra-field (<c>0x0001</c>) записи каталога, подставляя 64-битные размеры/смещение
   /// для тех полей, что помечены сентинелом (порядок по APPNOTE: uncompressed, compressed, offset).
+  /// Значения, не помещающиеся в <see cref="long"/> (≥ 2^63), отклоняются как некорректные.
   /// </summary>
   private static bool TryApplyZip64Extra(
       ReadOnlySpan<byte> extra,
@@ -281,6 +287,7 @@ public static class ZipStreamReader
         {
           if (q + 8 > end) return false;
           uncompSize = (long)BinaryPrimitives.ReadUInt64LittleEndian(extra.Slice(q, 8));
+          if (uncompSize < 0) return false;   // Zip64-значение ≥ 2^63 не помещается в Int64
           q += 8;
         }
 
@@ -288,6 +295,7 @@ public static class ZipStreamReader
         {
           if (q + 8 > end) return false;
           compSize = (long)BinaryPrimitives.ReadUInt64LittleEndian(extra.Slice(q, 8));
+          if (compSize < 0) return false;     // Zip64-значение ≥ 2^63 не помещается в Int64
           q += 8;
         }
 
@@ -295,6 +303,7 @@ public static class ZipStreamReader
         {
           if (q + 8 > end) return false;
           localOffset = (long)BinaryPrimitives.ReadUInt64LittleEndian(extra.Slice(q, 8));
+          if (localOffset < 0) return false;  // Zip64-значение ≥ 2^63 не помещается в Int64
         }
 
         return true;

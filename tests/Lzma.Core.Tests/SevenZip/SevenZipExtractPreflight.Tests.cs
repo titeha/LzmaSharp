@@ -1,0 +1,431 @@
+using System.Text;
+
+using Lzma.Core.SevenZip;
+
+namespace Lzma.Core.Tests.SevenZip;
+
+/// <summary>
+/// Тесты pre-flight проверок (свободное место и длина пути) для 7z-маршрута SEC-001 (шаг B5b).
+/// <para>
+/// Честная граница: тесты пространства проверяют контракт internal helper-а суммы
+/// (<see cref="SevenZipArchiveDecoder.ComputeRequiredSpace"/>): насыщение,
+/// фильтр каталогов, пропуск ≤ 0. End-to-end-триггер <c>InsufficientSpace</c> для 7z
+/// отсутствует (нет шва инъекции размеров в публичный API, а заполнение диска запрещено);
+/// аналогично «честной границе» ZIP-тестов (<c>ZipExtractPreFlightSpaceTests</c>),
+/// проверка «строго до первой мутации» обеспечена местом вставки в <c>ExtractHeaderToDirectory</c>
+/// и подтверждена ревью.
+/// </para>
+/// </summary>
+public sealed class SevenZipExtractPreflightTests
+{
+  /// <summary>Создаёт уникальную временную папку (не создавая её на диске).</summary>
+  private static string NewTempDir()
+    => Path.Combine(Path.GetTempPath(), "lzs-7z-preflight-" + Guid.NewGuid().ToString("N"));
+
+  private static byte[] Payload(string text) => Encoding.UTF8.GetBytes(text);
+
+  private static byte[] BuildLzma2(params (string Name, byte[] Data)[] files)
+  {
+    var entries = files.Select(f => new SevenZipArchiveWriterEntry(f.Name, f.Data)).ToArray();
+    Assert.Equal(SevenZipArchiveWriteResult.Ok,
+        SevenZipArchiveWriter.BuildArchive(entries, SevenZipWriterCompressionMethod.Lzma2, out byte[] bytes));
+    return bytes;
+  }
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // (a) PathTooLong end-to-end: 7z-архив с членом длиной 300 символов.
+  // ────────────────────────────────────────────────────────────────────────────
+
+  /// <summary>
+  /// 7z-архив с элементом, имя которого 300 символов (300 + 21 суффикс стадии &gt; 255 лимит
+  /// компонента имени NTFS/POSIX). Извлечение в несуществующий dest возвращает
+  /// <see cref="SevenZipArchiveDecodeResult.PathTooLong"/>, данных на диске нет.
+  /// <para>
+  /// Отличие от ZIP-маршрута: в 7z root-каталог создаётся ДО pre-flight проверки
+  /// (строка ~932 в <c>ExtractHeaderToDirectory</c>), поэтому после отката каталог
+  /// отсутствует — journal.Rollback удаляет отслеженные каталоги.
+  /// </para>
+  /// </summary>
+  [Fact]
+  public void ExtractToDirectory_СлишкомДлинноеИмяЭлемента_ВозвращаетPathTooLong_ИНеПишетДанные()
+  {
+    string longName = new string('x', 300) + ".txt";
+    byte[] archive = BuildLzma2((longName, Payload("data")));
+
+    string dest = NewTempDir();
+    try
+    {
+      SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.ExtractToDirectory(
+          archive: archive,
+          options: SevenZipDecodeOptions.Default,
+          destinationDirectory: dest,
+          overwrite: false,
+          bytesConsumed: out _);
+
+      Assert.Equal(SevenZipArchiveDecodeResult.PathTooLong, result);
+      Assert.False(Directory.Exists(dest),
+          "каталог назначения должен быть удалён откатом (root создаётся до pre-flight, " +
+          "но journal.Rollback отслеживает созданные каталоги)");
+    }
+    finally
+    {
+      if (Directory.Exists(dest)) Directory.Delete(dest, recursive: true);
+    }
+  }
+
+  /// <summary>
+  /// Частичное извлечение: член со слишком длинным именем НЕ выбран через <c>shouldExtract</c> —
+  /// операция не должна отклоняться из-за него (невыбранные записи не стадируются и их каталоги
+  /// не создаются, поэтому pre-flight длины их не проверяет). Выбранный короткий член извлекается.
+  /// </summary>
+  [Fact]
+  public void ExtractToDirectory_Частичное_ДлинноеИмяНеВыбрано_ОперацияНеОтклоняется()
+  {
+    string longName = new string('y', 300) + ".txt";
+    byte[] archive = BuildLzma2((longName, Payload("skip")), ("ok.txt", Payload("kept")));
+
+    string dest = NewTempDir();
+    try
+    {
+      SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.ExtractToDirectory(
+          archive: archive,
+          options: SevenZipDecodeOptions.Default,
+          destinationDirectory: dest,
+          overwrite: false,
+          bytesConsumed: out _,
+          shouldExtract: name => name == "ok.txt");
+
+      Assert.Equal(SevenZipArchiveDecodeResult.Ok, result);
+      Assert.Equal("kept", File.ReadAllText(Path.Combine(dest, "ok.txt")));
+      Assert.False(File.Exists(Path.Combine(dest, longName)),
+          "невыбранный член не должен быть извлечён");
+    }
+    finally
+    {
+      if (Directory.Exists(dest)) Directory.Delete(dest, recursive: true);
+    }
+  }
+
+  /// <summary>
+  /// Порог суффикса стадии (MAJOR-1 ревью B5b): компонент имени 240 символов допустим сам по
+  /// себе (240 ≤ 255), но вместе с суффиксом стадии 21 символ даёт 261 &gt; 255. Тест изолирует
+  /// именно механизм суффикса: если в проверке заменить <c>extra</c> на 0, извлечение прошло бы
+  /// с <c>Ok</c> и тест упал бы.
+  /// </summary>
+  [Fact]
+  public void ExtractToDirectory_КомпонентИмени240_ССуффиксомСтадии_ВозвращаетPathTooLong()
+  {
+    string name240 = new string('x', 236) + ".txt";
+    Assert.Equal(240, name240.Length);
+    byte[] archive = BuildLzma2((name240, Payload("data")));
+
+    string dest = NewTempDir();
+    try
+    {
+      SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.ExtractToDirectory(
+          archive: archive,
+          options: SevenZipDecodeOptions.Default,
+          destinationDirectory: dest,
+          overwrite: false,
+          bytesConsumed: out _);
+
+      Assert.Equal(SevenZipArchiveDecodeResult.PathTooLong, result);
+      Assert.False(Directory.Exists(dest),
+          "каталог назначения должен быть удалён откатом");
+    }
+    finally
+    {
+      if (Directory.Exists(dest)) Directory.Delete(dest, recursive: true);
+    }
+  }
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // (b) Guard enum: значения в конце, прежние не сдвинулись.
+  // ────────────────────────────────────────────────────────────────────────────
+
+  /// <summary>
+  /// Защита правила «только в конец enum»: существующие значения не изменились,
+  /// новые <see cref="SevenZipArchiveDecodeResult.InsufficientSpace"/> == 5
+  /// и <see cref="SevenZipArchiveDecodeResult.PathTooLong"/> == 6.
+  /// </summary>
+  [Fact]
+  public void SevenZipArchiveDecodeResult_НовыеЗначения_АддитивныИВКонце()
+  {
+    // Неявные значения: порядок определения задаёт числовые значения.
+    Assert.Equal(0, (int)SevenZipArchiveDecodeResult.Ok);
+    Assert.Equal(1, (int)SevenZipArchiveDecodeResult.NeedMoreData);
+    Assert.Equal(2, (int)SevenZipArchiveDecodeResult.InvalidData);
+    Assert.Equal(3, (int)SevenZipArchiveDecodeResult.NotSupported);
+    Assert.Equal(4, (int)SevenZipArchiveDecodeResult.InternalError);
+
+    // Новые — строго в конце.
+    Assert.Equal(5, (int)SevenZipArchiveDecodeResult.InsufficientSpace);
+    Assert.Equal(6, (int)SevenZipArchiveDecodeResult.PathTooLong);
+  }
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // (c) Длинные пути: конфликт промежуточного сегмента (B5c — обёртка HasFileOnPath).
+  // ────────────────────────────────────────────────────────────────────────────
+
+  /// <summary>
+  /// B5c: на пути длиннее <c>MAX_PATH</c> промежуточный сегмент уже существует как ФАЙЛ,
+  /// а член архива лежит под ним. Ожидается <see cref="SevenZipArchiveDecodeResult.InvalidData"/>
+  /// (конфликт распознан до первой мутации); байты конфликтующего файла не изменяются.
+  /// <para>
+  /// До фикса <c>HasFileOnPath</c>/<c>HasFileOnDirectoryPath</c> вызывали <c>File.Exists</c>
+  /// без префикса расширенной формы, поэтому на длинных путях конфликт не обнаруживался,
+  /// а <c>Directory.CreateDirectory</c> отказывал с <c>IOException</c> → <c>InternalError</c>
+  /// (откат корректен, но причина маскируется). Фикстура создаётся в расширенной форме
+  /// (<c>StagedExtractionJournal.ToFileSystemPath</c>), поэтому не зависит от long-path
+  /// opt-in хоста. RED на хосте разработки НЕ наблюдаем: <c>LongPathsEnabled=1</c> маскирует
+  /// дефект (сырой <c>File.Exists</c> тоже видит конфликт); тест валиден как регрессия,
+  /// чистое RED-доказательство требует хоста без opt-in или capability-probe (todo #39).
+  /// </para>
+  /// </summary>
+  [Fact]
+  public void ExtractToDirectory_КонфликтСегментаНаДлинномПути_ВозвращаетInvalidData()
+  {
+    string dest = NewTempDir();
+    // Длина сегмента адаптивная: суммарный путь обязан превысить MAX_PATH (259) при любой
+    // длине TEMP, а компонент имени — остаться в пределах 255.
+    string longSegment = new string('d', Math.Clamp(260 - dest.Length, 220, 255));
+    string conflictPath = Path.Combine(dest, longSegment);
+    Assert.True(conflictPath.Length >= 259, "фикстура: путь длиннее MAX_PATH");
+
+    Directory.CreateDirectory(dest);
+    byte[] sentinel = Payload("conflict-file");
+    File.WriteAllBytes(StagedExtractionJournal.ToFileSystemPath(conflictPath), sentinel);
+
+    byte[] archive = BuildLzma2((longSegment + "/member.txt", Payload("data")));
+    try
+    {
+      SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.ExtractToDirectory(
+          archive: archive,
+          options: SevenZipDecodeOptions.Default,
+          destinationDirectory: dest,
+          overwrite: false,
+          bytesConsumed: out _);
+
+      Assert.Equal(SevenZipArchiveDecodeResult.InvalidData, result);
+      Assert.Equal(sentinel,
+          File.ReadAllBytes(StagedExtractionJournal.ToFileSystemPath(conflictPath)));
+      Assert.Empty(Directory.GetFiles(dest, "*.tmp", SearchOption.AllDirectories));
+      Assert.Empty(Directory.GetFiles(dest, "*.bak", SearchOption.AllDirectories));
+      Assert.Single(Directory.EnumerateFileSystemEntries(dest));
+    }
+    finally
+    {
+      File.Delete(StagedExtractionJournal.ToFileSystemPath(conflictPath));
+      if (Directory.Exists(dest)) Directory.Delete(dest, recursive: true);
+    }
+  }
+
+  /// <summary>
+  /// B5c, второй helper: <c>HasFileOnDirectoryPath</c> — сам путь назначения проходит через
+  /// сегмент, уже существующий как ФАЙЛ. Ожидается <see cref="SevenZipArchiveDecodeResult.InvalidData"/>
+  /// из проверки root (<c>SevenZipArchiveDecoder.cs:920</c>) ДО какой-либо мутации: конфликтующий
+  /// файл не изменён, каталог назначения не создан. Граница RED та же, что у теста выше
+  /// (на хосте разработки дефект маскируется <c>LongPathsEnabled=1</c>).
+  /// </summary>
+  [Fact]
+  public void ExtractToDirectory_КореньПодФайломНаДлинномПути_ВозвращаетInvalidData()
+  {
+    string outer = NewTempDir();
+    string conflictPath = Path.Combine(outer, new string('d', Math.Clamp(260 - outer.Length, 220, 255)));
+    string dest = Path.Combine(conflictPath, "sub", "dest");
+
+    Directory.CreateDirectory(outer);
+    byte[] sentinel = Payload("conflict-file");
+    File.WriteAllBytes(StagedExtractionJournal.ToFileSystemPath(conflictPath), sentinel);
+
+    byte[] archive = BuildLzma2(("member.txt", Payload("data")));
+    try
+    {
+      SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.ExtractToDirectory(
+          archive: archive,
+          options: SevenZipDecodeOptions.Default,
+          destinationDirectory: dest,
+          overwrite: false,
+          bytesConsumed: out _);
+
+      Assert.Equal(SevenZipArchiveDecodeResult.InvalidData, result);
+      Assert.Equal(sentinel,
+          File.ReadAllBytes(StagedExtractionJournal.ToFileSystemPath(conflictPath)));
+      Assert.False(Directory.Exists(StagedExtractionJournal.ToFileSystemPath(dest)),
+          "каталог назначения не должен быть создан");
+    }
+    finally
+    {
+      File.Delete(StagedExtractionJournal.ToFileSystemPath(conflictPath));
+      if (Directory.Exists(outer)) Directory.Delete(outer, recursive: true);
+    }
+  }
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // (d) Пространство: unit-тесты internal helper-а суммы.
+  // End-to-end-триггер InsufficientSpace для 7z отсутствует (нет шва инъекции размеров).
+  // ────────────────────────────────────────────────────────────────────────────
+
+  /// <summary>
+  /// Контракт <see cref="SevenZipArchiveDecoder.ComputeRequiredSpace"/>:
+  /// все элементы — DataFile, все выбраны, размеры положительные.
+  /// </summary>
+  [Fact]
+  public void ComputeRequiredSpace_ВсеВыбраны_СуммаРазмеров()
+  {
+    var plan = new SevenZipArchiveDecoder.ExtractPlanEntry[]
+    {
+      new("a.bin", SevenZipArchiveDecoder.ExtractEntryKind.DataFile, 0, 100, false, 0),
+      new("b.bin", SevenZipArchiveDecoder.ExtractEntryKind.DataFile, 0, 200, false, 0),
+    };
+    bool[] selected = [true, true];
+
+    long required = SevenZipArchiveDecoder.ComputeRequiredSpace(plan, selected);
+    Assert.Equal(300, required);
+  }
+
+  /// <summary>
+  /// Каталог (Directory) не участвует в сумме, даже если Size &gt; 0.
+  /// </summary>
+  [Fact]
+  public void ComputeRequiredSpace_КаталогиПропускаются()
+  {
+    var plan = new SevenZipArchiveDecoder.ExtractPlanEntry[]
+    {
+      new("dir", SevenZipArchiveDecoder.ExtractEntryKind.Directory, 0, 0, false, 0),
+      new("a.bin", SevenZipArchiveDecoder.ExtractEntryKind.DataFile, 0, 100, false, 0),
+    };
+    bool[] selected = [true, true];
+
+    long required = SevenZipArchiveDecoder.ComputeRequiredSpace(plan, selected);
+    Assert.Equal(100, required);
+  }
+
+  /// <summary>
+  /// Невыбранные (shouldExtract = false) не участвуют в сумме.
+  /// </summary>
+  [Fact]
+  public void ComputeRequiredSpace_НевыбранныеПропускаются()
+  {
+    var plan = new SevenZipArchiveDecoder.ExtractPlanEntry[]
+    {
+      new("a.bin", SevenZipArchiveDecoder.ExtractEntryKind.DataFile, 0, 100, false, 0),
+      new("b.bin", SevenZipArchiveDecoder.ExtractEntryKind.DataFile, 0, 200, false, 0),
+    };
+    bool[] selected = [true, false];
+
+    long required = SevenZipArchiveDecoder.ComputeRequiredSpace(plan, selected);
+    Assert.Equal(100, required);
+  }
+
+  /// <summary>
+  /// Size ≤ 0 (недоверенный заголовок: отрицательные/нулевые) пропускается.
+  /// </summary>
+  [Fact]
+  public void ComputeRequiredSpace_РазмерМеньшеРавенНулю_Пропускается()
+  {
+    var plan = new SevenZipArchiveDecoder.ExtractPlanEntry[]
+    {
+      new("a.bin", SevenZipArchiveDecoder.ExtractEntryKind.DataFile, 0, -1, false, 0),
+      new("b.bin", SevenZipArchiveDecoder.ExtractEntryKind.DataFile, 0, 0, false, 0),
+      new("c.bin", SevenZipArchiveDecoder.ExtractEntryKind.DataFile, 0, 50, false, 0),
+    };
+    bool[] selected = [true, true, true];
+
+    long required = SevenZipArchiveDecoder.ComputeRequiredSpace(plan, selected);
+    Assert.Equal(50, required);
+  }
+
+  /// <summary>
+  /// Насыщение суммы: два элемента по <c>long.MaxValue / 2 + 1</c> дают сумму больше
+  /// <see cref="long.MaxValue"/>. Без насыщения сумма переполнилась бы в отрицательную,
+  /// и проверка места молча перестала бы срабатывать.
+  /// </summary>
+  [Fact]
+  public void ComputeRequiredSpace_ПереполнениеСуммы_НасыщаетсяДоMaxValue()
+  {
+    long half = long.MaxValue / 2 + 1;
+    var plan = new SevenZipArchiveDecoder.ExtractPlanEntry[]
+    {
+      new("a.bin", SevenZipArchiveDecoder.ExtractEntryKind.DataFile, 0, half, false, 0),
+      new("b.bin", SevenZipArchiveDecoder.ExtractEntryKind.DataFile, 0, half, false, 0),
+    };
+    bool[] selected = [true, true];
+
+    long required = SevenZipArchiveDecoder.ComputeRequiredSpace(plan, selected);
+    Assert.Equal(long.MaxValue, required);
+  }
+
+  /// <summary>
+  /// Пустой план → 0 (нечего извлекать, место не требуется).
+  /// </summary>
+  [Fact]
+  public void ComputeRequiredSpace_ПустойПлан_Ноль()
+  {
+    long required = SevenZipArchiveDecoder.ComputeRequiredSpace([], []);
+    Assert.Equal(0, required);
+  }
+
+  /// <summary>
+  /// EmptyFile (Kind == EmptyFile, Size == 0) не участвует: размер 0 пропускается.
+  /// </summary>
+  [Fact]
+  public void ComputeRequiredSpace_EmptyFile_Пропускается()
+  {
+    var plan = new SevenZipArchiveDecoder.ExtractPlanEntry[]
+    {
+      new("empty.txt", SevenZipArchiveDecoder.ExtractEntryKind.EmptyFile, 0, 0, false, 0),
+      new("a.bin", SevenZipArchiveDecoder.ExtractEntryKind.DataFile, 0, 42, false, 0),
+    };
+    bool[] selected = [true, true];
+
+    long required = SevenZipArchiveDecoder.ComputeRequiredSpace(plan, selected);
+    Assert.Equal(42, required);
+  }
+
+  /// <summary>
+  /// G4: слишком длинное назначение. Путь длиннее фактического предела ОС, но в пределах
+  /// <c>Path.GetFullPath</c>. До фикса root-каталог создавался ДО проверки длины, поэтому
+  /// <c>Directory.CreateDirectory</c> отказывал на уровне ОС и возвращался общий
+  /// <c>InternalError</c>; теперь длина назначения проверяется до первой мутации и возвращается
+  /// отличимый <see cref="SevenZipArchiveDecodeResult.PathTooLong"/>, каталог не создаётся.
+  /// </summary>
+  [Fact]
+  public void ExtractToDirectory_СлишкомДлинноеНазначение_PathTooLong_ИКаталогНеСоздаётся()
+  {
+    int limit = StagedExtractionJournal.FullPathLimit;
+    // На Windows расширенная форма добавляет 4 символа, поэтому запас 6: путь заведомо длиннее
+    // предела ОС (32767 вместе с префиксом), но не длиннее допуска Path.GetFullPath.
+    int extra = OperatingSystem.IsWindows() ? 6 : 1;
+
+    string destination = BuildLongDestination(limit + extra);
+    byte[] archive = BuildLzma2(("a.txt", Payload("data")));
+
+    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.ExtractToDirectory(
+        archive: archive,
+        options: SevenZipDecodeOptions.Default,
+        destinationDirectory: destination,
+        overwrite: false,
+        bytesConsumed: out _);
+
+    Assert.Equal(SevenZipArchiveDecodeResult.PathTooLong, result);
+    Assert.False(Directory.Exists(StagedExtractionJournal.ToFileSystemPath(destination)),
+        "каталог назначения не должен создаваться: отказ до первой мутации");
+  }
+
+  /// <summary>Строит путь заданной длины из компонентов по 255 символов (НЕ создавая его на диске).</summary>
+  private static string BuildLongDestination(int targetLength)
+  {
+    var sb = new StringBuilder(Path.Combine(Path.GetTempPath(), "lzs-g4-" + Guid.NewGuid().ToString("N")));
+    int remaining = targetLength - sb.Length;
+
+    while (remaining > 256)
+    {
+      sb.Append(Path.DirectorySeparatorChar).Append('d', 255);
+      remaining -= 256;
+    }
+
+    sb.Append(Path.DirectorySeparatorChar).Append('d', Math.Max(1, remaining - 1));
+    return sb.ToString();
+  }
+}

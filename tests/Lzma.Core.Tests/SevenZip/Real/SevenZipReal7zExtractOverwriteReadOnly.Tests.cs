@@ -10,7 +10,7 @@ public sealed class SevenZipReal7zExtractOverwriteReadOnlyTests
   public void ExtractToDirectory_ExistingReadOnlyFile_OverwriteTrue_Ok_AndFileReplaced()
   {
     if (!OperatingSystem.IsWindows())
-      return;
+      Assert.Skip("Атрибут ReadOnly блокирует перезапись только на Windows; на POSIX успех rename определяется правами каталога.");
 
     byte[] archive = ReadTestDataBytes("../TestData/Real/hello_copy_mhc_off.7z");
 

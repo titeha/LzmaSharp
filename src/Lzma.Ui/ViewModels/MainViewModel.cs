@@ -1325,10 +1325,14 @@ public sealed class MainViewModel : ObservableObject
     });
   }
 
-  private static string ExtractStatus(SevenZipArchiveDecodeResult result, string destination) => result switch
+  internal static string ExtractStatus(SevenZipArchiveDecodeResult result, string destination) => result switch
   {
     SevenZipArchiveDecodeResult.Ok => $"Извлечено в: {destination}",
     SevenZipArchiveDecodeResult.NotSupported => "Извлечение не поддерживается для этого архива.",
+    // Отказы pre-flight: ядро возвращает их до первой записи данных, поэтому причина отличается
+    // и от повреждения архива, и от конфликта имён.
+    SevenZipArchiveDecodeResult.InsufficientSpace => "Не удалось извлечь: на диске назначения недостаточно свободного места.",
+    SevenZipArchiveDecodeResult.PathTooLong => "Не удалось извлечь: путь назначения или имя элемента превышает допустимую длину.",
     _ => "Не удалось извлечь: ошибка данных или файл уже существует.",
   };
 
@@ -1536,15 +1540,23 @@ public sealed class MainViewModel : ObservableObject
   {
     ZipExtractResult.Ok => $"Извлечено в: {destination}",
     ZipExtractResult.IOError => "Не удалось извлечь ZIP: ошибка записи на диск.",
+    // Отказы pre-flight: ядро возвращает их до первой записи данных.
+    ZipExtractResult.InsufficientSpace => "Не удалось извлечь ZIP: на диске назначения недостаточно свободного места.",
+    ZipExtractResult.PathTooLong => "Не удалось извлечь ZIP: путь назначения или имя элемента превышает допустимую длину.",
     _ => "Не удалось извлечь ZIP: небезопасный путь, конфликт имён или файл уже существует.",
   };
 
   // Итог потокового извлечения по пути с учётом шифрования: при неудаче зашифрованного архива
   // подсказываем про пароль.
-  private static string StreamingExtractStatus(SevenZipArchiveDecodeResult result, string destination, bool encrypted)
+  internal static string StreamingExtractStatus(SevenZipArchiveDecodeResult result, string destination, bool encrypted)
   {
     if (result == SevenZipArchiveDecodeResult.Ok)
       return $"Извлечено в: {destination}";
+
+    // Отказы pre-flight (место, длина пути) возникают до декодирования и с паролем не связаны:
+    // иначе для зашифрованного архива пользователь получил бы ложную подсказку про пароль.
+    if (result is SevenZipArchiveDecodeResult.InsufficientSpace or SevenZipArchiveDecodeResult.PathTooLong)
+      return ExtractStatus(result, destination);
 
     if (encrypted)
       return "Не удалось извлечь: неверный пароль или повреждённый архив.";

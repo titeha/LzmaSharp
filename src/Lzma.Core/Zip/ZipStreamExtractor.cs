@@ -56,19 +56,32 @@ public static class ZipStreamExtractor
         entries.Count,
         i => entries[i].Name,
         i => entries[i].IsDirectory,
-        (i, fullPath) => WriteEntry(archive, entries[i], fullPath, token, progress, total, processed, password),
+        (i, stagedPath) => WriteEntry(archive, entries[i], stagedPath, token, progress, total, processed, password),
         destinationDirectory,
         overwrite,
         currentFile,
-        token);
+        token,
+        i => entries[i].UncompressedSize);
   }
 
   // Пишет данные одного члена на диск: seek к данным по локальному заголовку → Store-копия/Deflate-декод
   // (или расшифровка WinZip-AES → декомпрессия для зашифрованных членов).
   private static ZipExtractResult WriteEntry(
-      Stream archive, ZipStreamEntry entry, string fullPath, CancellationToken token,
+      Stream archive, ZipStreamEntry entry, string stagedPath, CancellationToken token,
       IProgress<SevenZipProgress>? progress, long total, long[] processed, byte[]? password)
   {
+    // Поля записи могут прийти из вручную собранного списка (публичный API принимает
+    // IReadOnlyList<ZipStreamEntry>), поэтому недоверенные значения отклоняются ДО seek и ДО
+    // аллокаций: Stream.Position с отрицательным значением бросает ArgumentOutOfRangeException,
+    // а сложение двух недоверенных величин переполняет long и пропускает проверку границы.
+    long archiveLength = archive.Length;
+
+    if (entry.LocalHeaderOffset < 0 || entry.CompressedSize < 0 || entry.UncompressedSize < 0)
+      return ZipExtractResult.InvalidData;
+
+    if (entry.LocalHeaderOffset > archiveLength - LocalHeaderSize)
+      return ZipExtractResult.InvalidData;
+
     // Длины имени/extra берём из ЛОКАЛЬНОГО заголовка (могут отличаться от центрального).
     archive.Position = entry.LocalHeaderOffset;
 
@@ -87,14 +100,21 @@ public static class ZipStreamExtractor
 
     int nameLen = BinaryPrimitives.ReadUInt16LittleEndian(local.Slice(26, 2));
     int extraLen = BinaryPrimitives.ReadUInt16LittleEndian(local.Slice(28, 2));
-    long dataStart = entry.LocalHeaderOffset + LocalHeaderSize + nameLen + extraLen;
 
-    if (dataStart + entry.CompressedSize > archive.Length)
+    // Смещение данных: headerExtra ограничен сверху (30 + 2×65535), поэтому вычитание из длины
+    // потока не переполняется; при нехватке запаса возвращаем отказ вместо seek за конец потока.
+    long headerExtra = LocalHeaderSize + (long)nameLen + extraLen;
+    if (entry.LocalHeaderOffset > archiveLength - headerExtra)
+      return ZipExtractResult.InvalidData;
+
+    long dataStart = entry.LocalHeaderOffset + headerExtra;
+
+    if (entry.CompressedSize > archiveLength - dataStart)
       return ZipExtractResult.InvalidData;
 
     archive.Position = dataStart;
 
-    using var file = new FileStream(fullPath, FileMode.Create, FileAccess.Write);
+    using var file = new FileStream(StagedExtractionJournal.ToFileSystemPath(stagedPath), FileMode.Create, FileAccess.Write);
 
     if (entry.IsEncrypted)
       return WriteEncryptedEntry(archive, entry, file, password, progress, total, processed);
@@ -204,7 +224,7 @@ public static class ZipStreamExtractor
   {
     // Потоковый ВХОД: читаем ровно CompressedSize байт прямо из архива (позиция уже на начале данных),
     // выход пишем через окно. Ни сжатые, ни распакованные данные целиком в памяти не держим → член
-    // любого размера, в т.ч. >2 ГиБ.
+    // произвольного размера (кроме зашифрованного WinZip-AES — там предел 2 ГиБ, см. :146).
     var crcStream = new Crc32WriteStream(file, progress, total, processed);
     DeflateDecodeResult result;
     long written;
