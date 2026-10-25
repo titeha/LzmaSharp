@@ -6,7 +6,7 @@ last_verified_date: 2026-10-23
 main_branch: main
 main_commit: 96defd70d41c02fe36e9ece2a0519e6da551ed33
 active_work_branch: fix/sec003-path-trust
-active_work_commit: ea076dd
+active_work_commit: a8c2247
 next_task: "doc-tail D3 (док-коммит за этим изменением, делает владелец), кросс-семейное ревью production-диффов D3c (f3a7ad4 + ea076dd), D4a платформенные fixtures, D5 финальный gate фазы D; по итогам — решение владельца о merge и о версии 1.2.0"
 ---
 
@@ -219,6 +219,32 @@ platform CI matrix остаются открытыми.
 - full solution: 1918 passed = `Lzma.Ui.Tests` 219 + `Lzma.Core.Tests` 1699;
 - failed: 0; skipped: 0;
 - independent final review: `APPROVE` (SEC002-M6.5-FINAL).
+
+### Ревью D3c и закрытие MAJOR-1 (fail-closed)
+
+- Кросс-семейное ревью production-диффов `f3a7ad4` + `ea076dd` (агент reviewer, модель
+  `deepseek/deepseek-v4-pro`, read-only, отчёт `.agent/reports/D3C_CROSS_FAMILY_REVIEW_deepseek-v4-pro.md`):
+  **APPROVE_WITH_COMMENTS**, 0 BLOCKING / 1 MAJOR / 5 MINOR. Ревьюер независимо подтвердил
+  полноту обхода (от root, не включая его, до конечного пути включительно, без off-by-one),
+  отсутствие асимметрии обёрток (все вызовы через `ToFileSystemPath`), недостижимость ветки
+  «fullPath не начинается с root» в маршруте (путь уже отклонён `TryBuildSafePath`) и то, что
+  публичный API не изменён.
+- MAJOR-1 закрыт тимлидом: подавление исключений при чтении атрибутов СУЩЕСТВУЮЩЕГО компонента
+  было fail-open — при ACL «чтение атрибутов запрещено, проход и запись разрешены» запись могла
+  уйти сквозь ссылку без отказа. Сделано fail-closed (`HasReparsePointOnPath` возвращает `true`),
+  цена — возможный ложный отказ на экзотических ФС; выбор в пользу сохранности данных.
+  Заодно закрыт MINOR-2: параметр `comparer` реально используется (сравнение префикса),
+  второе определение платформенной семантики удалено.
+- MINOR-3 и MINOR-4 закрыты в SDL: mount point общим флагом не обнаруживается (обычный каталог
+  без `ReparsePoint`, монтирование вне модели угроз); явно зафиксирован класс ложных отказов —
+  легитимные reparse-объекты не-ссылочной природы (placeholder'ы облачных дисков на Windows).
+- MINOR-5 (тестовые пробелы: промежуточный компонент-ссылка, элемент-каталог сквозь ссылку,
+  частичное извлечение, пустые файлы и solid-folder, TOCTOU после проверки) — принят как
+  допустимый долг: код-путь единый, по `ACCEPTANCE_D` §D3 эти сценарии не обязательны.
+  MINOR-6 (неразличимость кода `InvalidData`) — примечание, соответствует решению не менять
+  публичный API.
+- Факты после фикса (Windows, Release): Build 0 ошибок / 62 предупреждения (= baseline);
+  `Lzma.Core.Tests` 1781 passed / 5 skipped / 1786 / 0 failed; `Lzma.Ui.Tests` 239 / 0 / 0.
 
 ### D3a/D3b/D3c — обнаружение reparse-компонентов в цепочке пути назначения
 
