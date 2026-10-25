@@ -277,16 +277,19 @@ public static partial class SevenZipArchiveDecoder
   /// <param name="root">Корень извлечения (сам не проверяется).</param>
   /// <param name="fullPath">Полный путь элемента (файла или каталога).</param>
   /// <param name="checkedCache">Кэш проверенных компонентов (может быть null — без кэша).</param>
-  /// <param name="comparer">Компаратор для кэша (OrdinalIgnoreCase на Windows, Ordinal на прочих ОС).</param>
-  /// <returns><c>true</c>, если на пути найден reparse-компонент.</returns>
+  /// <param name="comparer">Компаратор путей операции (OrdinalIgnoreCase на Windows, Ordinal на
+  /// прочих ОС): используется и для сравнения префикса, и (на стороне вызывающего) для кэша.</param>
+  /// <returns><c>true</c>, если на пути найден reparse-компонент ИЛИ если атрибуты существующего
+  /// компонента не удалось прочитать (fail-closed: операция отклоняется, а не продолжается вслепую).</returns>
   internal static bool HasReparsePointOnPath(
       string root,
       string fullPath,
       HashSet<string>? checkedCache,
       StringComparer comparer)
   {
-    // Выделяем относительную часть пути от root до fullPath.
-    StringComparison sc = OperatingSystem.IsWindows()
+    // Выделяем относительную часть пути от root до fullPath. Сравнение префикса берётся из
+    // компаратора операции, чтобы не плодить второе определение платформенной семантики.
+    StringComparison sc = ReferenceEquals(comparer, StringComparer.OrdinalIgnoreCase)
         ? StringComparison.OrdinalIgnoreCase
         : StringComparison.Ordinal;
 
@@ -315,19 +318,38 @@ public static partial class SevenZipArchiveDecoder
       try
       {
         string fsPath = StagedExtractionJournal.ToFileSystemPath(current);
-        if (File.Exists(fsPath) || Directory.Exists(fsPath))
-        {
-          FileAttributes attr = File.GetAttributes(fsPath);
-          if ((attr & FileAttributes.ReparsePoint) != 0)
-            return true;
+        if (!File.Exists(fsPath) && !Directory.Exists(fsPath))
+          continue; // компонента ещё нет — его создаст маршрут
 
-          checkedCache?.Add(current);
+        FileAttributes attr;
+        try
+        {
+          attr = File.GetAttributes(fsPath);
         }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+            or NotSupportedException or ArgumentException)
+        {
+          // Fail-closed (MAJOR-1 кросс-семейного ревью D3c): компонент СУЩЕСТВУЕТ, но его атрибуты
+          // прочитать не удалось. Прежний fail-open трактовал такой компонент как «не reparse»,
+          // поэтому при ACL «запрет чтения атрибутов, но разрешены проход и запись» запись могла
+          // уйти сквозь ссылку вне root без отказа. Цена fail-closed — возможен ложный отказ на
+          // экзотических ФС, это осознанный выбор в пользу сохранности данных.
+          return true;
+        }
+
+        if ((attr & FileAttributes.ReparsePoint) != 0)
+          return true;
+
+        checkedCache?.Add(current);
       }
       catch (IOException) { }
       catch (UnauthorizedAccessException) { }
       catch (NotSupportedException) { }
       catch (ArgumentException) { }
+      // Исключения выше относятся к построению пути и проверке существования (File.Exists и
+      // Directory.Exists возвращают false вместо исключения при ошибке доступа): компонент при
+      // этом считается отсутствующим, а штатный отказ маршрута на таком пути произойдёт позже
+      // и будет откачен журналом.
     }
 
     return false;
