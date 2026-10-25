@@ -2,12 +2,12 @@
 doc_kind: current-work-plan
 status: active
 project: LzmaSharp
-last_verified_date: 2026-10-19
+last_verified_date: 2026-10-23
 main_branch: main
-main_commit: 3a55297106e6a978b460faa5bfe3b1a1b85b1041
-active_work_branch: fix/sec002-multivolume-transaction
-active_work_commit: 0d81d9c
-next_task: "G8 перед публикацией (advisory-гейт + pinning зависимостей, обновление Description пакета), затем A12 merge вручную и тег core/1.1.0; по решению владельца — SEAM-2, кросс-семейное ревью production-диффов, промежуточные компоненты пути выбранного файла (G4-остаток)"
+main_commit: 96defd70d41c02fe36e9ece2a0519e6da551ed33
+active_work_branch: fix/sec003-path-trust
+active_work_commit: ea076dd
+next_task: "doc-tail D3 (док-коммит за этим изменением, делает владелец), кросс-семейное ревью production-диффов D3c (f3a7ad4 + ea076dd), D4a платформенные fixtures, D5 финальный gate фазы D; по итогам — решение владельца о merge и о версии 1.2.0"
 ---
 
 # LzmaSharp: текущее состояние работ и ближайший план
@@ -219,6 +219,74 @@ platform CI matrix остаются открытыми.
 - full solution: 1918 passed = `Lzma.Ui.Tests` 219 + `Lzma.Core.Tests` 1699;
 - failed: 0; skipped: 0;
 - independent final review: `APPROVE` (SEC002-M6.5-FINAL).
+
+### D3a/D3b/D3c — обнаружение reparse-компонентов в цепочке пути назначения
+
+- **Состав шагов (фаза D, SEC-003, профиль B):** `caff8f1` — capability-probe ссылок (test-only);
+  `5fffb16` — RED-регрессии PATH-01/PATH-02 (test-only); `f3a7ad4` — production-фикс ZIP-маршрута
+  (D3c-1); `ea076dd` — подключение того же механизма в 7z-маршрут (D3c-2). База фазы — `96defd7`
+  (merge SEC-001/SEC-002 в main), ветка `fix/sec003-path-trust`.
+- **Production-механизм.** Новый internal-хелпер `HasReparsePointOnPath` в
+  `src/Lzma.Core/SevenZip/Decoding/SevenZipArchiveDecoder.SafeExtraction.cs`: покомпонентный обход
+  цепочки пути назначения ОТ root (не включая root) ДО конечного пути включительно; для каждого
+  существующего компонента проверяется `(File.GetAttributes & FileAttributes.ReparsePoint) != 0`;
+  все файловые вызовы идут через `StagedExtractionJournal.ToFileSystemPath`; проверенные компоненты
+  кэшируются в `HashSet` на одну операцию извлечения (чтобы не добавлять syscall на каждый элемент);
+  исключения ФС и доступа не пробрасываются — компонент трактуется как «не reparse», штатный отказ
+  маршрута произойдёт позже и будет откачен журналом.
+- **Подключение — оба маршрута:** `ZipExtractor.ExtractCore` (проверка перед `CreateDirsTracked`,
+  до первой записи; `src/Lzma.Core/Zip/ZipExtractor.cs:182`) и
+  `SevenZipArchiveDecoder.ExtractHeaderToDirectory` (в цикле записи, до первой мутации;
+  `src/Lzma.Core/SevenZip/Decoding/SevenZipArchiveDecoder.cs:1117`). Код отказа — существующий
+  `InvalidData`; публичный API не изменён, новых значений enum нет.
+- **Механизм единый кросс-платформенно:** `FileAttributes.ReparsePoint` поддержан на Windows,
+  Linux и macOS (подтверждено документацией Microsoft Learn по `System.IO.FileAttributes`);
+  типы ссылок не различаются — решение владельца (различение потребовало бы
+  `REPARSE_DATA_BUFFER`, то есть P/Invoke). Измерение CI: symlink-тесты прошли на ubuntu и macos,
+  junction-тесты — на Windows.
+- **Что доказано тестами**
+  (`tests/Lzma.Core.Tests/SevenZip/Decoding/ExtractThroughReparseParent.Tests.cs`): до фикса оба
+  junction-теста ПАДАЛИ с сообщением, что файл из архива физически появился во внешнем
+  каталоге-sentinel (настоящий RED), после фикса — зелёные, sentinel не изменён (маркерный файл
+  проверяется побайтово), остатков `.tmp`/`.bak` нет. Symlink-сценарии на Windows пропускаются с
+  видимой причиной (`IOException` «Клиент не обладает требуемыми правами» — нет привилегии
+  `SeCreateSymbolicLink` при выключенном Developer Mode), на ubuntu и macos они ВЫПОЛНЯЮТСЯ и
+  прошли с фиксом (CI run `40210389162` — все три job'а success).
+- **Capability-probe** (`tests/Lzma.Core.Tests/Platform/ReparsePointCapabilityProbe.Tests.cs`,
+  `caff8f1`) измерил: junction создаётся внешним процессом `cmd /d /c mklink /J`; `ReparsePoint`
+  на junction установлен, на обычном каталоге — нет (ложных срабатываний нет);
+  `Directory.Exists(ссылка-на-каталог) = true` при `File.Exists = false`;
+  `Directory.ResolveLinkTarget(junction, returnFinalTarget: false)` возвращает цель;
+  `Directory.Delete(ссылка, recursive: false)` удаляет только ссылку, цель цела; запись сквозь
+  ссылку уходит во внешний каталог — это и есть закрываемый сценарий.
+- **Числа прогонов (измерено владельцем; Windows, Release, HEAD `ea076dd`; doc-tail повторного
+  замера не выполнял):** `Lzma.Core.Tests` — 1781 passed /
+  5 skipped / 1786 total / 0 failed; `Lzma.Ui.Tests` — 239 passed / 0 failed / 0 skipped;
+  сборка — 0 ошибок и 62 предупреждения в `Lzma.Core` (= baseline, новых нет). Измерено в CI на
+  `caff8f1` (TRX прочитан владельцем): ubuntu — 1754 passed / 26 skipped, macos — 1753 passed /
+  27 skipped. **Ожидается** на POSIX после `ea076dd` (выведено из факта Windows-прогона и фактов
+  TRX на `caff8f1`, а не измерено): всего 1784 теста (1786 минус 2 кейса, обнаруживаемых только на
+  Windows); из них 2 новых junction-теста дают видимый skip («junction — объект Windows»), а 2 новых
+  symlink-теста выполняются и проходят ⇒ 1756 passed / 28 skipped. Фактическое подтверждение — из
+  следующего TRX.
+- **Честные границы (ничего сверх доказанного не заявляется):** окно между проверкой
+  reparse-компонентов и открытием файла остаётся — без P/Invoke (запрещён владельцем, проект 100%
+  managed) недоступны handle-anchored доступ (openat-стиль) и no-follow флаги, поэтому профиль B
+  (локальный атакующий контролирует каталог назначения) НЕ закрывается полностью; ссылки, созданные
+  ПОСЛЕ проверки, не обнаруживаются; сам root, если пользователь указал его ссылкой, не
+  отвергается — сознательное решение (назначение выбирает пользователь).
+- **Шаг D2b отменён решением владельца.** Диагностика гонки публикации не делается: без
+  production-seam блокирующая регрессия невозможна, а замер D2a (`2d8d6bd`, CI run `40204664877` —
+  все три job'а success) показал отсутствие молчаливой замены цели на всех трёх ОС. Остаток —
+  косметика кода результата при появлении файла в окне «проверка → публикация» (`IOError` у ZIP и
+  `InternalError` у 7z вместо документированного `InvalidData`) — записан как известное
+  ограничение.
+- **Долг этого doc-tail (закрывается шагом D5):** статус SEC-003 в реестре
+  `docs/plans/SECURITY_REMEDIATION_PLAN.md` не менялся (строка «SEC-003 … открыт» остаётся) —
+  смена статуса требует финального gate фазы, поэтому этот doc-tail не объявляет риск закрытым;
+  блокирующие регрессии есть на `ea076dd`, но профиль B закрыт лишь частично. Блоки §3
+  «Проверенные контрольные точки» и §6 «Текущий рабочий пакет» этого файла описывают фазу B и
+  обновляются тем же шагом D5.
 
 ### G4 — длина пути назначения проверяется до создания root-каталога (7z)
 
