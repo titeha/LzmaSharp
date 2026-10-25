@@ -6,7 +6,7 @@ last_verified_date: 2026-10-23
 main_branch: main
 main_commit: 96defd70d41c02fe36e9ece2a0519e6da551ed33
 active_work_branch: fix/sec003-path-trust
-active_work_commit: a8c2247
+active_work_commit: bf4ed8a
 next_task: "doc-tail D3 (док-коммит за этим изменением, делает владелец), кросс-семейное ревью production-диффов D3c (f3a7ad4 + ea076dd), D4a платформенные fixtures, D5 финальный gate фазы D; по итогам — решение владельца о merge и о версии 1.2.0"
 ---
 
@@ -219,6 +219,39 @@ platform CI matrix остаются открытыми.
 - full solution: 1918 passed = `Lzma.Ui.Tests` 219 + `Lzma.Core.Tests` 1699;
 - failed: 0; skipped: 0;
 - independent final review: `APPROVE` (SEC002-M6.5-FINAL).
+
+### D4a — платформенные fixtures назначения и решение владельца по Unicode-нормализации
+
+- Шаг (коммит `bf4ed8a`, исполнитель мидл, test-only, 631 строка, 4 теста):
+  `tests/Lzma.Core.Tests/Platform/DestinationCapabilityFixtures.Tests.cs` — две группы измерений
+  на реальном маршруте извлечения: (1) каталог назначения без права записи (ZIP и 7z),
+  (2) Unicode-нормализация имён NFC против NFD (извлечение NFC-имени с проверкой существования
+  в обеих формах; сценарий «NFD-файл уже существует, элемент архива NFC, `overwrite: false`»).
+  Политика probe соблюдена: 19 видимых `Assert.Skip` с измеренными значениями и причинами
+  (включая «извлечение прошло успешно на POSIX — вероятно запуск от root»), `Assert.Fail` только
+  на сломанное базовое поведение, тихих `return` нет, P/Invoke нет, `Directory.CurrentDirectory`
+  не меняется (смена CWD сознательно исключена — состояние процесса ломает параллельные тесты).
+- Факты по Windows (локально): атрибут `ReadOnly` у КАТАЛОГА создание файлов не блокирует →
+  извлечение Ok (особенность NTFS, не дефект); NTFS хранит имя как записано (`File.Exists` по NFC
+  true, по NFD false); при заранее созданном NFD-файле и NFC-элементе архива с `overwrite: false`
+  извлечение прошло и в каталоге стало два файла.
+- Факты по POSIX (CI run `40219674655`, TRX прочитан владельцем): ubuntu 1760 passed / 28 skipped,
+  macos 1759 passed / 29 skipped (всего 1788); все четыре теста ПРОШЛИ, то есть сценарии
+  воспроизвелись — извлечение в каталог без права записи даёт контролируемый код результата без
+  необработанного исключения, без частичных данных и без остатков `.tmp`/`.bak`; APFS видит имя
+  в обеих нормализациях (конфликт обнаруживается и извлечение отклоняется), ext4 — только в
+  записанной форме (как NTFS).
+- РЕШЕНИЕ ВЛАДЕЛЬЦА (2026-10-23), внесено в threat model (`tasks/D1_ADDENDUM_THREAT_MODEL.md`)
+  и design (`tasks/D1_SEC003_DESIGN_REPORT.md`): «Нормализация Unicode имён (NFC/NFD) — известное
+  ограничение, вне scope SEC-003; не претендуем на кросс-платформенную эквивалентность имён;
+  зафиксировано как known limitation в документации фазы». Отдельный шаг по нормализации имён
+  НЕ делается; в SDL ограничение описано с измеренными фактами по трём ОС.
+- Верификация (Windows, `bf4ed8a`): Build 0 ошибок / 62 предупреждения (= baseline);
+  `Lzma.Core.Tests` 1785 passed / 5 skipped / 1790 / 0 failed; `Lzma.Ui.Tests` 239 / 0 / 0;
+  push сверен `git ls-remote` по обоим remote; CI run `40219674655` — все три job'а success.
+- Неточность исполнителя, исправленная тимлидом: locked file покрыт в
+  `SevenZipExtractTransactional.Tests.cs` (Windows-only `FileShare.None` из B7), а не в
+  `PublishRaceAndMoveProbe.Tests.cs`.
 
 ### Ревью D3c и закрытие MAJOR-1 (fail-closed)
 
