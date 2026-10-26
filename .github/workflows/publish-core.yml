@@ -35,11 +35,16 @@ jobs:
         run: dotnet pack src/Lzma.Core/Lzma.Core.csproj -c Release -o out
 
       # SBOM (CycloneDX) — приложение к релизу (задел под провенанс/госсектор).
+      # Шаг БЛОКИРУЮЩИЙ (остаток G8): релиз без SBOM не публикуется. Версия тулзы закреплена —
+      # 6.3.1 (опубликована 2026-10-12; именно она сформировала bom.json релиза core/1.2.0),
+      # поэтому флаги CLI детерминированы и прежний повод «не блокировать публикацию» устранён.
+      # test -s не даёт попасть в активы релиза пустому или отсутствующему bom.json.
       - name: SBOM
         run: |
-          dotnet tool install --global CycloneDX
+          set -euo pipefail
+          dotnet tool install --global CycloneDX --version 6.3.1
           dotnet CycloneDX src/Lzma.Core/Lzma.Core.csproj --output out --json
-        continue-on-error: true # SBOM не должен блокировать публикацию; флаги CLI зависят от версии тулзы
+          test -s out/bom.json
 
       # Trusted publishing: обмен OIDC-токена на временный ключ nuget.org.
       - name: NuGet login (trusted publishing / OIDC)
