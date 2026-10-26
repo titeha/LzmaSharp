@@ -47,39 +47,37 @@ next_task: "doc-tail D3 (док-коммит за этим изменением,
 
 ```text
 branch: main
-commit: 3a55297106e6a978b460faa5bfe3b1a1b85b1041
-date:   2026-08-14
+commit: 96defd70 (merge --no-ff ветки fix/sec002-multivolume-transaction, A12)
+date:   2026-10-23
 ```
 
-После объявления SEC-002 закрытым в `main` в основном добавлялись документы,
-правила и промпты для агентов. Незавершённая multi-volume транзакция в `main`
-не влита.
+В `main` влиты и опубликованы: SEC-002 (транзакционное создание архива и многотомных наборов,
+M4B–M9, F3, глобальный gate `APPROVE_WITH_FINDINGS`) и SEC-001 (транзакционное извлечение: стадия,
+публикация после проверки, откат с восстановлением прежних байт и атрибутов; предварительные
+проверки места и длины пути; длинные пути Windows без opt-in хоста). На этом состоянии опубликован
+пакет **Ti-Soft.LzmaSharp 1.1.0** (тег `core/1.1.0`, nuget.org: flat-container содержит 1.1.0,
+GitHub Release с `.nupkg`/`.snupkg`/`bom.json`). CI на `main`: run `39996998662` — три job'а success.
 
 ### Рабочая ветка
 
 ```text
-branch: fix/sec002-multivolume-transaction
-commit: a6bc98ad3eee1cbe9f6c853687874a45fb364fff
-date:   2026-09-24
+branch: fix/sec003-path-trust (от main = 96defd70)
+commit: c7e4a1f (см. git log: caff8f1, 5fffb16, f3a7ad4, ea076dd, b1ed2ea, a8c2247, 7990f7e, bf4ed8a)
+date:   2026-10-23
 ```
 
-В ней сохранены:
+В ней выполнены шаги фазы D (SEC-003): D0 baseline; D1 design + аддендум (threat model в структуре
+владельца, факты по Microsoft Learn); D2a characterization и probe `File.Move(overwrite:false)`;
+D3a capability-probe ссылок; D3b RED-регрессии PATH-01/PATH-02; D3c-1/D3c-2 обнаружение
+reparse-компонентов в обоих маршрутах; ревью (APPROVE_WITH_COMMENTS, MAJOR-1 fail-open закрыт
+fail-closed); D4a fixtures назначения (каталог без права записи, Unicode NFC/NFD); doc-tail'и.
+Предыдущая ветка `fix/sec002-multivolume-transaction` влита в `main` и не удалена.
 
-- узкий `IStagedVolumeFileOperations`;
-- инъекция файловых отказов;
-- backup-фаза существующих управляемых томов;
-- rollback ошибок backup-фазы;
-- журнал опубликованных новых томов;
-- rollback частичной публикации;
-- тесты отказа до первого, после первого и на последнем publish;
-- M4B: commit point и cleanup operation backups;
-- M5: отказ от delete-by-scan и conflict policy для дополнительного `{base}.NNN`;
-- M6: lifecycle state machine, manifest-shape validation, staged-existence precheck,
-  controlled backup-catch;
-- M6-F1: приоритет disposed-guard над null-guard в `SetVolumes`;
-- принятый config-follow-up `.gitignore` (пять возвращённых локальных ignore-правил).
-
-Эту ветку нельзя выбрасывать или начинать заново.
+Локальные факты на `bf4ed8a`/`c7e4a1f` (Windows 11 Pro 10.0.28000, SDK 10.0.112 при
+`global.json` 10.0.101): `Lzma.Core.Tests` 1785 passed / 5 skipped / 1790; `Lzma.Ui.Tests`
+239 / 0 / 0; Build Release 0 ошибок / 62 предупреждения (= baseline). CI: runs `40219674655`
+(`bf4ed8a`) и `40222055063` (`c7e4a1f`) — все три job'а success. POSIX-числа из TRX:
+ubuntu 1760 passed / 28 skipped, macos 1759 passed / 29 skipped (всего 1788).
 
 ## 4. Что уже завершено
 
@@ -1498,27 +1496,31 @@ F4 disposition (принято владельцем, без преувеличе
 
 ## 6. Текущий рабочий пакет
 
-Текущий пакет (фаза B) ограничен только:
+Текущий пакет (фаза D) ограничен только:
 
 ```text
-SEC-001 / transactional extraction (стадинг, публикация после проверки,
-                                  откат с восстановлением прежних байт)
+SEC-003 / path trust: reparse-компоненты в цепочке пути назначения,
+                      гонка публикации, платформенные fixtures
 ```
 
-Предыдущий пакет `SEC-002 / multi-volume transactional publication` (M4B–M9, F3, глобальный gate
-`APPROVE_WITH_FINDINGS`) завершён по production-коду; merge в `main` выполняется вручную владельцем
-(A12) и на момент этой записи не выполнен.
+Предыдущие пакеты завершены и влиты в `main` (96defd70): `SEC-002 / multi-volume transactional
+publication` и `SEC-001 / transactional extraction`; на этом состоянии опубликован пакет
+`Ti-Soft.LzmaSharp 1.1.0`.
 
 Вне scope текущего пакета:
 
-- архитектурное разделение (Compression / Cryptography / Containers / ArchiveIO);
-- ZIP internals и кодеки вне маршрута извлечения;
-- криптография (KDF/AES — фаза E) и политика ошибок (фаза F);
-- resource budget (RES-001/002/003 — фаза C);
-- package separation, mobile heads;
-- style cleanup, warnings cleanup;
-- отложенное отдельным решением владельца: B4c (todo #47), SEAM-1/SEAM-2, xUnit1051 (todo #35),
-  G8 (SBOM/advisory/pinning), DOC-017, capability-probe (todo #39).
+- архитектурное разделение (Compression / Cryptography / Containers / ArchiveIO) — по
+  `docs/plans/02_COMPRESSION_CRYPTO_SEPARATION.md`, начинать после стабилизации transactional I/O
+  и resource budget;
+- криптография (KDF/AES — фаза E), политика ошибок (фаза F), бюджеты памяти и вывода
+  (RES-001/002/003, SEC-004/SEC-010 — фаза C);
+- нормализация Unicode имён (NFC/NFD) — known limitation по решению владельца от 2026-10-23,
+  вне scope SEC-003;
+- приватный staging-root (D4b) — отложен владельцем; это единственная мера, способная сузить
+  окно TOCTOU без P/Invoke;
+- SEAM-1/SEAM-2 (швы для инъекции отказов) и связанный с ними диагностический остаток D2b;
+- xUnit1051 (todo #35), package separation, mobile heads, style/warnings cleanup;
+- остаток G8: блокирующий SBOM и pinning транзитивных зависимостей (advisory-гейт уже в CI).
 
 Синхронизация документации из «вне scope» исключена: doc-tail выполняется после каждого шага
 (правило владельца от 2026-10-12; процедура — `docs/plans/DOC_B_DOCUMENTATION_SYNC_PLAN.md`
