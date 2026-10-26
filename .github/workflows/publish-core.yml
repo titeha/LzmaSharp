@@ -53,9 +53,25 @@ jobs:
       - name: Push to NuGet
         run: dotnet nuget push "out/*.nupkg" --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json --skip-duplicate
 
+      # Тело релиза берём из аннотации тега: softprops/action-gh-release сам её не подставляет,
+      # из-за чего релизы core/1.1.0 и core/1.2.0 вышли с пустым body (дефект публикации).
+      - name: Release notes (из аннотации тега)
+        shell: bash
+        run: |
+          set -euo pipefail
+          git tag -l --format='%(contents)' "$GITHUB_REF_NAME" > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            {
+              echo "Релиз $GITHUB_REF_NAME (коммит $GITHUB_SHA)."
+              echo "Аннотация тега пуста — подробности в журнале репозитория."
+            } > release-notes.md
+          fi
+          wc -c release-notes.md
+
       - name: GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          body_path: release-notes.md
           files: |
             out/*.nupkg
             out/*.snupkg
