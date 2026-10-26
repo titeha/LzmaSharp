@@ -10,4 +10,14 @@
     <UseArtifactsOutput>true</UseArtifactsOutput>
     <ArtifactsPath>$(MSBuildThisFileDirectory)artifacts</ArtifactsPath>
   </PropertyGroup>
+
+  <!-- G8 (pinning зависимостей): полный граф, включая транзитивные пакеты, зафиксирован в
+       packages.lock.json рядом с каждым проектом. В CI восстановление идёт в locked-режиме:
+       любое расхождение с lock-файлом (незафиксированный пакет или другая транзитивная версия)
+       даёт ошибку NU1004 вместо тихой подмены состава зависимостей. Локально переменная CI не
+       установлена, поэтому обычный restore просто обновляет lock-файл. -->
+  <PropertyGroup>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RestoreLockedMode Condition="'$(CI)' == 'true'">true</RestoreLockedMode>
+  </PropertyGroup>
 </Project>
