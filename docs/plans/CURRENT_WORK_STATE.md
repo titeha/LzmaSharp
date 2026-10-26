@@ -2,12 +2,12 @@
 doc_kind: current-work-plan
 status: active
 project: LzmaSharp
-last_verified_date: 2026-10-23
+last_verified_date: 2026-10-26
 main_branch: main
-main_commit: 96defd70d41c02fe36e9ece2a0519e6da551ed33
-active_work_branch: fix/sec003-path-trust
-active_work_commit: bf4ed8a
-next_task: "doc-tail D3 (док-коммит за этим изменением, делает владелец), кросс-семейное ревью production-диффов D3c (f3a7ad4 + ea076dd), D4a платформенные fixtures, D5 финальный gate фазы D; по итогам — решение владельца о merge и о версии 1.2.0"
+main_commit: 7d5213ec8e7707b6eb08c074e41887b05ba15634
+active_work_branch: ci/g8-blocking-sbom-pinning
+active_work_commit: 7a9c0a9
+next_task: "merge ci/g8-blocking-sbom-pinning в main (по явной команде владельца); далее фаза C — SEC-004/SEC-010 и RES-001/002/003: план микрошагов с маршрутизацией моделей, затем первые шаги бюджетов памяти и вывода"
 ---
 
 # LzmaSharp: текущее состояние работ и ближайший план
@@ -47,37 +47,53 @@ next_task: "doc-tail D3 (док-коммит за этим изменением,
 
 ```text
 branch: main
-commit: 96defd70 (merge --no-ff ветки fix/sec002-multivolume-transaction, A12)
-date:   2026-10-23
+commit: 7d5213e (CI: тело GitHub Release из аннотации тега через body_path)
+date:   2026-10-26
 ```
 
 В `main` влиты и опубликованы: SEC-002 (транзакционное создание архива и многотомных наборов,
 M4B–M9, F3, глобальный gate `APPROVE_WITH_FINDINGS`) и SEC-001 (транзакционное извлечение: стадия,
 публикация после проверки, откат с восстановлением прежних байт и атрибутов; предварительные
-проверки места и длины пути; длинные пути Windows без opt-in хоста). На этом состоянии опубликован
-пакет **Ti-Soft.LzmaSharp 1.1.0** (тег `core/1.1.0`, nuget.org: flat-container содержит 1.1.0,
-GitHub Release с `.nupkg`/`.snupkg`/`bom.json`). CI на `main`: run `39996998662` — три job'а success.
+проверки места и длины пути; длинные пути Windows без opt-in хоста) — пакет
+**Ti-Soft.LzmaSharp 1.1.0** (тег `core/1.1.0`); SEC-003 фаза D (отклонение извлечения при
+reparse-компонентах в цепочке пути назначения, merge `0cc3f0c` ветки `fix/sec003-path-trust`) —
+пакет **Ti-Soft.LzmaSharp 1.2.0** (тег `core/1.2.0`; nuget.org flat-container содержит 1.2.0,
+в активах GitHub Release `.nupkg`, `.snupkg` и `bom.json` 1974 байта). CI на `main`: run
+`40343615709` (`0cc3f0c`) и run `40346426979` (`7d5213e`) — по три job'а success.
+
+Известный дефект публикации (кода не касается): тело GitHub Release для `core/1.1.0` и
+`core/1.2.0` пустое — проверено через API 2026-10-26 (длина `body` равна 0), так как
+`softprops/action-gh-release` не подставляет аннотацию тега. Исправлено в `7d5213e` через
+`body_path` и проявится со следующего тега; ноты сохранены в аннотациях тегов
+(`git tag -l --format='%(contents)' core/1.2.0`).
 
 ### Рабочая ветка
 
 ```text
-branch: fix/sec003-path-trust (от main = 96defd70)
-commit: c7e4a1f (см. git log: caff8f1, 5fffb16, f3a7ad4, ea076dd, b1ed2ea, a8c2247, 7990f7e, bf4ed8a)
-date:   2026-10-23
+branch: ci/g8-blocking-sbom-pinning (от main = 7d5213e)
+commit: 7a9c0a9 (8a49682 — блокирующий SBOM; 7a9c0a9 — pinning зависимостей)
+date:   2026-10-26
 ```
 
-В ней выполнены шаги фазы D (SEC-003): D0 baseline; D1 design + аддендум (threat model в структуре
-владельца, факты по Microsoft Learn); D2a characterization и probe `File.Move(overwrite:false)`;
-D3a capability-probe ссылок; D3b RED-регрессии PATH-01/PATH-02; D3c-1/D3c-2 обнаружение
-reparse-компонентов в обоих маршрутах; ревью (APPROVE_WITH_COMMENTS, MAJOR-1 fail-open закрыт
-fail-closed); D4a fixtures назначения (каталог без права записи, Unicode NFC/NFD); doc-tail'и.
-Предыдущая ветка `fix/sec002-multivolume-transaction` влита в `main` и не удалена.
+В ней выполнен остаток G8 (supply chain): шаг SBOM в `publish-core.yml` стал блокирующим (снято
+`continue-on-error`, добавлены `set -euo pipefail` и `test -s out/bom.json`), версия тулзы
+закреплена на `CycloneDX 6.3.1`; для шести проектов сгенерированы `packages.lock.json`, в
+`Directory.Build.props` включены `RestorePackagesWithLockFile` и `RestoreLockedMode` при `CI='true'`.
+Ветки `fix/sec002-multivolume-transaction` и `fix/sec003-path-trust` влиты в `main` и не удалены.
 
-Локальные факты на `bf4ed8a`/`c7e4a1f` (Windows 11 Pro 10.0.28000, SDK 10.0.112 при
-`global.json` 10.0.101): `Lzma.Core.Tests` 1785 passed / 5 skipped / 1790; `Lzma.Ui.Tests`
-239 / 0 / 0; Build Release 0 ошибок / 62 предупреждения (= baseline). CI: runs `40219674655`
-(`bf4ed8a`) и `40222055063` (`c7e4a1f`) — все три job'а success. POSIX-числа из TRX:
-ubuntu 1760 passed / 28 skipped, macos 1759 passed / 29 skipped (всего 1788).
+Локальные факты на `7a9c0a9` (Windows 11 Pro 10.0.28000, SDK 10.0.112 при `global.json` 10.0.101):
+`Lzma.Core.Tests` 1785 passed / 5 skipped / 1790; `Lzma.Ui.Tests` 239 / 0 / 0; Build Release
+0 ошибок / 67 предупреждений на полном дереве (= baseline). Блокирующее поведение locked-режима
+воспроизведено локально: `NU1403` при подменённой версии в lock-файле и `NU1004` при устаревшем
+lock-файле и изменённой ссылке на пакет — оба с ненулевым кодом возврата; после проверки
+состояние возвращено (sha256 lock-файла совпал с замером до теста). CI: run `40352251945`
+(`7a9c0a9`) — все три job'а success; числа тестов из TRX для этого run недоступны (анонимный
+доступ — 403), поэтому приведены только локальные числа. Прогон блокирующего шага SBOM возможен
+лишь при публикации следующего тега `core/*`.
+
+Локальные факты предыдущего состояния (`bf4ed8a`/`c7e4a1f`, фаза D): те же 1785 / 5 / 1790 и
+239 / 0 / 0; POSIX-числа из TRX: ubuntu 1760 passed / 28 skipped, macos 1759 passed / 29 skipped
+(всего 1788).
 
 ## 4. Что уже завершено
 
@@ -1496,16 +1512,21 @@ F4 disposition (принято владельцем, без преувеличе
 
 ## 6. Текущий рабочий пакет
 
-Текущий пакет (фаза D) ограничен только:
+Текущий пакет (остаток G8) ограничен только:
 
 ```text
-SEC-003 / path trust: reparse-компоненты в цепочке пути назначения,
-                      гонка публикации, платформенные fixtures
+G8 / supply chain: блокирующий шаг SBOM в publish-воркфлоу,
+                   pinning полного графа зависимостей (lock-файлы + locked-режим в CI)
 ```
 
-Предыдущие пакеты завершены и влиты в `main` (96defd70): `SEC-002 / multi-volume transactional
-publication` и `SEC-001 / transactional extraction`; на этом состоянии опубликован пакет
-`Ti-Soft.LzmaSharp 1.1.0`.
+Следующий пакет — фаза C: `SEC-004` (единый resource budget), `SEC-010` (checked-арифметика
+метаданных) и `RES-001/002/003` (бюджеты памяти и вывода); цель — снять оговорку «формальные
+лимиты памяти в разработке» из описания пакета.
+
+Предыдущие пакеты завершены, влиты в `main` (`7d5213e`) и опубликованы:
+`SEC-002 / multi-volume transactional publication` и `SEC-001 / transactional extraction` —
+`Ti-Soft.LzmaSharp 1.1.0`; `SEC-003 / path trust` (фаза D, merge `0cc3f0c`) —
+`Ti-Soft.LzmaSharp 1.2.0`.
 
 Вне scope текущего пакета:
 
@@ -1520,7 +1541,9 @@ publication` и `SEC-001 / transactional extraction`; на этом состоя
   окно TOCTOU без P/Invoke;
 - SEAM-1/SEAM-2 (швы для инъекции отказов) и связанный с ними диагностический остаток D2b;
 - xUnit1051 (todo #35), package separation, mobile heads, style/warnings cleanup;
-- остаток G8: блокирующий SBOM и pinning транзитивных зависимостей (advisory-гейт уже в CI).
+- остаток G8 (блокирующий SBOM и pinning транзитивных зависимостей) — ВЫПОЛНЕН на ветке
+`ci/g8-blocking-sbom-pinning` (`8a49682`, `7a9c0a9`), merge в `main` ожидает явной команды
+владельца; фактический прогон блокирующего шага SBOM возможен только при следующем релизе.
 
 Синхронизация документации из «вне scope» исключена: doc-tail выполняется после каждого шага
 (правило владельца от 2026-10-12; процедура — `docs/plans/DOC_B_DOCUMENTATION_SYNC_PLAN.md`
