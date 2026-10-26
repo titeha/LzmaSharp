@@ -142,6 +142,7 @@ public static class ZipExtractor
       }
 
       var journal = new StagedExtractionJournal();
+      var reparseChecked = new HashSet<string>(pathComparer);
       bool committed = false;
 
       if (!Directory.Exists(StagedExtractionJournal.ToFileSystemPath(root)))
@@ -175,6 +176,11 @@ public static class ZipExtractor
           token.ThrowIfCancellationRequested();
 
           string fullPath = fullPaths[i];
+
+          // SEC-003 профиль B: обнаружение reparse-компонентов (ссылки/junction)
+          // в цепочке пути назначения до первой мутации ФС.
+          if (SevenZipArchiveDecoder.HasReparsePointOnPath(root, fullPath, reparseChecked, pathComparer))
+            return ZipExtractResult.InvalidData;
 
           if (isDirAt(i))
           {

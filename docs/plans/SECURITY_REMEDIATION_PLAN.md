@@ -28,7 +28,7 @@
 |---|---|---|
 | SEC-001 | потеря существующих файлов при extract + overwrite | открыт |
 | SEC-002 | создание архива напрямую в конечный путь | транзакционное создание реализовано (M4B/M5/M6/M7 + F1/F2/F3); глобальный gate 2026-10-13 на HEAD `412c563` — `APPROVE_WITH_FINDINGS` (BLOCKING/MAJOR нет; прогон 1924 passed / 0 failed / 0 skipped). Ранняя отметка «закрыт 2026-08-12 (HEAD `10377e2`)» относилась к первой фазе и была подтверждена повторно этим gate. Остаточные ограничения: нет crash/power-loss recovery, нет атомарности набора томов, CI-матрица добавлена, но не прогнана |
-| SEC-003 | symlink/junction/reparse/TOCTOU | открыт |
+| SEC-003 | symlink/junction/reparse/TOCTOU | частично закрыт (фаза D, ветка `fix/sec003-path-trust`): профиль A (недоверенный архив + приватное назначение) закрыт; профиль B закрыт частично — заранее созданные symlink/junction в цепочке пути назначения отклоняются до первой записи кодом `InvalidData` (блокирующие регрессии `ExtractThroughReparseParent`, RED→GREEN, CI на трёх ОС). Остаток: окно TOCTOU «проверка → открытие» без P/Invoke не закрывается; mount point общим флагом не обнаруживается; Unicode-нормализация имён (NFC/NFD) — known limitation вне scope; диагностический остаток `IOError`/`InternalError` вместо `InvalidData` при гонке публикации (D2b отменён) |
 | SEC-004 | отсутствие общего resource budget | открыт |
 | SEC-005 | KDF CPU/memory DoS и слабая отменяемость | открыт |
 | SEC-006 | WinZip-AES member целиком в памяти | открыт |

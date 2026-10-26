@@ -253,4 +253,105 @@ public static partial class SevenZipArchiveDecoder
 
     return false;
   }
+
+  /// <summary>
+  /// <para>Проверяет цепочку каталогов от <paramref name="root"/> (НЕ включая) до
+  /// <paramref name="fullPath"/> (включая) на наличие reparse-компонентов
+  /// (symbolic links и junctions, флаг <see cref="FileAttributes.ReparsePoint"/>).</para>
+  /// <para>Обход ПОКОМПОНЕНТНЫЙ сверху вниз, потому что <c>Path.GetFullPath</c>
+  /// и <see cref="Directory.ResolveLinkTarget(string, bool)"/> с <c>returnFinalTarget:true</c>
+  /// промежуточные ссылки не разрешают. Несуществующие компоненты пропускаются
+  /// (их создаст маршрут извлечения).</para>
+  /// <para>Проверенные компоненты кэшируются в <paramref name="checkedCache"/>
+  /// с переданным <paramref name="comparer"/> — при извлечении нескольких элементов
+  /// общие родительские каталоги не проверяются повторно.</para>
+  /// <para>Что НЕ обнаруживает: окно между проверкой и открытием остаётся — ссылки,
+  /// появившиеся после проверки, не ловятся. Исключения ввода-вывода
+  /// (<see cref="IOException"/>, <see cref="UnauthorizedAccessException"/>,
+  /// <see cref="NotSupportedException"/>, <see cref="ArgumentException"/>)
+  /// подавляются (компонент считается не-reparse) — штатный отказ на таком пути
+  /// произойдёт позже и будет корректно откачен журналом.</para>
+  /// <para>Файловые вызовы идут через <see cref="StagedExtractionJournal.ToFileSystemPath"/>,
+  /// поэтому охрана работает и на длинных путях.</para>
+  /// </summary>
+  /// <param name="root">Корень извлечения (сам не проверяется).</param>
+  /// <param name="fullPath">Полный путь элемента (файла или каталога).</param>
+  /// <param name="checkedCache">Кэш проверенных компонентов (может быть null — без кэша).</param>
+  /// <param name="comparer">Компаратор путей операции (OrdinalIgnoreCase на Windows, Ordinal на
+  /// прочих ОС): используется и для сравнения префикса, и (на стороне вызывающего) для кэша.</param>
+  /// <returns><c>true</c>, если на пути найден reparse-компонент ИЛИ если атрибуты существующего
+  /// компонента не удалось прочитать (fail-closed: операция отклоняется, а не продолжается вслепую).</returns>
+  internal static bool HasReparsePointOnPath(
+      string root,
+      string fullPath,
+      HashSet<string>? checkedCache,
+      StringComparer comparer)
+  {
+    // Выделяем относительную часть пути от root до fullPath. Сравнение префикса берётся из
+    // компаратора операции, чтобы не плодить второе определение платформенной семантики.
+    StringComparison sc = ReferenceEquals(comparer, StringComparer.OrdinalIgnoreCase)
+        ? StringComparison.OrdinalIgnoreCase
+        : StringComparison.Ordinal;
+
+    if (!fullPath.StartsWith(root, sc))
+      return false;
+
+    string relative = fullPath.Substring(root.Length)
+        .TrimStart(Path.DirectorySeparatorChar)
+        .TrimStart(Path.AltDirectorySeparatorChar);
+
+    if (relative.Length == 0)
+      return false;
+
+    string[] parts = relative.Split(
+        new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+        StringSplitOptions.RemoveEmptyEntries);
+
+    string current = root;
+    foreach (string part in parts)
+    {
+      current = Path.Combine(current, part);
+
+      if (checkedCache is not null && checkedCache.Contains(current))
+        continue;
+
+      try
+      {
+        string fsPath = StagedExtractionJournal.ToFileSystemPath(current);
+        if (!File.Exists(fsPath) && !Directory.Exists(fsPath))
+          continue; // компонента ещё нет — его создаст маршрут
+
+        FileAttributes attr;
+        try
+        {
+          attr = File.GetAttributes(fsPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+            or NotSupportedException or ArgumentException)
+        {
+          // Fail-closed (MAJOR-1 кросс-семейного ревью D3c): компонент СУЩЕСТВУЕТ, но его атрибуты
+          // прочитать не удалось. Прежний fail-open трактовал такой компонент как «не reparse»,
+          // поэтому при ACL «запрет чтения атрибутов, но разрешены проход и запись» запись могла
+          // уйти сквозь ссылку вне root без отказа. Цена fail-closed — возможен ложный отказ на
+          // экзотических ФС, это осознанный выбор в пользу сохранности данных.
+          return true;
+        }
+
+        if ((attr & FileAttributes.ReparsePoint) != 0)
+          return true;
+
+        checkedCache?.Add(current);
+      }
+      catch (IOException) { }
+      catch (UnauthorizedAccessException) { }
+      catch (NotSupportedException) { }
+      catch (ArgumentException) { }
+      // Исключения выше относятся к построению пути и проверке существования (File.Exists и
+      // Directory.Exists возвращают false вместо исключения при ошибке доступа): компонент при
+      // этом считается отсутствующим, а штатный отказ маршрута на таком пути произойдёт позже
+      // и будет откачен журналом.
+    }
+
+    return false;
+  }
 }

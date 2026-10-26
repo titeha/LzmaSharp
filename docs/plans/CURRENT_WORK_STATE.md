@@ -2,12 +2,12 @@
 doc_kind: current-work-plan
 status: active
 project: LzmaSharp
-last_verified_date: 2026-10-19
+last_verified_date: 2026-10-23
 main_branch: main
-main_commit: 3a55297106e6a978b460faa5bfe3b1a1b85b1041
-active_work_branch: fix/sec002-multivolume-transaction
-active_work_commit: 0d81d9c
-next_task: "G8 перед публикацией (advisory-гейт + pinning зависимостей, обновление Description пакета), затем A12 merge вручную и тег core/1.1.0; по решению владельца — SEAM-2, кросс-семейное ревью production-диффов, промежуточные компоненты пути выбранного файла (G4-остаток)"
+main_commit: 96defd70d41c02fe36e9ece2a0519e6da551ed33
+active_work_branch: fix/sec003-path-trust
+active_work_commit: bf4ed8a
+next_task: "doc-tail D3 (док-коммит за этим изменением, делает владелец), кросс-семейное ревью production-диффов D3c (f3a7ad4 + ea076dd), D4a платформенные fixtures, D5 финальный gate фазы D; по итогам — решение владельца о merge и о версии 1.2.0"
 ---
 
 # LzmaSharp: текущее состояние работ и ближайший план
@@ -47,39 +47,37 @@ next_task: "G8 перед публикацией (advisory-гейт + pinning з
 
 ```text
 branch: main
-commit: 3a55297106e6a978b460faa5bfe3b1a1b85b1041
-date:   2026-08-14
+commit: 96defd70 (merge --no-ff ветки fix/sec002-multivolume-transaction, A12)
+date:   2026-10-23
 ```
 
-После объявления SEC-002 закрытым в `main` в основном добавлялись документы,
-правила и промпты для агентов. Незавершённая multi-volume транзакция в `main`
-не влита.
+В `main` влиты и опубликованы: SEC-002 (транзакционное создание архива и многотомных наборов,
+M4B–M9, F3, глобальный gate `APPROVE_WITH_FINDINGS`) и SEC-001 (транзакционное извлечение: стадия,
+публикация после проверки, откат с восстановлением прежних байт и атрибутов; предварительные
+проверки места и длины пути; длинные пути Windows без opt-in хоста). На этом состоянии опубликован
+пакет **Ti-Soft.LzmaSharp 1.1.0** (тег `core/1.1.0`, nuget.org: flat-container содержит 1.1.0,
+GitHub Release с `.nupkg`/`.snupkg`/`bom.json`). CI на `main`: run `39996998662` — три job'а success.
 
 ### Рабочая ветка
 
 ```text
-branch: fix/sec002-multivolume-transaction
-commit: a6bc98ad3eee1cbe9f6c853687874a45fb364fff
-date:   2026-09-24
+branch: fix/sec003-path-trust (от main = 96defd70)
+commit: c7e4a1f (см. git log: caff8f1, 5fffb16, f3a7ad4, ea076dd, b1ed2ea, a8c2247, 7990f7e, bf4ed8a)
+date:   2026-10-23
 ```
 
-В ней сохранены:
+В ней выполнены шаги фазы D (SEC-003): D0 baseline; D1 design + аддендум (threat model в структуре
+владельца, факты по Microsoft Learn); D2a characterization и probe `File.Move(overwrite:false)`;
+D3a capability-probe ссылок; D3b RED-регрессии PATH-01/PATH-02; D3c-1/D3c-2 обнаружение
+reparse-компонентов в обоих маршрутах; ревью (APPROVE_WITH_COMMENTS, MAJOR-1 fail-open закрыт
+fail-closed); D4a fixtures назначения (каталог без права записи, Unicode NFC/NFD); doc-tail'и.
+Предыдущая ветка `fix/sec002-multivolume-transaction` влита в `main` и не удалена.
 
-- узкий `IStagedVolumeFileOperations`;
-- инъекция файловых отказов;
-- backup-фаза существующих управляемых томов;
-- rollback ошибок backup-фазы;
-- журнал опубликованных новых томов;
-- rollback частичной публикации;
-- тесты отказа до первого, после первого и на последнем publish;
-- M4B: commit point и cleanup operation backups;
-- M5: отказ от delete-by-scan и conflict policy для дополнительного `{base}.NNN`;
-- M6: lifecycle state machine, manifest-shape validation, staged-existence precheck,
-  controlled backup-catch;
-- M6-F1: приоритет disposed-guard над null-guard в `SetVolumes`;
-- принятый config-follow-up `.gitignore` (пять возвращённых локальных ignore-правил).
-
-Эту ветку нельзя выбрасывать или начинать заново.
+Локальные факты на `bf4ed8a`/`c7e4a1f` (Windows 11 Pro 10.0.28000, SDK 10.0.112 при
+`global.json` 10.0.101): `Lzma.Core.Tests` 1785 passed / 5 skipped / 1790; `Lzma.Ui.Tests`
+239 / 0 / 0; Build Release 0 ошибок / 62 предупреждения (= baseline). CI: runs `40219674655`
+(`bf4ed8a`) и `40222055063` (`c7e4a1f`) — все три job'а success. POSIX-числа из TRX:
+ubuntu 1760 passed / 28 skipped, macos 1759 passed / 29 skipped (всего 1788).
 
 ## 4. Что уже завершено
 
@@ -219,6 +217,133 @@ platform CI matrix остаются открытыми.
 - full solution: 1918 passed = `Lzma.Ui.Tests` 219 + `Lzma.Core.Tests` 1699;
 - failed: 0; skipped: 0;
 - independent final review: `APPROVE` (SEC002-M6.5-FINAL).
+
+### D4a — платформенные fixtures назначения и решение владельца по Unicode-нормализации
+
+- Шаг (коммит `bf4ed8a`, исполнитель мидл, test-only, 631 строка, 4 теста):
+  `tests/Lzma.Core.Tests/Platform/DestinationCapabilityFixtures.Tests.cs` — две группы измерений
+  на реальном маршруте извлечения: (1) каталог назначения без права записи (ZIP и 7z),
+  (2) Unicode-нормализация имён NFC против NFD (извлечение NFC-имени с проверкой существования
+  в обеих формах; сценарий «NFD-файл уже существует, элемент архива NFC, `overwrite: false`»).
+  Политика probe соблюдена: 19 видимых `Assert.Skip` с измеренными значениями и причинами
+  (включая «извлечение прошло успешно на POSIX — вероятно запуск от root»), `Assert.Fail` только
+  на сломанное базовое поведение, тихих `return` нет, P/Invoke нет, `Directory.CurrentDirectory`
+  не меняется (смена CWD сознательно исключена — состояние процесса ломает параллельные тесты).
+- Факты по Windows (локально): атрибут `ReadOnly` у КАТАЛОГА создание файлов не блокирует →
+  извлечение Ok (особенность NTFS, не дефект); NTFS хранит имя как записано (`File.Exists` по NFC
+  true, по NFD false); при заранее созданном NFD-файле и NFC-элементе архива с `overwrite: false`
+  извлечение прошло и в каталоге стало два файла.
+- Факты по POSIX (CI run `40219674655`, TRX прочитан владельцем): ubuntu 1760 passed / 28 skipped,
+  macos 1759 passed / 29 skipped (всего 1788); все четыре теста ПРОШЛИ, то есть сценарии
+  воспроизвелись — извлечение в каталог без права записи даёт контролируемый код результата без
+  необработанного исключения, без частичных данных и без остатков `.tmp`/`.bak`; APFS видит имя
+  в обеих нормализациях (конфликт обнаруживается и извлечение отклоняется), ext4 — только в
+  записанной форме (как NTFS).
+- РЕШЕНИЕ ВЛАДЕЛЬЦА (2026-10-23), внесено в threat model (`tasks/D1_ADDENDUM_THREAT_MODEL.md`)
+  и design (`tasks/D1_SEC003_DESIGN_REPORT.md`): «Нормализация Unicode имён (NFC/NFD) — известное
+  ограничение, вне scope SEC-003; не претендуем на кросс-платформенную эквивалентность имён;
+  зафиксировано как known limitation в документации фазы». Отдельный шаг по нормализации имён
+  НЕ делается; в SDL ограничение описано с измеренными фактами по трём ОС.
+- Верификация (Windows, `bf4ed8a`): Build 0 ошибок / 62 предупреждения (= baseline);
+  `Lzma.Core.Tests` 1785 passed / 5 skipped / 1790 / 0 failed; `Lzma.Ui.Tests` 239 / 0 / 0;
+  push сверен `git ls-remote` по обоим remote; CI run `40219674655` — все три job'а success.
+- Неточность исполнителя, исправленная тимлидом: locked file покрыт в
+  `SevenZipExtractTransactional.Tests.cs` (Windows-only `FileShare.None` из B7), а не в
+  `PublishRaceAndMoveProbe.Tests.cs`.
+
+### Ревью D3c и закрытие MAJOR-1 (fail-closed)
+
+- Кросс-семейное ревью production-диффов `f3a7ad4` + `ea076dd` (агент reviewer, модель
+  `deepseek/deepseek-v4-pro`, read-only, отчёт `.agent/reports/D3C_CROSS_FAMILY_REVIEW_deepseek-v4-pro.md`):
+  **APPROVE_WITH_COMMENTS**, 0 BLOCKING / 1 MAJOR / 5 MINOR. Ревьюер независимо подтвердил
+  полноту обхода (от root, не включая его, до конечного пути включительно, без off-by-one),
+  отсутствие асимметрии обёрток (все вызовы через `ToFileSystemPath`), недостижимость ветки
+  «fullPath не начинается с root» в маршруте (путь уже отклонён `TryBuildSafePath`) и то, что
+  публичный API не изменён.
+- MAJOR-1 закрыт тимлидом: подавление исключений при чтении атрибутов СУЩЕСТВУЮЩЕГО компонента
+  было fail-open — при ACL «чтение атрибутов запрещено, проход и запись разрешены» запись могла
+  уйти сквозь ссылку без отказа. Сделано fail-closed (`HasReparsePointOnPath` возвращает `true`),
+  цена — возможный ложный отказ на экзотических ФС; выбор в пользу сохранности данных.
+  Заодно закрыт MINOR-2: параметр `comparer` реально используется (сравнение префикса),
+  второе определение платформенной семантики удалено.
+- MINOR-3 и MINOR-4 закрыты в SDL: mount point общим флагом не обнаруживается (обычный каталог
+  без `ReparsePoint`, монтирование вне модели угроз); явно зафиксирован класс ложных отказов —
+  легитимные reparse-объекты не-ссылочной природы (placeholder'ы облачных дисков на Windows).
+- MINOR-5 (тестовые пробелы: промежуточный компонент-ссылка, элемент-каталог сквозь ссылку,
+  частичное извлечение, пустые файлы и solid-folder, TOCTOU после проверки) — принят как
+  допустимый долг: код-путь единый, по `ACCEPTANCE_D` §D3 эти сценарии не обязательны.
+  MINOR-6 (неразличимость кода `InvalidData`) — примечание, соответствует решению не менять
+  публичный API.
+- Факты после фикса (Windows, Release): Build 0 ошибок / 62 предупреждения (= baseline);
+  `Lzma.Core.Tests` 1781 passed / 5 skipped / 1786 / 0 failed; `Lzma.Ui.Tests` 239 / 0 / 0.
+
+### D3a/D3b/D3c — обнаружение reparse-компонентов в цепочке пути назначения
+
+- **Состав шагов (фаза D, SEC-003, профиль B):** `caff8f1` — capability-probe ссылок (test-only);
+  `5fffb16` — RED-регрессии PATH-01/PATH-02 (test-only); `f3a7ad4` — production-фикс ZIP-маршрута
+  (D3c-1); `ea076dd` — подключение того же механизма в 7z-маршрут (D3c-2). База фазы — `96defd7`
+  (merge SEC-001/SEC-002 в main), ветка `fix/sec003-path-trust`.
+- **Production-механизм.** Новый internal-хелпер `HasReparsePointOnPath` в
+  `src/Lzma.Core/SevenZip/Decoding/SevenZipArchiveDecoder.SafeExtraction.cs`: покомпонентный обход
+  цепочки пути назначения ОТ root (не включая root) ДО конечного пути включительно; для каждого
+  существующего компонента проверяется `(File.GetAttributes & FileAttributes.ReparsePoint) != 0`;
+  все файловые вызовы идут через `StagedExtractionJournal.ToFileSystemPath`; проверенные компоненты
+  кэшируются в `HashSet` на одну операцию извлечения (чтобы не добавлять syscall на каждый элемент);
+  исключения ФС и доступа не пробрасываются — компонент трактуется как «не reparse», штатный отказ
+  маршрута произойдёт позже и будет откачен журналом.
+- **Подключение — оба маршрута:** `ZipExtractor.ExtractCore` (проверка перед `CreateDirsTracked`,
+  до первой записи; `src/Lzma.Core/Zip/ZipExtractor.cs:182`) и
+  `SevenZipArchiveDecoder.ExtractHeaderToDirectory` (в цикле записи, до первой мутации;
+  `src/Lzma.Core/SevenZip/Decoding/SevenZipArchiveDecoder.cs:1117`). Код отказа — существующий
+  `InvalidData`; публичный API не изменён, новых значений enum нет.
+- **Механизм единый кросс-платформенно:** `FileAttributes.ReparsePoint` поддержан на Windows,
+  Linux и macOS (подтверждено документацией Microsoft Learn по `System.IO.FileAttributes`);
+  типы ссылок не различаются — решение владельца (различение потребовало бы
+  `REPARSE_DATA_BUFFER`, то есть P/Invoke). Измерение CI: symlink-тесты прошли на ubuntu и macos,
+  junction-тесты — на Windows.
+- **Что доказано тестами**
+  (`tests/Lzma.Core.Tests/SevenZip/Decoding/ExtractThroughReparseParent.Tests.cs`): до фикса оба
+  junction-теста ПАДАЛИ с сообщением, что файл из архива физически появился во внешнем
+  каталоге-sentinel (настоящий RED), после фикса — зелёные, sentinel не изменён (маркерный файл
+  проверяется побайтово), остатков `.tmp`/`.bak` нет. Symlink-сценарии на Windows пропускаются с
+  видимой причиной (`IOException` «Клиент не обладает требуемыми правами» — нет привилегии
+  `SeCreateSymbolicLink` при выключенном Developer Mode), на ubuntu и macos они ВЫПОЛНЯЮТСЯ и
+  прошли с фиксом (CI run `40210389162` — все три job'а success).
+- **Capability-probe** (`tests/Lzma.Core.Tests/Platform/ReparsePointCapabilityProbe.Tests.cs`,
+  `caff8f1`) измерил: junction создаётся внешним процессом `cmd /d /c mklink /J`; `ReparsePoint`
+  на junction установлен, на обычном каталоге — нет (ложных срабатываний нет);
+  `Directory.Exists(ссылка-на-каталог) = true` при `File.Exists = false`;
+  `Directory.ResolveLinkTarget(junction, returnFinalTarget: false)` возвращает цель;
+  `Directory.Delete(ссылка, recursive: false)` удаляет только ссылку, цель цела; запись сквозь
+  ссылку уходит во внешний каталог — это и есть закрываемый сценарий.
+- **Числа прогонов (измерено владельцем; Windows, Release, HEAD `ea076dd`; doc-tail повторного
+  замера не выполнял):** `Lzma.Core.Tests` — 1781 passed /
+  5 skipped / 1786 total / 0 failed; `Lzma.Ui.Tests` — 239 passed / 0 failed / 0 skipped;
+  сборка — 0 ошибок и 62 предупреждения в `Lzma.Core` (= baseline, новых нет). Измерено в CI на
+  `caff8f1` (TRX прочитан владельцем): ubuntu — 1754 passed / 26 skipped, macos — 1753 passed /
+  27 skipped. **Ожидается** на POSIX после `ea076dd` (выведено из факта Windows-прогона и фактов
+  TRX на `caff8f1`, а не измерено): всего 1784 теста (1786 минус 2 кейса, обнаруживаемых только на
+  Windows); из них 2 новых junction-теста дают видимый skip («junction — объект Windows»), а 2 новых
+  symlink-теста выполняются и проходят ⇒ 1756 passed / 28 skipped. Фактическое подтверждение — из
+  следующего TRX.
+- **Честные границы (ничего сверх доказанного не заявляется):** окно между проверкой
+  reparse-компонентов и открытием файла остаётся — без P/Invoke (запрещён владельцем, проект 100%
+  managed) недоступны handle-anchored доступ (openat-стиль) и no-follow флаги, поэтому профиль B
+  (локальный атакующий контролирует каталог назначения) НЕ закрывается полностью; ссылки, созданные
+  ПОСЛЕ проверки, не обнаруживаются; сам root, если пользователь указал его ссылкой, не
+  отвергается — сознательное решение (назначение выбирает пользователь).
+- **Шаг D2b отменён решением владельца.** Диагностика гонки публикации не делается: без
+  production-seam блокирующая регрессия невозможна, а замер D2a (`2d8d6bd`, CI run `40204664877` —
+  все три job'а success) показал отсутствие молчаливой замены цели на всех трёх ОС. Остаток —
+  косметика кода результата при появлении файла в окне «проверка → публикация» (`IOError` у ZIP и
+  `InternalError` у 7z вместо документированного `InvalidData`) — записан как известное
+  ограничение.
+- **Долг этого doc-tail (закрывается шагом D5):** статус SEC-003 в реестре
+  `docs/plans/SECURITY_REMEDIATION_PLAN.md` не менялся (строка «SEC-003 … открыт» остаётся) —
+  смена статуса требует финального gate фазы, поэтому этот doc-tail не объявляет риск закрытым;
+  блокирующие регрессии есть на `ea076dd`, но профиль B закрыт лишь частично. Блоки §3
+  «Проверенные контрольные точки» и §6 «Текущий рабочий пакет» этого файла описывают фазу B и
+  обновляются тем же шагом D5.
 
 ### G4 — длина пути назначения проверяется до создания root-каталога (7z)
 
@@ -1371,27 +1496,31 @@ F4 disposition (принято владельцем, без преувеличе
 
 ## 6. Текущий рабочий пакет
 
-Текущий пакет (фаза B) ограничен только:
+Текущий пакет (фаза D) ограничен только:
 
 ```text
-SEC-001 / transactional extraction (стадинг, публикация после проверки,
-                                  откат с восстановлением прежних байт)
+SEC-003 / path trust: reparse-компоненты в цепочке пути назначения,
+                      гонка публикации, платформенные fixtures
 ```
 
-Предыдущий пакет `SEC-002 / multi-volume transactional publication` (M4B–M9, F3, глобальный gate
-`APPROVE_WITH_FINDINGS`) завершён по production-коду; merge в `main` выполняется вручную владельцем
-(A12) и на момент этой записи не выполнен.
+Предыдущие пакеты завершены и влиты в `main` (96defd70): `SEC-002 / multi-volume transactional
+publication` и `SEC-001 / transactional extraction`; на этом состоянии опубликован пакет
+`Ti-Soft.LzmaSharp 1.1.0`.
 
 Вне scope текущего пакета:
 
-- архитектурное разделение (Compression / Cryptography / Containers / ArchiveIO);
-- ZIP internals и кодеки вне маршрута извлечения;
-- криптография (KDF/AES — фаза E) и политика ошибок (фаза F);
-- resource budget (RES-001/002/003 — фаза C);
-- package separation, mobile heads;
-- style cleanup, warnings cleanup;
-- отложенное отдельным решением владельца: B4c (todo #47), SEAM-1/SEAM-2, xUnit1051 (todo #35),
-  G8 (SBOM/advisory/pinning), DOC-017, capability-probe (todo #39).
+- архитектурное разделение (Compression / Cryptography / Containers / ArchiveIO) — по
+  `docs/plans/02_COMPRESSION_CRYPTO_SEPARATION.md`, начинать после стабилизации transactional I/O
+  и resource budget;
+- криптография (KDF/AES — фаза E), политика ошибок (фаза F), бюджеты памяти и вывода
+  (RES-001/002/003, SEC-004/SEC-010 — фаза C);
+- нормализация Unicode имён (NFC/NFD) — known limitation по решению владельца от 2026-10-23,
+  вне scope SEC-003;
+- приватный staging-root (D4b) — отложен владельцем; это единственная мера, способная сузить
+  окно TOCTOU без P/Invoke;
+- SEAM-1/SEAM-2 (швы для инъекции отказов) и связанный с ними диагностический остаток D2b;
+- xUnit1051 (todo #35), package separation, mobile heads, style/warnings cleanup;
+- остаток G8: блокирующий SBOM и pinning транзитивных зависимостей (advisory-гейт уже в CI).
 
 Синхронизация документации из «вне scope» исключена: doc-tail выполняется после каждого шага
 (правило владельца от 2026-10-12; процедура — `docs/plans/DOC_B_DOCUMENTATION_SYNC_PLAN.md`

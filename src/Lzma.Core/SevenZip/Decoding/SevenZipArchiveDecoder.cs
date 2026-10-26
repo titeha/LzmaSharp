@@ -945,6 +945,10 @@ public static partial class SevenZipArchiveDecoder
         ? StringComparer.OrdinalIgnoreCase
         : StringComparer.Ordinal;
 
+      // SEC-003: кэш проверенных компонентов пути — один на операцию извлечения, чтобы
+      // обнаружение reparse-компонентов не добавляло файловые вызовы на каждый элемент.
+      var reparseChecked = new HashSet<string>(pathComparer);
+
       string[] fullPaths = new string[fileCount];
 
       HashSet<string> seenOutputPaths = new(pathComparer);
@@ -1106,6 +1110,11 @@ public static partial class SevenZipArchiveDecoder
 
           string fullPath = fullPaths[i];
           if (fullPath.Length == 0)
+            return SevenZipArchiveDecodeResult.InvalidData;
+
+          // SEC-003 профиль B: обнаружение reparse-компонентов (ссылки/junction) в цепочке пути
+          // назначения до первой мутации ФС — иначе запись уходит сквозь ссылку вне root.
+          if (HasReparsePointOnPath(root, fullPath, reparseChecked, pathComparer))
             return SevenZipArchiveDecodeResult.InvalidData;
 
           if (entries[i].IsDirectory)
