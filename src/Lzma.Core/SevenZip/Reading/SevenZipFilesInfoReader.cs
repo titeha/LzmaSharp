@@ -273,6 +273,12 @@ public static class SevenZipFilesInfoReader
     if ((nameBytes.Length & 1) != 0)
       return SevenZipFilesInfoReadResult.InvalidData;
 
+    // RES-001: каждое имя завершается UTF-16 нулём и занимает минимум два байта, поэтому
+    // fileCount имён не умещаются в nameBytes короче 2*fileCount. Проверка до аллокации:
+    // иначе new string[fileCount] выделяет до ~16 ГиБ ссылок по недоверенному счётчику.
+    if ((ulong)fileCount * 2UL > (ulong)nameBytes.Length)
+      return SevenZipFilesInfoReadResult.InvalidData;
+
     var result = new string[fileCount];
     int nameIndex = 0;
 
@@ -321,6 +327,15 @@ public static class SevenZipFilesInfoReader
 
     byte allAreDefined = payload[0];
     int offset = 1;
+
+    // RES-001: минимальный payload, способный описать fileCount элементов, — либо
+    // 1 + 4*fileCount (AllAreDefined = 1), либо 1 + ceil(fileCount/8) (битовый вектор).
+    // Проверка до аллокации bool[fileCount] (до ~2 ГиБ по недоверенному счётчику).
+    long minRequired = allAreDefined == 1
+      ? 1L + 4L * fileCount
+      : 1L + ((long)fileCount + 7) / 8;
+    if (payload.Length < minRequired)
+      return SevenZipFilesInfoReadResult.InvalidData;
 
     bool[] def = new bool[fileCount];
     int definedCount = 0;
@@ -393,6 +408,18 @@ public static class SevenZipFilesInfoReader
 
     byte allAreDefined = payload[0];
     int offset = 1;
+
+    // RES-001: минимальный payload — либо AllAreDefined + External + 8*fileCount,
+    // либо AllAreDefined + битовый вектор + External. Проверка до аллокации bool[fileCount].
+    // Приоритет кода отказа сохранён: в ветви AllAreDefined == 1 байт External уже доступен,
+    // поэтому некорректный External по-прежнему даёт NotSupported, а не InvalidData.
+    long minRequired = allAreDefined == 1
+      ? 2L + 8L * fileCount
+      : 2L + ((long)fileCount + 7) / 8;
+    if (payload.Length < minRequired)
+      return allAreDefined == 1 && payload[1] != 0
+        ? SevenZipFilesInfoReadResult.NotSupported
+        : SevenZipFilesInfoReadResult.InvalidData;
 
     bool[] def = new bool[fileCount];
     int definedCount = 0;
@@ -474,6 +501,17 @@ public static class SevenZipFilesInfoReader
 
     byte allAreDefined = payload[0];
     int offset = 1;
+
+    // RES-001: минимальный payload — либо AllAreDefined + External + 4*fileCount,
+    // либо AllAreDefined + битовый вектор + External. Проверка до аллокации bool[fileCount].
+    // Приоритет NotSupported для External != 0 сохранён (разбор по ветвям — в §5.3).
+    long minRequired = allAreDefined == 1
+      ? 2L + 4L * fileCount
+      : 2L + ((long)fileCount + 7) / 8;
+    if (payload.Length < minRequired)
+      return allAreDefined == 1 && payload[1] != 0
+        ? SevenZipFilesInfoReadResult.NotSupported
+        : SevenZipFilesInfoReadResult.InvalidData;
 
     bool[] def = new bool[fileCount];
     int definedCount = 0;
