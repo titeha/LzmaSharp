@@ -62,7 +62,13 @@ public static class SevenZipUnpackInfoReader
     if (external != 0)
       return SevenZipUnpackInfoReadResult.NotSupported;
 
-    SevenZipFolder[] folders = new SevenZipFolder[numFolders];
+    // RES-001: ёмкость массива ограничивается тем, что вход способен описать: каждая папка
+    // потребляет минимум 3 байта (varint numCoders, mainByte, MethodID ≥ 1 байта). Запись в
+    // элемент с индексом k возможна только после потребления (k+1)*3 байт, поэтому выхода за
+    // границы нет; если цикл прошёл целиком, Math.Min вернул numFolders и длина массива прежняя.
+    // Классификация отказов не меняется: разбор идёт прежним путём, но массив до ~16 ГиБ по
+    // недоверенному счётчику не выделяется.
+    SevenZipFolder[] folders = new SevenZipFolder[Math.Min(numFolders, (input.Length - cursor) / 3)];
 
     // Folders...
     for (int f = 0; f < numFolders; f++)
@@ -80,7 +86,9 @@ public static class SevenZipUnpackInfoReader
         return SevenZipUnpackInfoReadResult.NotSupported;
       int numCoders = (int)numCodersU64;
 
-      SevenZipCoderInfo[] coders = new SevenZipCoderInfo[numCoders];
+      // RES-001: каждый кодер потребляет минимум 2 байта (mainByte + MethodID ≥ 1). Ёмкость
+      // ограничена входом, классификация отказов не меняется (инвариант — у массива папок выше).
+      SevenZipCoderInfo[] coders = new SevenZipCoderInfo[Math.Min(numCoders, (input.Length - cursor) / 2)];
 
       ulong totalInStreams = 0;
       ulong totalOutStreams = 0;
@@ -175,7 +183,9 @@ public static class SevenZipUnpackInfoReader
         return SevenZipUnpackInfoReadResult.NotSupported;
       int numBindPairs = (int)numBindPairsU64;
 
-      SevenZipBindPair[] bindPairs = new SevenZipBindPair[numBindPairs];
+      // RES-001: каждая bind pair — два varint, минимум 2 байта; слот record struct стоит 16 байт,
+      // поэтому без ограничения ёмкости входом массив достигал бы ~32 ГиБ. Инвариант тот же.
+      SevenZipBindPair[] bindPairs = new SevenZipBindPair[Math.Min(numBindPairs, (input.Length - cursor) / 2)];
       for (int i = 0; i < numBindPairs; i++)
       {
         rr = SevenZipEncodedUInt64.TryRead(input[cursor..], out ulong inIndex, out br);
@@ -253,7 +263,8 @@ public static class SevenZipUnpackInfoReader
       }
       else
       {
-        packedStreamIndices = new ulong[numPackedStreams];
+        // RES-001: каждый индекс packed-потока — один varint, минимум 1 байт. Инвариант тот же.
+        packedStreamIndices = new ulong[Math.Min(numPackedStreams, input.Length - cursor)];
 
         for (int i = 0; i < numPackedStreams; i++)
         {

@@ -417,4 +417,165 @@ public sealed class SevenZipUnpackInfoReaderTests
     Assert.Equal(0, consumed);
     Assert.Null(unpackInfo);
   }
+
+  // ---- RES-001: аллокация по недоверенному счётчику ограничена длиной входа ----
+  //
+  // Reader разбирает UnpackInfo прямо по `input`. Счётчики (numFolders, numCoders,
+  // numBindPairs, numPackedStreams) читаются из недоверенного заголовка как varint и до
+  // проверки §5 выделялись в массивы без учёта того, способен ли вход описать столько
+  // элементов. Одно значение numOutStreams кодируется пятью байтами, но задаёт размер
+  // массива в гигабайты. RED-тесты ниже измеряют дельту аллокаций: до проверки она
+  // порядка 64 МиБ (заявленный счётчик ~8 млн), после проверки — не превышает несколько
+  // килобайт. Код отказа — NeedMoreInput.
+
+  private static void WriteU64(List<byte> dst, ulong value)
+  {
+    Span<byte> tmp = stackalloc byte[10];
+    var r = SevenZipEncodedUInt64.TryWrite(value, tmp, out int written);
+    Assert.Equal(SevenZipEncodedUInt64.WriteResult.Ok, r);
+
+    for (int i = 0; i < written; i++)
+      dst.Add(tmp[i]);
+  }
+
+  // Точка A (:65). На каждую папку минимум 3 байта (varint numCoders, mainByte, ≥1 байт MethodID).
+  // Заявлено 8_000_000 папок, но после external не остаётся ни одного байта — вход не может
+  // описать и одной папки. До проверки выделяется SevenZipFolder[8_000_000] (~64 МиБ).
+  [Fact]
+  public void TryRead_Упаковка_ОгромныйСчётчикПапок_НеАллоцирует()
+  {
+    var b = new List<byte>
+    {
+      SevenZipNid.UnpackInfo,
+      SevenZipNid.Folder,
+    };
+    WriteU64(b, 8_000_000UL); // numFolders
+    b.Add(0x00); // external == 0
+
+    long before = GC.GetAllocatedBytesForCurrentThread();
+    var r = SevenZipUnpackInfoReader.TryRead(b.ToArray(), out _, out int consumed);
+    long after = GC.GetAllocatedBytesForCurrentThread();
+
+    Assert.Equal(SevenZipUnpackInfoReadResult.NeedMoreInput, r);
+    Assert.Equal(0, consumed);
+    long deltaAlloc = after - before;
+    Assert.True(deltaAlloc < 1_048_576, $"Аллокация {deltaAlloc} байт превышает допустимый предел 1 048 576");
+  }
+
+  // Точка B (:83). На каждый кодер минимум 2 байта (mainByte + ≥1 байт MethodID).
+  // numFolders=1, external=0, затем заявлено 8_000_000 кодеров и больше ничего. После
+  // numCoders не остаётся байтов на описание ни одного кодера. До проверки выделяется
+  // SevenZipCoderInfo[8_000_000] (~64 МиБ).
+  [Fact]
+  public void TryRead_Упаковка_ОгромныйСчётчикКодеров_НеАллоцирует()
+  {
+    var b = new List<byte>
+    {
+      SevenZipNid.UnpackInfo,
+      SevenZipNid.Folder,
+    };
+    WriteU64(b, 1UL); // numFolders
+    b.Add(0x00); // external == 0
+    WriteU64(b, 8_000_000UL); // numCoders
+
+    long before = GC.GetAllocatedBytesForCurrentThread();
+    var r = SevenZipUnpackInfoReader.TryRead(b.ToArray(), out _, out int consumed);
+    long after = GC.GetAllocatedBytesForCurrentThread();
+
+    Assert.Equal(SevenZipUnpackInfoReadResult.NeedMoreInput, r);
+    Assert.Equal(0, consumed);
+    long deltaAlloc = after - before;
+    Assert.True(deltaAlloc < 1_048_576, $"Аллокация {deltaAlloc} байт превышает допустимый предел 1 048 576");
+  }
+
+  // Точка C (:178). Каждая bind pair — два varint, минимум 2 байта. numBindPairs =
+  // totalOutStreams - 1. Coder: mainByte 0x11 (complex, idSize=1), MethodID 0x03,
+  // numInStreams=1, numOutStreams=4_000_001 ⇒ numBindPairs=4_000_000. После numOutStreams
+  // не остаётся байтов на описание пар. До проверки выделяется SevenZipBindPair[4_000_000]
+  // (~64 МиБ, record struct по 16 байт).
+  [Fact]
+  public void TryRead_Упаковка_ОгромныйСчётчикBindPairs_НеАллоцирует()
+  {
+    var b = new List<byte>
+    {
+      SevenZipNid.UnpackInfo,
+      SevenZipNid.Folder,
+    };
+    WriteU64(b, 1UL); // numFolders
+    b.Add(0x00); // external == 0
+    WriteU64(b, 1UL); // numCoders
+    b.Add(0x11); // mainByte: complex coder, codecIdSize = 1
+    b.Add(0x03); // MethodID (1 байт)
+    WriteU64(b, 1UL); // numInStreams
+    WriteU64(b, 4_000_001UL); // numOutStreams => numBindPairs = 4_000_000
+
+    long before = GC.GetAllocatedBytesForCurrentThread();
+    var r = SevenZipUnpackInfoReader.TryRead(b.ToArray(), out _, out int consumed);
+    long after = GC.GetAllocatedBytesForCurrentThread();
+
+    Assert.Equal(SevenZipUnpackInfoReadResult.NeedMoreInput, r);
+    Assert.Equal(0, consumed);
+    long deltaAlloc = after - before;
+    Assert.True(deltaAlloc < 1_048_576, $"Аллокация {deltaAlloc} байт превышает допустимый предел 1 048 576");
+  }
+
+  // Точка D (:256). Каждый индекс packed-потока — один varint, минимум 1 байт.
+  // numInStreams=8_000_000, numOutStreams=1 => numBindPairs=0, numPackedStreams=
+  // totalInStreams - numBindPairs = 8_000_000 (ветвь ≥ 2). После numOutStreams не остаётся
+  // байтов на описание индексов. До проверки выделяется ulong[8_000_000] (~64 МиБ).
+  [Fact]
+  public void TryRead_Упаковка_ОгромныйСчётчикPackedStreams_НеАллоцирует()
+  {
+    var b = new List<byte>
+    {
+      SevenZipNid.UnpackInfo,
+      SevenZipNid.Folder,
+    };
+    WriteU64(b, 1UL); // numFolders
+    b.Add(0x00); // external == 0
+    WriteU64(b, 1UL); // numCoders
+    b.Add(0x11); // mainByte: complex coder, codecIdSize = 1
+    b.Add(0x03); // MethodID (1 байт)
+    WriteU64(b, 8_000_000UL); // numInStreams
+    WriteU64(b, 1UL); // numOutStreams => numBindPairs = 0, numPackedStreams = 8_000_000
+
+    long before = GC.GetAllocatedBytesForCurrentThread();
+    var r = SevenZipUnpackInfoReader.TryRead(b.ToArray(), out _, out int consumed);
+    long after = GC.GetAllocatedBytesForCurrentThread();
+
+    Assert.Equal(SevenZipUnpackInfoReadResult.NeedMoreInput, r);
+    Assert.Equal(0, consumed);
+    long deltaAlloc = after - before;
+    Assert.True(deltaAlloc < 1_048_576, $"Аллокация {deltaAlloc} байт превышает допустимый предел 1 048 576");
+  }
+
+  // Граничный тест (GREEN до и после проверки). На границе проверок A и B: после external
+  // остаются ровно 3 байта (varint numCoders + mainByte + MethodID): 3*1 = 3 не больше 3,
+  // проверка A не срабатывает. После numCoders остаются ровно 2 байта (mainByte + MethodID):
+  // 2*1 = 2 не больше 2, проверка B не срабатывает. Простой кодер (numIn=numOut=1) ⇒
+  // numPackedStreams=1, bind pairs нет. Дальше ждёт kCodersUnpackSize, но байтов нет →
+  // NeedMoreInput. Проверки не отклоняют вход, лежащий точно на границе.
+  [Fact]
+  public void TryRead_Граница_ПроверокAиB_НеОтклоняется_НеАллоцирует()
+  {
+    var b = new List<byte>
+    {
+      SevenZipNid.UnpackInfo,
+      SevenZipNid.Folder,
+    };
+    WriteU64(b, 1UL); // numFolders
+    b.Add(0x00); // external == 0
+    WriteU64(b, 1UL); // numCoders
+    b.Add(0x01); // mainByte: простой кодер, codecIdSize = 1
+    b.Add(0x03); // MethodID (1 байт)
+
+    long before = GC.GetAllocatedBytesForCurrentThread();
+    var r = SevenZipUnpackInfoReader.TryRead(b.ToArray(), out _, out int consumed);
+    long after = GC.GetAllocatedBytesForCurrentThread();
+
+    Assert.Equal(SevenZipUnpackInfoReadResult.NeedMoreInput, r);
+    Assert.Equal(0, consumed);
+    long deltaAlloc = after - before;
+    Assert.True(deltaAlloc < 1_048_576, $"Аллокация {deltaAlloc} байт превышает допустимый предел 1 048 576");
+  }
 }
