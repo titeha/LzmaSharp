@@ -1163,4 +1163,205 @@ public class SevenZipFolderDecoderTests
 
     return archive;
   }
+
+  // ----- RES-002: limit on in-memory folder unpack (C4) -----
+
+  private static SevenZipCoderInfo CreateLzma1CoderForRed()
+  {
+    var lzmaProps = new LzmaProperties(Lc: 3, Lp: 0, Pb: 2);
+    const int dictionarySize = 1 << 20;
+
+    // Raw LZMA stream (без LZMA-Alone header), маленький, но достаточный для старта декода.
+    byte[] packed = new LzmaEncoder(lzmaProps, dictionarySize).EncodeLiteralOnly(new byte[256]);
+
+    byte[] coderProps = new byte[5];
+    coderProps[0] = lzmaProps.ToByteOrThrow();
+    System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(coderProps.AsSpan(1, 4), (uint)dictionarySize);
+
+    return new SevenZipCoderInfo(
+      methodId: [0x03, 0x01, 0x01], // LZMA
+      properties: coderProps,
+      numInStreams: 1,
+      numOutStreams: 1);
+  }
+
+  private static SevenZipStreamsInfo CreateSingleCoderStreamsInfo(
+      SevenZipCoderInfo coder,
+      ReadOnlySpan<byte> packed,
+      ulong declaredUnpackSize)
+  {
+    var packInfo = new SevenZipPackInfo(
+      packPos: 0,
+      packSizes: [(ulong)packed.Length]);
+
+    var folder = new SevenZipFolder(
+      Coders: [coder],
+      BindPairs: [],
+      PackedStreamIndices: [0],
+      NumInStreams: 1,
+      NumOutStreams: 1);
+
+    var unpackInfo = new SevenZipUnpackInfo(
+      folders: [folder],
+      folderUnpackSizes: [[declaredUnpackSize]]);
+
+    return new SevenZipStreamsInfo(
+      packInfo: packInfo,
+      unpackInfo: unpackInfo,
+      subStreamsInfo: null);
+  }
+
+  [Fact]
+  public void C4_RED_DeclaredUnpack300MiB_SeveralPackedBytes_ReturnsNotSupportedWithoutAllocating()
+  {
+    // Главный RED: заявленный unpack 300 МиБ (> FLOOR 256 МиБ, < int.MaxValue), packed — несколько байт.
+    // До правки декодер выделяет new byte[300 МиБ] → тест падает (дельта аллокаций велика, либо
+    // результат не NotSupported). После правки: NotSupported и дельта аллокаций < 1 МиБ.
+    const long declaredUnpack = 300L << 20;
+
+    SevenZipCoderInfo coder = CreateLzma1CoderForRed();
+    byte[] packedStreams = [0x01, 0x02, 0x03, 0x04, 0x05];
+    SevenZipStreamsInfo streamsInfo = CreateSingleCoderStreamsInfo(coder, packedStreams, (ulong)declaredUnpack);
+
+    long before = GC.GetAllocatedBytesForCurrentThread();
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.DecodeFolderToArray(
+        streamsInfo, packedStreams, 0, SevenZipDecodeOptions.Default, out byte[] _);
+    long after = GC.GetAllocatedBytesForCurrentThread();
+    long delta = after - before;
+
+    Assert.Equal(SevenZipFolderDecodeResult.NotSupported, result);
+    Assert.True(
+      delta < 1_048_576,
+      $"дельта аллокаций {delta} байт — ожидается меньше 1 МиБ после правки");
+  }
+
+  private static SevenZipCoderInfo CreateCopyCoder()
+  {
+    return new SevenZipCoderInfo(
+      methodId: [0x00], // Copy
+      properties: [],
+      numInStreams: 1,
+      numOutStreams: 1);
+  }
+
+  // Тесты самой политики (чистая функция, без ФС и потоков).
+  [Fact]
+  public void C4_Policy_ZeroPacked_ReturnsFloor()
+  {
+    Assert.Equal(SevenZipMemoryPolicy.FloorBytes, SevenZipMemoryPolicy.GetMaxUnpackBytes(0));
+  }
+
+  [Fact]
+  public void C4_Policy_NegativePacked_TreatedAsZero_ReturnsFloor()
+  {
+    Assert.Equal(SevenZipMemoryPolicy.FloorBytes, SevenZipMemoryPolicy.GetMaxUnpackBytes(-1024));
+  }
+
+  [Fact]
+  public void C4_Policy_AtCapDividedAmplification_ReturnsCap()
+  {
+    long packedLength = SevenZipMemoryPolicy.CapBytes / SevenZipMemoryPolicy.Amplification;
+    Assert.Equal(SevenZipMemoryPolicy.CapBytes, SevenZipMemoryPolicy.GetMaxUnpackBytes(packedLength));
+  }
+
+  [Fact]
+  public void C4_Policy_LongMaxValue_SaturatesToCapWithoutOverflow()
+  {
+    Assert.Equal(SevenZipMemoryPolicy.CapBytes, SevenZipMemoryPolicy.GetMaxUnpackBytes(long.MaxValue));
+  }
+
+  [Fact]
+  public void C4_Policy_FloorBoundary_GetMaxUnpackBytesOne_ReturnsFloor()
+  {
+    Assert.Equal(SevenZipMemoryPolicy.FloorBytes, SevenZipMemoryPolicy.GetMaxUnpackBytes(1));
+  }
+
+  [Fact]
+  public void C4_Policy_Monotonic_OnSamplePoints()
+  {
+    long a = SevenZipMemoryPolicy.GetMaxUnpackBytes(0);
+    long[] points = [1L, 100L, 1000L, 4096L, 1 << 20, 3 << 20, 100 << 20,
+      SevenZipMemoryPolicy.CapBytes / SevenZipMemoryPolicy.Amplification,
+      SevenZipMemoryPolicy.CapBytes / SevenZipMemoryPolicy.Amplification + 1,
+      long.MaxValue];
+    foreach (long p in points)
+    {
+      long b = SevenZipMemoryPolicy.GetMaxUnpackBytes(p);
+      Assert.True(b >= a, $"non-decreasing at {p}: {a} -> {b}");
+      Assert.True(b <= SevenZipMemoryPolicy.CapBytes, $"within cap at {p}: {b}");
+      a = b;
+    }
+  }
+
+  // Граница: ровно на пределе. Пакет такой длины, что предел ровно равен заявленному размеру →
+  // предел НЕ срабатывает (результат определяется данными, а не лимитом: Copy-кодер даёт InvalidData).
+  [Fact]
+  public void C4_Boundary_ExactlyAtLimit_IsNotRejected()
+  {
+    long packedLength = 5000L;
+    long limit = SevenZipMemoryPolicy.GetMaxUnpackBytes(packedLength);
+
+    byte[] packedStreams = new byte[packedLength];
+    for (long i = 0; i < packedLength; i++)
+      packedStreams[i] = (byte)i;
+
+    SevenZipStreamsInfo streamsInfo = CreateSingleCoderStreamsInfo(
+        CreateCopyCoder(), packedStreams, (ulong)limit);
+
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.DecodeFolderToArray(
+        streamsInfo, packedStreams, 0, SevenZipDecodeOptions.Default, out byte[] _);
+
+    Assert.NotEqual(SevenZipFolderDecodeResult.NotSupported, result);
+  }
+
+  // Граница: на один байт больше лимита → NotSupported.
+  [Fact]
+  public void C4_Boundary_OneByteOverLimit_IsRejected()
+  {
+    long packedLength = 5000L;
+    long limit = SevenZipMemoryPolicy.GetMaxUnpackBytes(packedLength);
+
+    byte[] packedStreams = new byte[packedLength];
+
+    SevenZipStreamsInfo streamsInfo = CreateSingleCoderStreamsInfo(
+        CreateCopyCoder(), packedStreams, (ulong)(limit + 1));
+
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.DecodeFolderToArray(
+        streamsInfo, packedStreams, 0, SevenZipDecodeOptions.Default, out byte[] _);
+
+    Assert.Equal(SevenZipFolderDecodeResult.NotSupported, result);
+  }
+
+  // Пол (FLOOR). Пакет 1 байт, заявленный размер ровно 256 МиБ → предел не срабатывает;
+  // 256 МиБ + 1 байт → NotSupported.
+  [Fact]
+  public void C4_Floor_256MiBAtFloorWithOnePackedByte_IsNotRejected()
+  {
+    const long declaredUnpack = 256L << 20; // == FloorBytes
+    Assert.Equal(SevenZipMemoryPolicy.FloorBytes, SevenZipMemoryPolicy.GetMaxUnpackBytes(1));
+
+    byte[] packedStreams = [0x42];
+    SevenZipStreamsInfo streamsInfo = CreateSingleCoderStreamsInfo(
+        CreateCopyCoder(), packedStreams, (ulong)declaredUnpack);
+
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.DecodeFolderToArray(
+        streamsInfo, packedStreams, 0, SevenZipDecodeOptions.Default, out byte[] _);
+
+    Assert.NotEqual(SevenZipFolderDecodeResult.NotSupported, result);
+  }
+
+  [Fact]
+  public void C4_Floor_256MiBPlusOneByte_IsRejected()
+  {
+    const long declaredUnpack = (256L << 20) + 1; // > FloorBytes
+
+    byte[] packedStreams = [0x42];
+    SevenZipStreamsInfo streamsInfo = CreateSingleCoderStreamsInfo(
+        CreateCopyCoder(), packedStreams, (ulong)declaredUnpack);
+
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.DecodeFolderToArray(
+        streamsInfo, packedStreams, 0, SevenZipDecodeOptions.Default, out byte[] _);
+
+    Assert.Equal(SevenZipFolderDecodeResult.NotSupported, result);
+  }
 }

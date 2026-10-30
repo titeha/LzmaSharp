@@ -403,6 +403,21 @@ public static class SevenZipFolderDecoder
     if (folderUnpackSizes is null || folderUnpackSizes.Length == 0)
       return SevenZipFolderDecodeResult.InvalidData;
 
+    // RES-002: заявленный распакованный объём folder'а проверяется до любой аллокации
+    // new byte[expectedUnpackSize] в кодеках. Сумма считается с насыщением: элементы — ulong
+    // из недоверенного заголовка и могут превышать long.MaxValue.
+    long declaredUnpackTotal = 0;
+    for (int i = 0; i < folderUnpackSizes.Length; i++)
+    {
+      ulong size = folderUnpackSizes[i];
+      declaredUnpackTotal = size >= (ulong)(long.MaxValue - declaredUnpackTotal)
+        ? long.MaxValue
+        : declaredUnpackTotal + (long)size;
+    }
+
+    if (declaredUnpackTotal > SevenZipMemoryPolicy.GetMaxUnpackBytes(packedStreams.Length))
+      return SevenZipFolderDecodeResult.NotSupported;
+
     // BCJ2 — multi-stream coder, обрабатываем отдельной веткой (не линейный конвейер 1in/1out).
     bool hasBcj2 = false;
     for (int i = 0; i < folder.Coders.Length; i++)
@@ -1366,6 +1381,21 @@ public static class SevenZipFolderDecoder
     ulong[]? folderUnpackSizes = unpackInfo.FolderUnpackSizes[folderIndex];
     if (folderUnpackSizes is null || folderUnpackSizes.Length == 0)
       return SevenZipFolderDecodeResult.InvalidData;
+
+    // RES-002: заявленный распакованный объём folder'а проверяется до любой аллокации
+    // new byte[expectedUnpackSize] в кодеках. Сумма считается с насыщением: элементы — ulong
+    // из недоверенного заголовка и могут превышать long.MaxValue.
+    long declaredUnpackTotal = 0;
+    for (int i = 0; i < folderUnpackSizes.Length; i++)
+    {
+      ulong size = folderUnpackSizes[i];
+      declaredUnpackTotal = size >= (ulong)(long.MaxValue - declaredUnpackTotal)
+        ? long.MaxValue
+        : declaredUnpackTotal + (long)size;
+    }
+
+    if (declaredUnpackTotal > SevenZipMemoryPolicy.GetMaxUnpackBytes(packedStreams.Length))
+      return SevenZipFolderDecodeResult.NotSupported;
 
     SevenZipFolder folder = unpackInfo.Folders[folderIndex];
 
