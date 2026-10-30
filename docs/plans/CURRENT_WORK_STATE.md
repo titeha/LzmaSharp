@@ -6,8 +6,8 @@ last_verified_date: 2026-10-27
 main_branch: main
 main_commit: cd891130022bf5431d85e58f7d5a5e22112a5cf7
 active_work_branch: fix/sec004-resource-budgets
-active_work_commit: c872152
-next_task: "C4 (RES-002, предел in-memory распаковки folder'а) исполнителем ornith-1.5-35b-a3b по tasks/C4_SPEC_PACK.md, кросс-семейное ревью диффа qwen3-coder-next; затем C5 (RES-003) и C6–C8 (бюджет вывода); doc-tail для C3a–C3d выполнен, README — отдельным шагом"
+active_work_commit: 70ecdb6
+next_task: "C5 (RES-003 — предел размера словаря LZMA и memSize PPMd, 1 ГиБ на аллокацию кодека): вывод тимлида и контракт tasks/C5_SPEC_PACK.md, исполнитель ornith-1.5-35b-a3b; карточки M8 (UI-сообщение NotSupported) и M9 (аллокации по NumInStreams/NumOutStreams) требуют отдельного решения владельца; затем C6–C8 (бюджет вывода) и merge ветки в main по команде владельца"
 ---
 
 # LzmaSharp: текущее состояние работ и ближайший план
@@ -72,9 +72,25 @@ reparse-компонентах в цепочке пути назначения, 
 
 ```text
 branch: fix/sec004-resource-budgets (от main = cd89113)
-commit: c872152 (ac08c03 — C3a, 91eb420 — C3b, 9fb4473 — C3c, c872152 — C3d)
+commit: 70ecdb6 (ac08c03 — C3a, 91eb420 — C3b, 9fb4473 — C3c, c872152 — C3d,
+        123ec87 — README, 4e4cf4d — C4, 70ecdb6 — C4-аддендум)
 date:   2026-10-27
 ```
+
+Шаги C4 и C4-аддендум закрыли **RES-002** для in-memory маршрута folder'а: политика
+`min(1 ГиБ, max(256 МиБ, 1024 × длина packed-слайса))` на сумму заявленных распакованных размеров
+потоков одного folder'а, отказ `NotSupported` до аллокации (`4e4cf4d`); кросс-семейное ревью
+`deepseek/deepseek-flash` — `APPROVE_WITH_COMMENTS`, 0 BLOCKING / 0 MAJOR / 9 MINOR, находки M1–M6
+закрыты аддендумом (`70ecdb6`, production-поведение не менялось — только комментарии и четыре
+дискриминирующих теста). M7 (документация) закрыт этим doc-tail, M8 (UI трактует `NotSupported`
+как «возможно зашифрован») и M9 (аллокации `new int[totalIn]`/`new int[totalOut]`/`new bool[totalOut]`
+по недоверенным `NumInStreams`/`NumOutStreams`, до ~8 ГиБ из крошечного архива) — отдельные
+карточки, вне scope C4. Локальные факты на `70ecdb6`: `Lzma.Core.Tests` 1819 passed / 5 skipped /
+1824; `Lzma.Ui.Tests` 239 / 0 / 0; `dotnet build -c Release -t:Rebuild` 0 ошибок / 67 предупреждений;
+регрессия FolderDecoder+ArchiveDecoder+Real7z+Interop 573 / 0 / 0 (все fixture и интероп с настоящим
+7-Zip зелёные — ложных отказов нет). Независимая проверка дискриминации тимлидом: замена суммы
+максимумом в первой проверке ломает тест M3 (`Expected: NotSupported / Actual: InvalidData`),
+файл восстановлен байт-в-байт (sha256 сверен).
 
 В ней закрыт **RES-001** (аллокации по счётчикам из недоверенного заголовка 7z) по всем четырём
 reader'ам: `SevenZipPackInfoReader` (`ac08c03`), `SevenZipSubStreamsInfoReader` (`91eb420`),
