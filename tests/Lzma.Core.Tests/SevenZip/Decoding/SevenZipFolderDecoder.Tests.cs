@@ -1551,4 +1551,141 @@ public class SevenZipFolderDecoderTests
         overLimitInfo, packed, 0, SevenZipDecodeOptions.Default, out byte[] _);
     Assert.Equal(SevenZipFolderDecodeResult.NotSupported, overResult);
   }
+
+  // ----- C4b (M9 v2): вывод числа потоков folder'а из длин массивов -----
+
+  // Макет BCJ2-folder: один BCJ2-кодер (4 in / 1 out), BindPairs = [] (0 bind pair),
+  // PackedStreamIndices = [0,1,2,3] (4 packed stream). NumInStreams/NumOutStreams задаются вызовом —
+  // это «заянные» из недоверенного заголовка счётчики, которые до правки прямо шли в
+  // new int[totalIn]/new int[totalOut].
+  private static SevenZipStreamsInfo CreateBcj2FolderWithDeclaredCounts(
+      ulong numInStreams, ulong numOutStreams)
+  {
+    var folder = new SevenZipFolder(
+      Coders:
+      [
+        new SevenZipCoderInfo(methodId: [0x1B], properties: [], numInStreams: 4, numOutStreams: 1), // BCJ2
+      ],
+      BindPairs: [],
+      PackedStreamIndices: [0UL, 1UL, 2UL, 3UL],
+      NumInStreams: numInStreams,
+      NumOutStreams: numOutStreams);
+
+    var packInfo = new SevenZipPackInfo(packPos: 0, packSizes: [1UL, 1UL, 1UL, 1UL]);
+    var unpackInfo = new SevenZipUnpackInfo(folders: [folder], folderUnpackSizes: [[1UL]]);
+    return new SevenZipStreamsInfo(packInfo: packInfo, unpackInfo: unpackInfo, subStreamsInfo: null);
+  }
+
+  // M9_in (RED, до правки): заявано NumInStreams = 30_000_000, но BindPairs.Length = 0 и
+  // PackedStreamIndices.Length = 4, поэтому из массивов выводится totalIn = 0 + 4 = 4.
+  // Заянное (30 млн) не равно выводимому (4): такая структура собрана программно — читатель из
+  // байт её построить не может (SevenZipUnpackInfoReader.cs:181, :211 гарантируют тождество).
+  // Тест фиксирует свойство безопасности (отсутствие большой аллокации): дельта < 1 МиБ.
+  // Код результата НЕ утверждаем — он меняется InvalidData (до правки) → Ok (после правки),
+  // что ожидаемо по обоснованию §4.1 и описано в отчёте (§5.1, примечание; §7).
+  [Fact]
+  public void C4_M9_in_TryDecodeBcj2NumInStreamsExceedsDerived_NoBigAllocation()
+  {
+    const ulong claimedIn = 30_000_000UL;
+    SevenZipStreamsInfo streamsInfo = CreateBcj2FolderWithDeclaredCounts(claimedIn, numOutStreams: 1UL);
+    byte[] packedStreams = [0x00, 0x00, 0x00, 0x00];
+
+    long before = GC.GetAllocatedBytesForCurrentThread();
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.TryDecodeBcj2InputStreamsToArrays(
+        streamsInfo: streamsInfo,
+        packedStreams: packedStreams,
+        folderIndex: 0,
+        decodedInputStreams: out byte[][] _);
+    long after = GC.GetAllocatedBytesForCurrentThread();
+    long delta = after - before;
+
+    Assert.True(
+      delta < 1_048_576,
+      $"дельта аллокаций {delta} байт — ожидается меньше 1 МиБ (до правки ~120 МиБ: int[30 млн])");
+  }
+
+  // M9_out (RED, до правки): заявано NumOutStreams = 30_000_000, но BindPairs.Length = 0, поэтому
+  // выводится totalOut = 0 + 1 = 1. Заянное (30 млн) != выводимому (1). Структура программная.
+  // Тот же принцип: дельта < 1 МиБ (до правки int[30 млн] ≈ 120 МиБ и bool[…] из BCJ2-ветви).
+  [Fact]
+  public void C4_M9_out_TryDecodeBcj2NumOutStreamsExceedsDerived_NoBigAllocation()
+  {
+    const ulong claimedOut = 30_000_000UL;
+    SevenZipStreamsInfo streamsInfo = CreateBcj2FolderWithDeclaredCounts(numInStreams: 4UL, numOutStreams: claimedOut);
+    byte[] packedStreams = [0x00, 0x00, 0x00, 0x00];
+
+    long before = GC.GetAllocatedBytesForCurrentThread();
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.TryDecodeBcj2InputStreamsToArrays(
+        streamsInfo: streamsInfo,
+        packedStreams: packedStreams,
+        folderIndex: 0,
+        decodedInputStreams: out byte[][] _);
+    long after = GC.GetAllocatedBytesForCurrentThread();
+    long delta = after - before;
+
+    Assert.True(
+      delta < 1_048_576,
+      $"дельта аллокаций {delta} байт — ожидается меньше 1 МиБ (до правки ~120 МиБ: int[30 млн])");
+  }
+
+  // №3 (согласованность, GREEN до и после): корректный BCJ2-folder — один BCJ2-кодер
+  // (4 in / 1 out), BindPairs.Length = 0, PackedStreamIndices.Length = 4. totalIn = 0 + 4 = 4 =
+  // NumInStreams, totalOut = 0 + 1 = 1 = NumOutStreams — тождество выполняется. Правка не
+  // отклоняет структуру (образец — существующий BCJ2-тест файла).
+  [Fact]
+  public void C4_M9_3_SingleBcj2Folder_ValidCounts_DecodesOk()
+  {
+    SevenZipStreamsInfo streamsInfo = CreateBcj2FolderWithDeclaredCounts(numInStreams: 4UL, numOutStreams: 1UL);
+    byte[] packedStreams = [0x10, 0x20, 0x30, 0x40];
+
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.TryDecodeBcj2InputStreamsToArrays(
+        streamsInfo: streamsInfo,
+        packedStreams: packedStreams,
+        folderIndex: 0,
+        decodedInputStreams: out byte[][] _);
+
+    Assert.Equal(SevenZipFolderDecodeResult.Ok, result);
+  }
+
+  // №4 (согласованность, GREEN до и после): двухкодерная цепочка из C4-аддендума — 2 Copy-кодера,
+  // BindPairs.Length = 1, PackedStreamIndices.Length = 1, NumInStreams = 2, NumOutStreams = 2.
+  // totalIn = 1 + 1 = 2 = NumInStreams, totalOut = 1 + 1 = 2 = NumOutStreams — тождество. Маршрут —
+  // линейный конвейер DecodeFolderToArray (не BCJ2), правка его не трогает; выводимые значения
+  // совпадают с заявными (folderUnpackSizes [2,2] при packedSize 2).
+  [Fact]
+  public void C4_M9_4_TwoCoderChain_ValidCounts_DecodesOk()
+  {
+    byte[] packedStreams = [0xAA, 0xBB];
+    SevenZipStreamsInfo streamsInfo = CreateTwoCoderChainStreamsInfo([2UL, 2UL], packedSize: 2);
+
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.DecodeFolderToArray(
+        streamsInfo, packedStreams, 0, SevenZipDecodeOptions.Default, out byte[] _);
+
+    Assert.Equal(SevenZipFolderDecodeResult.Ok, result);
+  }
+
+  // Предельное значение (добавляется после правки, §5.1): NumInStreams = int.MaxValue + 1.
+  // Срабатывает сохранённый guard (> int.MaxValue → NotSupported); аллокация не начинается,
+  // дельта < 1 МиБ. Тест проверяет, что правка M9 не устранил этот guard.
+  [Fact]
+  public void C4_M9_5_NumInStreamsOverIntMaxValue_ReturnsNotSupportedByGuard()
+  {
+    const ulong overMax = (ulong)int.MaxValue + 1UL;
+    SevenZipStreamsInfo streamsInfo = CreateBcj2FolderWithDeclaredCounts(overMax, numOutStreams: 1UL);
+    byte[] packedStreams = [0x00, 0x00, 0x00, 0x00];
+
+    long before = GC.GetAllocatedBytesForCurrentThread();
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.TryDecodeBcj2InputStreamsToArrays(
+        streamsInfo: streamsInfo,
+        packedStreams: packedStreams,
+        folderIndex: 0,
+        decodedInputStreams: out byte[][] _);
+    long after = GC.GetAllocatedBytesForCurrentThread();
+    long delta = after - before;
+
+    Assert.Equal(SevenZipFolderDecodeResult.NotSupported, result);
+    Assert.True(
+      delta < 1_048_576,
+      $"дельта аллокаций {delta} байт — ожидается меньше 1 МиБ");
+  }
 }
