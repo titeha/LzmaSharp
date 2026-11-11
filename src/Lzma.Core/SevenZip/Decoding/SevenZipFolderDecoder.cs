@@ -454,11 +454,17 @@ public static class SevenZipFolderDecoder
         return SevenZipFolderDecodeResult.InvalidData;
 
       // Находим финальный out stream folder'а: тот, который НЕ используется как producer (BindPairs.OutIndex).
-      // M9: множество размером с число bind pair (оно ограничено длиной заголовка) вместо
-      // bool[totalOut] по недоверенному счётчику — иначе folder с NumOutStreams ~2^31 приводит к
-      // аллокации ~2 ГиБ. Семантика сохранена: ровно один свободный индекс — успех, ноль или
-      // больше одного — NotSupported.
-      HashSet<int> usedOutIndices = new(folder.BindPairs.Length);
+      // M9: реальная экспозиция уязвимости — это int[totalIn]/int[totalOut] в
+      // TryDecodeBcj2InputStreamsToArrays, где totalIn/totalOut из недоверенного заголовка и не
+      // привязаны ни к одному существующему массиву. Здесь же bool[totalOut] дополнительно
+      // ограничивался проверкой folderUnpackSizes.Length != totalOut → InvalidData (массив ulong[]
+      // той же длины уже существовал), поэтому добавочная экспозиция составляла не более ~1/8 уже
+      // выделенного; замена на HashSet убирает зависимость от недоверенного счётчика полностью.
+      // Ёмкость HashSet намеренно не задаётся из счётчика до валидации:
+      // множество растёт по фактически добавленным индексам, каждый из которых ниже проверен
+      // на < totalOut. Семантика сохранена: ровно один
+      // свободный индекс — успех, ноль или больше одного — NotSupported.
+      HashSet<int> usedOutIndices = new HashSet<int>();
 
       for (int i = 0; i < folder.BindPairs.Length; i++)
       {
@@ -488,6 +494,10 @@ public static class SevenZipFolderDecoder
         }
       }
 
+      // Защитная (недостижима): «свободных индексов ровно один» уже проверена выше
+      // ((long)totalOut - usedOutIndices.Count != 1 → NotSupported), поэтому свободный индекс
+      // обязательно найден и finalOutIndex >= 0. Ветка защищает от падения при нарушении инварианта;
+      // поведение не меняется.
       if (finalOutIndex < 0)
         return SevenZipFolderDecodeResult.NotSupported;
 
@@ -1432,7 +1442,6 @@ public static class SevenZipFolderDecoder
       return SevenZipFolderDecodeResult.InvalidData;
 
     // Строим offsets входных/выходных потоков для каждого coder.
-    // И заполняем owner-таблицы: глобальный in/out индекс -> coderIndex.
     if (folder.NumInStreams > int.MaxValue || folder.NumOutStreams > int.MaxValue)
       return SevenZipFolderDecodeResult.NotSupported;
 
@@ -1444,7 +1453,7 @@ public static class SevenZipFolderDecoder
 
     // M9: таблицы inOwner/outOwner размером totalIn/totalOut больше не выделяются — счётчики
     // приходят из недоверенного заголовка (до ~8 ГиБ на массив). inOwner не читался вовсе,
-    // а единственный потребитель outOwner (:1556) ищет владельца просмотром диапазонов кодеров.
+    // а единственный потребитель outOwner ищет владельца просмотром диапазонов кодеров.
 
     int inCursor = 0;
     int outCursor = 0;
@@ -1556,10 +1565,10 @@ public static class SevenZipFolderDecoder
         return SevenZipFolderDecodeResult.InvalidData;
 
       // M9: владелец out-потока находится просмотром диапазонов кодеров вместо таблицы
-      // int[totalOut]. Эквивалентность: проверка ниже по коду (inCursor != totalIn ||
-      // outCursor != totalOut → InvalidData) гарантирует, что диапазоны кодеров покрывают
-      // [0, totalOut) без пропусков и пересечений, а проверка producerOutIndex >= totalOut —
-      // что индекс лежит в этих пределах.
+      // int[totalOut]. Эквивалентность: проверка выше по коду
+      // (inCursor != totalIn || outCursor != totalOut → InvalidData) выполняется до этого
+      // поиска и гарантирует, что диапазоны кодеров покрывают [0, totalOut) без пропусков и
+      // пересечений, а проверка producerOutIndex >= totalOut — что индекс лежит в этих пределах.
       int producerCoderIndex = -1;
       for (int ci = 0; ci < coderCount; ci++)
       {
@@ -1572,6 +1581,11 @@ public static class SevenZipFolderDecoder
         }
       }
 
+      // Защитная (недостижима): диапазоны кодеров покрывают [0, totalOut) без пропусков и
+      // пересечений (гарантия проверки inCursor != totalIn || outCursor != totalOut выше) и
+      // producerOutIndex уже проверен на < totalOut, поэтому он обязательно совпадает с каким-то
+      // кодером. Ветка защищает от исключения при нарушении инварианта;
+      // поведение не меняется.
       if (producerCoderIndex < 0)
         return SevenZipFolderDecodeResult.InvalidData;
       SevenZipCoderInfo producerCoder = folder.Coders[producerCoderIndex];
