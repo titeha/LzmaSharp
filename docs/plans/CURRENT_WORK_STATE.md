@@ -2,12 +2,12 @@
 doc_kind: current-work-plan
 status: active
 project: LzmaSharp
-last_verified_date: 2026-10-27
+last_verified_date: 2026-11-12
 main_branch: main
-main_commit: cd891130022bf5431d85e58f7d5a5e22112a5cf7
-active_work_branch: fix/sec004-resource-budgets
-active_work_commit: 70ecdb6
-next_task: "C5 (RES-003 — предел размера словаря LZMA и memSize PPMd, 1 ГиБ на аллокацию кодека): вывод тимлида и контракт tasks/C5_SPEC_PACK.md, исполнитель ornith-1.5-35b-a3b; карточки M8 (UI-сообщение NotSupported) и M9 (аллокации по NumInStreams/NumOutStreams) требуют отдельного решения владельца; затем C6–C8 (бюджет вывода) и merge ветки в main по команде владельца"
+main_commit: 5d1aa999876e199c8a19b6d6c3a714bc7512c126
+active_work_branch: fix/sec004-codec-limits
+active_work_commit: 5d1aa99
+next_task: "C5a (RES-003 — предел memSize PPMd и словаря LZMA1, 1 ГиБ на аллокацию кодека) исполнителем ornith-1.5-35b-a3b по tasks/C5A_SPEC_PACK.md на ветке fix/sec004-codec-limits; затем C5b (словарь LZMA2 в четырёх маршрутах), C6 (модель бюджета), C7/C8 (фактический останов вывода — обязательно кросс-семейное ревью), C9, C10; M9 закрыт в 276c2ce, карточка M8 (UI-сообщение NotSupported) остаётся открытой; merge фазы C в main и релиз 1.3.0 выполнены"
 ---
 
 # LzmaSharp: текущее состояние работ и ближайший план
@@ -47,10 +47,34 @@ next_task: "C5 (RES-003 — предел размера словаря LZMA и m
 
 ```text
 branch: main
-commit: cd89113 (merge --no-ff ветки ci/g8-blocking-sbom-pinning: блокирующий SBOM и pinning
-        полного графа зависимостей — остаток G8)
-date:   2026-10-27
+commit: 5d1aa99 (CI: тело Release из объекта аннотированного тега) ← b3b9137 (Док: README к 1.3.0)
+        ← cbdd4f3 (merge --no-ff fix/sec004-resource-budgets: RES-001, RES-002, M9)
+date:   2026-11-12
 ```
+
+**Релиз 1.3.0 выпущен** по команде владельца: тег `core/1.3.0` (аннотированный, `--cleanup=verbatim`,
+указывает на `cbdd4f3`) запушен на оба remote → workflow `Publish Core (NuGet)` run `43263482158` —
+success. Подтверждено первоисточниками: nuget.org flat-container содержит
+`[0.1.0, 1.0.0, 1.0.1, 1.1.0, 1.2.0, 1.3.0]`, страница пакета — HTTP 200, nuspec отдаёт
+`version 1.3.0` и обновлённое `<Description>`; в активах GitHub Release `bom.json` (1974 байта,
+CycloneDX specVersion 1.7, `metadata.tools.components.version = 6.3.1.0` — то есть блокирующий шаг
+SBOM с закреплённой версией тулзы отработал), `Ti-Soft.LzmaSharp.1.3.0.nupkg` (234 049 байт) и
+`.snupkg` (91 427 байт).
+
+Два инцидента публикации, зафиксированные честно:
+
+1. **Тело GitHub Release для `core/1.3.0` — сообщение merge-коммита, а не релизные ноты** (4954
+   символа). Причина: `actions/checkout` оставляет ссылку на тег «лёгкой», поэтому
+   `git tag -l --format='%(contents)'` раскрывается в сообщение коммита. Прежний дефект (пустое
+   body у 1.1.0/1.2.0) устранён, но подменой источника. Исправлено в `5d1aa99`: объект тега
+   догружается явным `git fetch --force`, тип проверяется через `git cat-file -t`, тело извлекается
+   как содержимое после первой пустой строки; проверено локально на реальном теге `core/1.3.0` —
+   извлечённый текст байт-в-байт совпал с файлом нот (6841 байт). Проявится со следующего тега;
+   тело релиза 1.3.0 можно заменить вручную в веб-интерфейсе (ноты — в аннотации тега).
+2. **CI-прогон main `43260647371` (на `cbdd4f3`): ubuntu и windows success, macos — cancelled**
+   (не failed; раннер GitHub не стартовал). То же дерево на ветке было зелёным на всех трёх ОС
+   (run `43060052377`). Повторный запуск job'а требует авторизованного доступа (веб-интерфейс),
+   анонимно недоступен. Прогон main для `5d1aa99` — run `43266214675`.
 
 В `main` влиты и опубликованы: SEC-002 (транзакционное создание архива и многотомных наборов,
 M4B–M9, F3, глобальный gate `APPROVE_WITH_FINDINGS`) и SEC-001 (транзакционное извлечение: стадия,
@@ -71,52 +95,23 @@ reparse-компонентах в цепочке пути назначения, 
 ### Рабочая ветка
 
 ```text
-branch: fix/sec004-resource-budgets (от main = cd89113)
-commit: 70ecdb6 (ac08c03 — C3a, 91eb420 — C3b, 9fb4473 — C3c, c872152 — C3d,
-        123ec87 — README, 4e4cf4d — C4, 70ecdb6 — C4-аддендум)
-date:   2026-10-27
+branch: fix/sec004-codec-limits (от main = 5d1aa99)
+commit: 5d1aa99 (своих коммитов пока нет)
+date:   2026-11-12
 ```
 
-Шаги C4 и C4-аддендум закрыли **RES-002** для in-memory маршрута folder'а: политика
-`min(1 ГиБ, max(256 МиБ, 1024 × длина packed-слайса))` на сумму заявленных распакованных размеров
-потоков одного folder'а, отказ `NotSupported` до аллокации (`4e4cf4d`); кросс-семейное ревью
-`deepseek/deepseek-flash` — `APPROVE_WITH_COMMENTS`, 0 BLOCKING / 0 MAJOR / 9 MINOR, находки M1–M6
-закрыты аддендумом (`70ecdb6`, production-поведение не менялось — только комментарии и четыре
-дискриминирующих теста). M7 (документация) закрыт этим doc-tail, M8 (UI трактует `NotSupported`
-как «возможно зашифрован») и M9 (аллокации `new int[totalIn]`/`new int[totalOut]`/`new bool[totalOut]`
-по недоверенным `NumInStreams`/`NumOutStreams`, до ~8 ГиБ из крошечного архива) — отдельные
-карточки, вне scope C4. Локальные факты на `70ecdb6`: `Lzma.Core.Tests` 1819 passed / 5 skipped /
-1824; `Lzma.Ui.Tests` 239 / 0 / 0; `dotnet build -c Release -t:Rebuild` 0 ошибок / 67 предупреждений;
-регрессия FolderDecoder+ArchiveDecoder+Real7z+Interop 573 / 0 / 0 (все fixture и интероп с настоящим
-7-Zip зелёные — ложных отказов нет). Независимая проверка дискриминации тимлидом: замена суммы
-максимумом в первой проверке ломает тест M3 (`Expected: NotSupported / Actual: InvalidData`),
-файл восстановлен байт-в-байт (sha256 сверен).
+Ветка создана для продолжения фазы C — шаг C5 (RES-003): пределы размера словаря кодека и `memSize`
+PPMd. Предыдущая ветка `fix/sec004-resource-budgets` влита в `main` (`cbdd4f3`) и опубликована
+в 1.3.0; её состав: C3a–C3d (RES-001, `ac08c03`, `91eb420`, `9fb4473`, `c872152`), README
+(`123ec87`), C4 (RES-002, `4e4cf4d`), C4-аддендум (`70ecdb6`), C4b (M9, `276c2ce`) и закрытие
+находок ревью C4b (`adc2204`). Ветки `ci/g8-blocking-sbom-pinning`, `fix/sec003-path-trust` и
+`fix/sec002-multivolume-transaction` влиты и не удалены.
 
-В ней закрыт **RES-001** (аллокации по счётчикам из недоверенного заголовка 7z) по всем четырём
-reader'ам: `SevenZipPackInfoReader` (`ac08c03`), `SevenZipSubStreamsInfoReader` (`91eb420`),
-`SevenZipFilesInfoReader` (`9fb4473`), `SevenZipUnpackInfoReader` (`c872152`). Предел в каждом
-случае выводится из формата (минимальное число байт на элемент), а не задаётся константой;
-в `UnpackInfo` применено ёмкостное ограничение `Math.Min(счётчик, остаток / N)`, которое не меняет
-классификацию отказов. Исполнитель — локальная модель `ornith-1.5-35b-a3b` (аттестация владельца,
-статус `VERIFIED`); четыре строки C3d внёс тимлид как доводку ≤20 строк по согласованию с владельцем
-после того, как исполнитель вернул `BLOCKED` по дефектному контракту. Каждый шаг закрыт
-блокирующей регрессией на дельту `GC.GetAllocatedBytesForCurrentThread`; RED воспроизведён тимлидом
-независимо (откат production-файла к HEAD, затем восстановление по sha256).
-
-Локальные факты на `c872152` (Windows 11 Pro 10.0.28000, SDK 10.0.112 при `global.json` 10.0.101):
-`Lzma.Core.Tests` 1804 passed / 5 skipped / 1809; `Lzma.Ui.Tests` 239 / 0 / 0; Build Release
-`-t:Rebuild` 0 ошибок / 67 предупреждений на полном дереве (= baseline). CI: runs `40369158191`
-(`ac08c03`), `40554417181` (`9fb4473`), `40921419976` (`c872152`) — все success на трёх ОС;
-числа тестов из TRX недоступны анонимно (403), поэтому приведены только локальные числа.
-
-Зафиксированная ловушка верификации (стоила тимлиду одного ложно-зелёного прогона): `dotnet test
---no-build` после сборки только `src/Lzma.Core` использует устаревшую копию `Lzma.Core.dll` из
-`artifacts/bin/Lzma.Core.Tests/release/`; перед таким прогоном собирать тестовый проект либо
-запускать `dotnet test` без `--no-build`.
-
-Остаток RES-001 (честно, см. `docs/SDL.md`): разрежённые массивы значений в `FilesInfo` сохраняют
-коэффициент до 32×/64× от длины payload; сжатый `EncodedHeader` способен увеличить доступный объём
-данных при малом архиве — это зона бюджетов вывода (C4/C8).
+Локальные факты на `5d1aa99` (Windows 11 Pro, SDK 10.0.112 при `global.json` 10.0.101) — те же,
+что на `adc2204`, поскольку `5d1aa99` и `b3b9137` меняли только workflow и README:
+`Lzma.Core.Tests` 1825 passed / 5 skipped / 1830; `Lzma.Ui.Tests` 239 / 0 / 0;
+`dotnet build -c Release -t:Rebuild` 0 ошибок / 67 предупреждений (= baseline); регрессия
+FolderDecoder + ArchiveDecoder + Real7z + Interop 569 / 0 / 0.
 
 ## 4. Что уже завершено
 
@@ -1538,8 +1533,10 @@ F4 disposition (принято владельцем, без преувеличе
 Текущий пакет (фаза C) ограничен только:
 
 ```text
-фаза C / бюджеты: RES-001 закрыт (C3a–C3d), далее C4 (RES-002, предел in-memory распаковки
-                  folder'а), C5 (RES-003, PPMd memSize и словарь LZMA), затем C6–C8 (бюджет вывода)
+фаза C / бюджеты: RES-001 (C3a–C3d), RES-002 (C4 + аддендум) и M9 (C4b + закрытие находок ревью)
+                  ЗАКРЫТЫ, влиты в main и опубликованы в 1.3.0;
+                  далее C5a (RES-003: memSize PPMd и словарь LZMA1), C5b (словарь LZMA2 в четырёх
+                  маршрутах), C6 (модель бюджета), C7/C8 (фактический останов вывода), C9, C10
 ```
 
 Политика пределов C4/C5 утверждена владельцем 2026-10-27 (вариант C: нижняя планка 256 МиБ,
@@ -1562,6 +1559,8 @@ pinning графа зависимостей) — merge `cd89113`; отдельн
   (RES-001/002/003, SEC-004/SEC-010 — фаза C);
 - нормализация Unicode имён (NFC/NFD) — known limitation по решению владельца от 2026-10-23,
   вне scope SEC-003;
+- M9 (аллокации по `NumInStreams`/`NumOutStreams` в декодере) — ЗАКРЫТ в `276c2ce` и опубликован
+  в 1.3.0 (карточка снята с очереди);
 - приватный staging-root (D4b) — ОТКЛОНЁН владельцем 2026-10-26 после подробного разбора: без
   handle-anchored публикации (P/Invoke запрещён) окно TOCTOU сужается, но не закрывается, а цена —
   кросс-томный copy+delete вместо атомарного rename, до 2× места, риск ACL/атрибутов и усложнение
