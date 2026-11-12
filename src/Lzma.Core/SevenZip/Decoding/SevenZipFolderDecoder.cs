@@ -771,6 +771,12 @@ public static class SevenZipFolderDecoder
     int order = coder.Properties[0];
     uint memSize = BinaryPrimitives.ReadUInt32LittleEndian(coder.Properties.AsSpan(1, 4));
 
+    // RES-003: memSize приходит из свойства кодека в недоверенном заголовке, wire-границы формата
+    // допускают до ~4 ГиБ, а Ppmd7Model выделяет _alignOffset + memSize сразу, до чтения данных.
+    // Предел политики проверяется здесь, а не в кодеке: кодеки и их тесты остаются без изменений.
+    if (memSize > SevenZipMemoryPolicy.MaxCodecBufferBytes)
+      return SevenZipFolderDecodeResult.NotSupported;
+
     byte[] output = new byte[expectedUnpackSize];
 
     Ppmd7DecodeResult result = Ppmd7Decoder.Decode(input, order, memSize, output);
@@ -1075,6 +1081,11 @@ public static class SevenZipFolderDecoder
       return SevenZipFolderDecodeResult.InvalidData;
 
     if (dictU32 > int.MaxValue)
+      return SevenZipFolderDecodeResult.NotSupported;
+
+    // RES-003: словарь LZMA выделяется целиком (LzmaDictionary._buffer = new byte[size]),
+    // поэтому значение из свойства кодека ограничивается политикой до создания декодера.
+    if (dictU32 > SevenZipMemoryPolicy.MaxCodecBufferBytes)
       return SevenZipFolderDecodeResult.NotSupported;
 
     int dictSize = (int)dictU32;
@@ -1691,6 +1702,11 @@ public static class SevenZipFolderDecoder
           return SevenZipFolderDecodeResult.InvalidData;
 
         if (dictU32 > int.MaxValue)
+          return SevenZipFolderDecodeResult.NotSupported;
+
+        // RES-003: словарь LZMA выделяется целиком (LzmaDictionary._buffer = new byte[size]),
+        // поэтому значение из свойства кодека ограничивается политикой до создания декодера.
+        if (dictU32 > SevenZipMemoryPolicy.MaxCodecBufferBytes)
           return SevenZipFolderDecodeResult.NotSupported;
 
         decoded = new byte[expectedSize];

@@ -1235,6 +1235,212 @@ public class SevenZipFolderDecoderTests
       $"дельта аллокаций {delta} байт — ожидается меньше 1 МиБ после правки");
   }
 
+  // ----- RES-003: предела размера буфера кодека (C5a) -----
+
+  [Fact]
+  public void C5A_Unit_MaxCodecBufferBytes_IsOneGiB()
+  {
+    // Фиксирует утверждённое владельцем значение 2026-10-27, чтобы его изменение было видно в диффе.
+    Assert.Equal(1L << 30, SevenZipMemoryPolicy.MaxCodecBufferBytes);
+  }
+
+  private static SevenZipCoderInfo CreatePpmdCoderForRed(uint memSize)
+  {
+    // Свойства PPMd — 5 байт: [0] = order (2..64, чтобы пройти wire-проверку order),
+    // [1..4] = memSize (UInt32 LE). Пacked-данные не нужны: аллокация модели происходит
+    // до чтения данных, а декод короткого потока вернет не Ok.
+    byte[] coderProps = new byte[5];
+    coderProps[0] = 2; // order
+    BinaryPrimitives.WriteUInt32LittleEndian(coderProps.AsSpan(1, 4), memSize);
+
+    return new SevenZipCoderInfo(
+      methodId: [0x03, 0x04, 0x01], // PPMd
+      properties: coderProps,
+      numInStreams: 1,
+      numOutStreams: 1);
+  }
+
+  private static SevenZipCoderInfo CreateLzma1CoderForRedDict(uint dictSize)
+  {
+    // Свойства LZMA — 5 байт: [0] = lc/lp/pb (проверяется TryParse), [1..4] = dictionarySize LE.
+    // Пacked-данные произвольные: аллокация словаря происходит до чтения данных.
+    byte[] coderProps = new byte[5];
+    byte lzmaPropsByte = new LzmaProperties(Lc: 3, Lp: 0, Pb: 2).ToByteOrThrow();
+    coderProps[0] = lzmaPropsByte;
+    BinaryPrimitives.WriteUInt32LittleEndian(coderProps.AsSpan(1, 4), dictSize);
+
+    return new SevenZipCoderInfo(
+      methodId: [0x03, 0x01, 0x01], // LZMA
+      properties: coderProps,
+      numInStreams: 1,
+      numOutStreams: 1);
+  }
+
+  private static SevenZipFolderDecodeResult DecodeSingleCoderFolderRed(
+      SevenZipCoderInfo coder,
+      ulong declaredUnpackSize)
+  {
+    byte[] packedStreams = [0x01, 0x02, 0x03, 0x04, 0x05];
+    SevenZipStreamsInfo streamsInfo = CreateSingleCoderStreamsInfo(coder, packedStreams, declaredUnpackSize);
+
+    long before = GC.GetAllocatedBytesForCurrentThread();
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.DecodeFolderToArray(
+        streamsInfo, packedStreams, 0, SevenZipDecodeOptions.Default, out byte[] _);
+    long after = GC.GetAllocatedBytesForCurrentThread();
+
+    return result;
+  }
+
+  [Fact]
+  public void C5A_RED_Ppmd_MemSizeOverOneGiB_ReturnsNotSupportedWithoutAllocating()
+  {
+    // memSize = 1 ГиБ + 1: выше предела политики, ниже int.MaxValue, входит в wire-границы
+    // [2048 .. 4294967259]. До правки Ppmd7Model выделяет _alignOffset + memSize (~1 ГиБ) до
+    // чтения данных → дельта аллокаций велика либо OutOfMemoryException. После правки —
+    // NotSupported и дельта < 1 МиБ.
+    const uint memSize = 1073741825; // (1L << 30) + 1
+
+    SevenZipCoderInfo coder = CreatePpmdCoderForRed(memSize);
+
+    long before = GC.GetAllocatedBytesForCurrentThread();
+    SevenZipFolderDecodeResult result = DecodeSingleCoderFolderRed(coder, declaredUnpackSize: 16);
+    long after = GC.GetAllocatedBytesForCurrentThread();
+    long delta = after - before;
+
+    Assert.True(
+      result == SevenZipFolderDecodeResult.NotSupported,
+      $"[RED до правки] результат {result}, дельта аллокаций {delta} байт (модель PPMd выделена до чтения данных)");
+    Assert.True(
+      delta < 1_048_576,
+      $"дельта аллокаций {delta} байт — меньше 1 МиБ после правки");
+  }
+
+  [Fact]
+  public void C5A_RED_Lzma1_DictionaryOverOneGiB_ReturnsNotSupportedWithoutAllocating()
+  {
+    // dictionarySize = 1 ГиБ + 1: выше предела политики, ниже int.MaxValue. До правки
+    // LzmaDictionary выделяет _buffer = new byte[size] (~1 ГиБ) до чтения данных → дельта
+    // аллокаций велика либо OutOfMemoryException. После правки — NotSupported и дельта < 1 МиБ.
+    const uint dictSize = 1073741825; // (1L << 30) + 1
+
+    SevenZipCoderInfo coder = CreateLzma1CoderForRedDict(dictSize);
+
+    long before = GC.GetAllocatedBytesForCurrentThread();
+    SevenZipFolderDecodeResult result = DecodeSingleCoderFolderRed(coder, declaredUnpackSize: 16);
+    long after = GC.GetAllocatedBytesForCurrentThread();
+    long delta = after - before;
+
+    Assert.True(
+      result == SevenZipFolderDecodeResult.NotSupported,
+      $"[RED до правки] результат {result}, дельта аллокаций {delta} байт (словарь LZMA выделен до чтения данных)");
+    Assert.True(
+      delta < 1_048_576,
+      $"дельта аллокаций {delta} байт — меньше 1 МиБ после правки");
+  }
+
+  [Fact]
+  public void C5A_Boundary_Ppmd_MemSizeExactlyOneGiB_IsNotRejectedByLimit()
+  {
+    // memSize ровно 1 ГиБ: предел «не больше» → проверка RES-003 не срабатывает. Фактический
+    // результат декода может быть любым другим (данные не декодируются). Тест выделяет ~1 ГиБ,
+    // поэтому запускать точечно (см. требования безопасности отчёта).
+    const uint memSize = (uint)(1L << 30);
+
+    SevenZipCoderInfo coder = CreatePpmdCoderForRed(memSize);
+    SevenZipFolderDecodeResult result = DecodeSingleCoderFolderRed(coder, declaredUnpackSize: 16);
+
+    Assert.NotEqual(SevenZipFolderDecodeResult.NotSupported, result);
+  }
+
+  [Fact]
+  public void C5A_Boundary_Lzma1_DictionaryExactlyOneGiB_IsNotRejectedByLimit()
+  {
+    // dictionarySize ровно 1 ГиБ: предел «не больше» → проверка RES-003 не срабатывает. Фактический
+    // результат декода может быть любым другим. Тест выделяет ~1 ГиБ, поэтому запускать точечно.
+    const uint dictSize = (uint)(1L << 30);
+
+    SevenZipCoderInfo coder = CreateLzma1CoderForRedDict(dictSize);
+    SevenZipFolderDecodeResult result = DecodeSingleCoderFolderRed(coder, declaredUnpackSize: 16);
+
+    Assert.NotEqual(SevenZipFolderDecodeResult.NotSupported, result);
+  }
+
+  [Fact]
+  public void C5A_Bcj2_LzmaProducer_DictionaryOverOneGiB_ReturnsNotSupportedWithoutAllocating()
+  {
+    // RES-003 точка §4.4: продюсер LZMA1 внутри BCJ2. Словарь выделяется целиком до чтения данных,
+    // поэтому после правки — NotSupported и дельта аллокаций < 1 МиБ. Тест выделяет ~1 ГиБ только
+    // если проверка не сработала, поэтому запускать точечно (см. требования безопасности отчёта).
+    const uint dictSize = 1073741825; // (1L << 30) + 1
+
+    SevenZipStreamsInfo streamsInfo = CreateBcj2FolderWithLzmaProducer(dictSize);
+    byte[] packedStreams =
+    [
+      0xC0, 0xC1, 0xC2, // ord0 -> CopyC.in (global in=6)
+      0xD0, 0xD1,       // ord1 -> raw BCJ2 slot1 (global in=2)
+      0xB0,             // ord2 -> CopyB.in (global in=0)
+      0xA0, 0xA1, 0xA2, 0xA3, // ord3 -> producer slot0 .in (global in=5)
+    ];
+
+    long before = GC.GetAllocatedBytesForCurrentThread();
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.TryDecodeBcj2InputStreamsToArrays(
+        streamsInfo, packedStreams, 0, out byte[][] _);
+    long after = GC.GetAllocatedBytesForCurrentThread();
+    long delta = after - before;
+
+    Assert.True(
+      result == SevenZipFolderDecodeResult.NotSupported,
+      $"результат {result}, дельта аллокаций {delta} байт — ожидается NotSupported без аллокации словаря");
+    Assert.True(
+      delta < 1_048_576,
+      $"дельта аллокаций {delta} байт — меньше 1 МиБ");
+  }
+
+  private static SevenZipCoderInfo CreateLzmaProducerCoderForRed(uint dictSize)
+  {
+    byte[] coderProps = new byte[5];
+    coderProps[0] = new LzmaProperties(Lc: 3, Lp: 0, Pb: 2).ToByteOrThrow();
+    BinaryPrimitives.WriteUInt32LittleEndian(coderProps.AsSpan(1, 4), dictSize);
+    return new SevenZipCoderInfo(
+      methodId: [0x03, 0x01, 0x01], // LZMA
+      properties: coderProps,
+      numInStreams: 1,
+      numOutStreams: 1);
+  }
+
+  private static SevenZipStreamsInfo CreateBcj2FolderWithLzmaProducer(uint slot0DictSize)
+  {
+    // Глобальные inIndex: CopyB=0, BCJ2=1..4, slot0 producer=5, CopyC=6. outIndex: CopyB=0, BCJ2=1,
+    // slot0 producer=2, CopyC=3. Повторяет шаблон построения folder'а для продюсеров BCJ2.
+    var folder = new SevenZipFolder(
+      Coders:
+      [
+        new SevenZipCoderInfo([0x00], [], 1, 1), // CopyB
+        new SevenZipCoderInfo([0x1B], [], 4, 1), // BCJ2
+        CreateLzmaProducerCoderForRed(slot0DictSize), // producer slot0
+        new SevenZipCoderInfo([0x00], [], 1, 1), // CopyC
+      ],
+      BindPairs:
+      [
+        new SevenZipBindPair(InIndex: 1, OutIndex: 2), // BCJ2 slot0 <- producer.out2
+        new SevenZipBindPair(InIndex: 3, OutIndex: 3), // BCJ2 slot2 <- CopyC.out3
+        new SevenZipBindPair(InIndex: 4, OutIndex: 0), // BCJ2 slot3 <- CopyB.out0
+      ],
+      PackedStreamIndices: [6UL, 2UL, 0UL, 5UL],
+      NumInStreams: 7,
+      NumOutStreams: 4);
+
+    var packInfo = new SevenZipPackInfo(packPos: 0, packSizes: [3UL, 2UL, 1UL, 4UL]);
+    var unpackInfo = new SevenZipUnpackInfo(
+      folders: [folder],
+      folderUnpackSizes:
+      [
+        [1UL, 123UL, 4UL, 3UL]
+      ]);
+
+    return new SevenZipStreamsInfo(packInfo: packInfo, unpackInfo: unpackInfo, subStreamsInfo: null);
+  }
+
   private static SevenZipCoderInfo CreateCopyCoder()
   {
     return new SevenZipCoderInfo(

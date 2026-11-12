@@ -21,6 +21,14 @@ internal static class SevenZipMemoryPolicy
   /// <summary>Верхняя планка предела: 1 ГиБ на распакованный объём folder'а.</summary>
   internal const long CapBytes = 1L << 30;
 
+  /// <summary>
+  /// Предел размера одного буфера кодека: словарь LZMA/LZMA2 и память модели PPMd.
+  /// В отличие от <see cref="CapBytes"/> не зависит от длины packed-данных и не имеет нижней
+  /// планки: размер словаря и memSize задаются свойствами кодека в заголовке и не связаны
+  /// с объёмом архива. Значение утверждено владельцем 2026-10-27.
+  /// </summary>
+  internal const long MaxCodecBufferBytes = 1L << 30;
+
   /// <summary>Допустимое усиление относительно длины packed-данных.</summary>
   internal const long Amplification = 1024L;
 
