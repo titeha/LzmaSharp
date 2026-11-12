@@ -79,6 +79,14 @@ public static class SevenZipPackInfoReader
         if (haveSizes) // Повторный блок Size не ожидаем.
           return SevenZipPackInfoReadResult.InvalidData;
 
+        // RES-001: каждый размер в блоке Size кодируется одним SevenZipEncodedUInt64 и занимает
+        // минимум один байт, поэтому заявленное число потоков не может превышать число доступных
+        // байт. Проверка стоит до аллокации, чтобы недоверенный заголовок не привёл к
+        // new ulong[~2^31] (~16 ГиБ). Отказ — NeedMoreInput, а не InvalidData: в потоковом
+        // маршруте вход может быть частичным буфером.
+        if ((ulong)numPackStreams > (ulong)(input.Length - cursor))
+          return SevenZipPackInfoReadResult.NeedMoreInput;
+
         sizes = new ulong[numPackStreams];
         for (int i = 0; i < numPackStreams; i++)
         {

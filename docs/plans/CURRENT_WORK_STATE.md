@@ -2,12 +2,12 @@
 doc_kind: current-work-plan
 status: active
 project: LzmaSharp
-last_verified_date: 2026-10-26
+last_verified_date: 2026-10-27
 main_branch: main
-main_commit: 7d5213ec8e7707b6eb08c074e41887b05ba15634
-active_work_branch: ci/g8-blocking-sbom-pinning
-active_work_commit: 7a9c0a9
-next_task: "merge ci/g8-blocking-sbom-pinning в main (по явной команде владельца); далее фаза C — SEC-004/SEC-010 и RES-001/002/003: план микрошагов с маршрутизацией моделей, затем первые шаги бюджетов памяти и вывода"
+main_commit: cd891130022bf5431d85e58f7d5a5e22112a5cf7
+active_work_branch: fix/sec004-resource-budgets
+active_work_commit: 70ecdb6
+next_task: "C5 (RES-003 — предел размера словаря LZMA и memSize PPMd, 1 ГиБ на аллокацию кодека): вывод тимлида и контракт tasks/C5_SPEC_PACK.md, исполнитель ornith-1.5-35b-a3b; карточки M8 (UI-сообщение NotSupported) и M9 (аллокации по NumInStreams/NumOutStreams) требуют отдельного решения владельца; затем C6–C8 (бюджет вывода) и merge ветки в main по команде владельца"
 ---
 
 # LzmaSharp: текущее состояние работ и ближайший план
@@ -47,8 +47,9 @@ next_task: "merge ci/g8-blocking-sbom-pinning в main (по явной кома�
 
 ```text
 branch: main
-commit: 7d5213e (CI: тело GitHub Release из аннотации тега через body_path)
-date:   2026-10-26
+commit: cd89113 (merge --no-ff ветки ci/g8-blocking-sbom-pinning: блокирующий SBOM и pinning
+        полного графа зависимостей — остаток G8)
+date:   2026-10-27
 ```
 
 В `main` влиты и опубликованы: SEC-002 (транзакционное создание архива и многотомных наборов,
@@ -70,30 +71,52 @@ reparse-компонентах в цепочке пути назначения, 
 ### Рабочая ветка
 
 ```text
-branch: ci/g8-blocking-sbom-pinning (от main = 7d5213e)
-commit: 7a9c0a9 (8a49682 — блокирующий SBOM; 7a9c0a9 — pinning зависимостей)
-date:   2026-10-26
+branch: fix/sec004-resource-budgets (от main = cd89113)
+commit: 70ecdb6 (ac08c03 — C3a, 91eb420 — C3b, 9fb4473 — C3c, c872152 — C3d,
+        123ec87 — README, 4e4cf4d — C4, 70ecdb6 — C4-аддендум)
+date:   2026-10-27
 ```
 
-В ней выполнен остаток G8 (supply chain): шаг SBOM в `publish-core.yml` стал блокирующим (снято
-`continue-on-error`, добавлены `set -euo pipefail` и `test -s out/bom.json`), версия тулзы
-закреплена на `CycloneDX 6.3.1`; для шести проектов сгенерированы `packages.lock.json`, в
-`Directory.Build.props` включены `RestorePackagesWithLockFile` и `RestoreLockedMode` при `CI='true'`.
-Ветки `fix/sec002-multivolume-transaction` и `fix/sec003-path-trust` влиты в `main` и не удалены.
+Шаги C4 и C4-аддендум закрыли **RES-002** для in-memory маршрута folder'а: политика
+`min(1 ГиБ, max(256 МиБ, 1024 × длина packed-слайса))` на сумму заявленных распакованных размеров
+потоков одного folder'а, отказ `NotSupported` до аллокации (`4e4cf4d`); кросс-семейное ревью
+`deepseek/deepseek-flash` — `APPROVE_WITH_COMMENTS`, 0 BLOCKING / 0 MAJOR / 9 MINOR, находки M1–M6
+закрыты аддендумом (`70ecdb6`, production-поведение не менялось — только комментарии и четыре
+дискриминирующих теста). M7 (документация) закрыт этим doc-tail, M8 (UI трактует `NotSupported`
+как «возможно зашифрован») и M9 (аллокации `new int[totalIn]`/`new int[totalOut]`/`new bool[totalOut]`
+по недоверенным `NumInStreams`/`NumOutStreams`, до ~8 ГиБ из крошечного архива) — отдельные
+карточки, вне scope C4. Локальные факты на `70ecdb6`: `Lzma.Core.Tests` 1819 passed / 5 skipped /
+1824; `Lzma.Ui.Tests` 239 / 0 / 0; `dotnet build -c Release -t:Rebuild` 0 ошибок / 67 предупреждений;
+регрессия FolderDecoder+ArchiveDecoder+Real7z+Interop 573 / 0 / 0 (все fixture и интероп с настоящим
+7-Zip зелёные — ложных отказов нет). Независимая проверка дискриминации тимлидом: замена суммы
+максимумом в первой проверке ломает тест M3 (`Expected: NotSupported / Actual: InvalidData`),
+файл восстановлен байт-в-байт (sha256 сверен).
 
-Локальные факты на `7a9c0a9` (Windows 11 Pro 10.0.28000, SDK 10.0.112 при `global.json` 10.0.101):
-`Lzma.Core.Tests` 1785 passed / 5 skipped / 1790; `Lzma.Ui.Tests` 239 / 0 / 0; Build Release
-0 ошибок / 67 предупреждений на полном дереве (= baseline). Блокирующее поведение locked-режима
-воспроизведено локально: `NU1403` при подменённой версии в lock-файле и `NU1004` при устаревшем
-lock-файле и изменённой ссылке на пакет — оба с ненулевым кодом возврата; после проверки
-состояние возвращено (sha256 lock-файла совпал с замером до теста). CI: run `40352251945`
-(`7a9c0a9`) — все три job'а success; числа тестов из TRX для этого run недоступны (анонимный
-доступ — 403), поэтому приведены только локальные числа. Прогон блокирующего шага SBOM возможен
-лишь при публикации следующего тега `core/*`.
+В ней закрыт **RES-001** (аллокации по счётчикам из недоверенного заголовка 7z) по всем четырём
+reader'ам: `SevenZipPackInfoReader` (`ac08c03`), `SevenZipSubStreamsInfoReader` (`91eb420`),
+`SevenZipFilesInfoReader` (`9fb4473`), `SevenZipUnpackInfoReader` (`c872152`). Предел в каждом
+случае выводится из формата (минимальное число байт на элемент), а не задаётся константой;
+в `UnpackInfo` применено ёмкостное ограничение `Math.Min(счётчик, остаток / N)`, которое не меняет
+классификацию отказов. Исполнитель — локальная модель `ornith-1.5-35b-a3b` (аттестация владельца,
+статус `VERIFIED`); четыре строки C3d внёс тимлид как доводку ≤20 строк по согласованию с владельцем
+после того, как исполнитель вернул `BLOCKED` по дефектному контракту. Каждый шаг закрыт
+блокирующей регрессией на дельту `GC.GetAllocatedBytesForCurrentThread`; RED воспроизведён тимлидом
+независимо (откат production-файла к HEAD, затем восстановление по sha256).
 
-Локальные факты предыдущего состояния (`bf4ed8a`/`c7e4a1f`, фаза D): те же 1785 / 5 / 1790 и
-239 / 0 / 0; POSIX-числа из TRX: ubuntu 1760 passed / 28 skipped, macos 1759 passed / 29 skipped
-(всего 1788).
+Локальные факты на `c872152` (Windows 11 Pro 10.0.28000, SDK 10.0.112 при `global.json` 10.0.101):
+`Lzma.Core.Tests` 1804 passed / 5 skipped / 1809; `Lzma.Ui.Tests` 239 / 0 / 0; Build Release
+`-t:Rebuild` 0 ошибок / 67 предупреждений на полном дереве (= baseline). CI: runs `40369158191`
+(`ac08c03`), `40554417181` (`9fb4473`), `40921419976` (`c872152`) — все success на трёх ОС;
+числа тестов из TRX недоступны анонимно (403), поэтому приведены только локальные числа.
+
+Зафиксированная ловушка верификации (стоила тимлиду одного ложно-зелёного прогона): `dotnet test
+--no-build` после сборки только `src/Lzma.Core` использует устаревшую копию `Lzma.Core.dll` из
+`artifacts/bin/Lzma.Core.Tests/release/`; перед таким прогоном собирать тестовый проект либо
+запускать `dotnet test` без `--no-build`.
+
+Остаток RES-001 (честно, см. `docs/SDL.md`): разрежённые массивы значений в `FilesInfo` сохраняют
+коэффициент до 32×/64× от длины payload; сжатый `EncodedHeader` способен увеличить доступный объём
+данных при малом архиве — это зона бюджетов вывода (C4/C8).
 
 ## 4. Что уже завершено
 
@@ -1512,21 +1535,23 @@ F4 disposition (принято владельцем, без преувеличе
 
 ## 6. Текущий рабочий пакет
 
-Текущий пакет (остаток G8) ограничен только:
+Текущий пакет (фаза C) ограничен только:
 
 ```text
-G8 / supply chain: блокирующий шаг SBOM в publish-воркфлоу,
-                   pinning полного графа зависимостей (lock-файлы + locked-режим в CI)
+фаза C / бюджеты: RES-001 закрыт (C3a–C3d), далее C4 (RES-002, предел in-memory распаковки
+                  folder'а), C5 (RES-003, PPMd memSize и словарь LZMA), затем C6–C8 (бюджет вывода)
 ```
 
-Следующий пакет — фаза C: `SEC-004` (единый resource budget), `SEC-010` (checked-арифметика
-метаданных) и `RES-001/002/003` (бюджеты памяти и вывода); цель — снять оговорку «формальные
-лимиты памяти в разработке» из описания пакета.
+Политика пределов C4/C5 утверждена владельцем 2026-10-27 (вариант C: нижняя планка 256 МиБ,
+допустимое усиление 1024× относительно длины packed-данных, верхняя планка 1 ГиБ на распакованный
+объём folder'а, отказ `NotSupported`; для C5 та же верхняя планка 1 ГиБ на аллокацию кодека).
+Материалы решения — `.agent/reports/C4C5_POLICY_PROPOSAL.md`, контракт — `tasks/C4_SPEC_PACK.md`.
+Цель фазы — снять оговорку «формальные лимиты памяти в разработке» из описания пакета.
 
-Предыдущие пакеты завершены, влиты в `main` (`7d5213e`) и опубликованы:
-`SEC-002 / multi-volume transactional publication` и `SEC-001 / transactional extraction` —
-`Ti-Soft.LzmaSharp 1.1.0`; `SEC-003 / path trust` (фаза D, merge `0cc3f0c`) —
-`Ti-Soft.LzmaSharp 1.2.0`.
+Предыдущие пакеты завершены и влиты в `main` (`cd89113`): `SEC-002 / multi-volume transactional
+publication` и `SEC-001 / transactional extraction` — `Ti-Soft.LzmaSharp 1.1.0`;
+`SEC-003 / path trust` (фаза D) — `Ti-Soft.LzmaSharp 1.2.0`; остаток G8 (блокирующий SBOM и
+pinning графа зависимостей) — merge `cd89113`; отдельный релиз на этот merge не выпускался.
 
 Вне scope текущего пакета:
 
@@ -1537,8 +1562,11 @@ G8 / supply chain: блокирующий шаг SBOM в publish-воркфло�
   (RES-001/002/003, SEC-004/SEC-010 — фаза C);
 - нормализация Unicode имён (NFC/NFD) — known limitation по решению владельца от 2026-10-23,
   вне scope SEC-003;
-- приватный staging-root (D4b) — отложен владельцем; это единственная мера, способная сузить
-  окно TOCTOU без P/Invoke;
+- приватный staging-root (D4b) — ОТКЛОНЁН владельцем 2026-10-26 после подробного разбора: без
+  handle-anchored публикации (P/Invoke запрещён) окно TOCTOU сужается, но не закрывается, а цена —
+  кросс-томный copy+delete вместо атомарного rename, до 2× места, риск ACL/атрибутов и усложнение
+  отката. Это единственная мера, способная сузить окно без P/Invoke, поэтому остаток задокументирован
+  как ограничение, а не как закрытый риск;
 - SEAM-1/SEAM-2 (швы для инъекции отказов) и связанный с ними диагностический остаток D2b;
 - xUnit1051 (todo #35), package separation, mobile heads, style/warnings cleanup;
 - остаток G8 (блокирующий SBOM и pinning транзитивных зависимостей) — ВЫПОЛНЕН на ветке

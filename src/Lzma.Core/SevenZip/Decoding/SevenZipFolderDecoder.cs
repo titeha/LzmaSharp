@@ -403,6 +403,23 @@ public static class SevenZipFolderDecoder
     if (folderUnpackSizes is null || folderUnpackSizes.Length == 0)
       return SevenZipFolderDecodeResult.InvalidData;
 
+    // RES-002: СУММА заявленных распакованных размеров потоков folder'а проверяется до любой
+    // аллокации new byte[expectedUnpackSize] в кодеках; предел — от длины переданного
+    // packed-слайса (в основном маршруте это packed-регион архива).
+    // new byte[expectedUnpackSize] в кодеках. Сумма считается с насыщением: элементы — ulong
+    // из недоверенного заголовка и могут превышать long.MaxValue.
+    long declaredUnpackTotal = 0;
+    for (int i = 0; i < folderUnpackSizes.Length; i++)
+    {
+      ulong size = folderUnpackSizes[i];
+      declaredUnpackTotal = size >= (ulong)(long.MaxValue - declaredUnpackTotal)
+        ? long.MaxValue
+        : declaredUnpackTotal + (long)size;
+    }
+
+    if (declaredUnpackTotal > SevenZipMemoryPolicy.GetMaxUnpackBytes(packedStreams.Length))
+      return SevenZipFolderDecodeResult.NotSupported;
+
     // BCJ2 — multi-stream coder, обрабатываем отдельной веткой (не линейный конвейер 1in/1out).
     bool hasBcj2 = false;
     for (int i = 0; i < folder.Coders.Length; i++)
@@ -437,7 +454,17 @@ public static class SevenZipFolderDecoder
         return SevenZipFolderDecodeResult.InvalidData;
 
       // Находим финальный out stream folder'а: тот, который НЕ используется как producer (BindPairs.OutIndex).
-      bool[] outUsed = new bool[totalOut];
+      // M9: реальная экспозиция уязвимости — это int[totalIn]/int[totalOut] в
+      // TryDecodeBcj2InputStreamsToArrays, где totalIn/totalOut из недоверенного заголовка и не
+      // привязаны ни к одному существующему массиву. Здесь же bool[totalOut] дополнительно
+      // ограничивался проверкой folderUnpackSizes.Length != totalOut → InvalidData (массив ulong[]
+      // той же длины уже существовал), поэтому добавочная экспозиция составляла не более ~1/8 уже
+      // выделенного; замена на HashSet убирает зависимость от недоверенного счётчика полностью.
+      // Ёмкость HashSet намеренно не задаётся из счётчика до валидации:
+      // множество растёт по фактически добавленным индексам, каждый из которых ниже проверен
+      // на < totalOut. Семантика сохранена: ровно один
+      // свободный индекс — успех, ноль или больше одного — NotSupported.
+      HashSet<int> usedOutIndices = new HashSet<int>();
 
       for (int i = 0; i < folder.BindPairs.Length; i++)
       {
@@ -449,21 +476,28 @@ public static class SevenZipFolderDecoder
         if ((uint)outIndex >= (uint)totalOut)
           return SevenZipFolderDecodeResult.InvalidData;
 
-        outUsed[outIndex] = true;
+        usedOutIndices.Add(outIndex);
       }
+
+      // Свободных индексов должно быть ровно один; иначе — прежние NotSupported
+      // (и «не один финальный выход», и «финального выхода нет»).
+      if ((long)totalOut - usedOutIndices.Count != 1)
+        return SevenZipFolderDecodeResult.NotSupported;
 
       int finalOutIndex = -1;
       for (int i = 0; i < totalOut; i++)
       {
-        if (!outUsed[i])
+        if (!usedOutIndices.Contains(i))
         {
-          if (finalOutIndex != -1)
-            return SevenZipFolderDecodeResult.NotSupported; // не один финальный выход
-
           finalOutIndex = i;
+          break;
         }
       }
 
+      // Защитная (недостижима): «свободных индексов ровно один» уже проверена выше
+      // ((long)totalOut - usedOutIndices.Count != 1 → NotSupported), поэтому свободный индекс
+      // обязательно найден и finalOutIndex >= 0. Ветка защищает от падения при нарушении инварианта;
+      // поведение не меняется.
       if (finalOutIndex < 0)
         return SevenZipFolderDecodeResult.NotSupported;
 
@@ -1367,6 +1401,23 @@ public static class SevenZipFolderDecoder
     if (folderUnpackSizes is null || folderUnpackSizes.Length == 0)
       return SevenZipFolderDecodeResult.InvalidData;
 
+    // RES-002: СУММА заявленных распакованных размеров потоков folder'а проверяется до любой
+    // аллокации new byte[expectedUnpackSize] в кодеках; предел — от длины переданного
+    // packed-слайса (в основном маршруте это packed-регион архива).
+    // new byte[expectedUnpackSize] в кодеках. Сумма считается с насыщением: элементы — ulong
+    // из недоверенного заголовка и могут превышать long.MaxValue.
+    long declaredUnpackTotal = 0;
+    for (int i = 0; i < folderUnpackSizes.Length; i++)
+    {
+      ulong size = folderUnpackSizes[i];
+      declaredUnpackTotal = size >= (ulong)(long.MaxValue - declaredUnpackTotal)
+        ? long.MaxValue
+        : declaredUnpackTotal + (long)size;
+    }
+
+    if (declaredUnpackTotal > SevenZipMemoryPolicy.GetMaxUnpackBytes(packedStreams.Length))
+      return SevenZipFolderDecodeResult.NotSupported;
+
     SevenZipFolder folder = unpackInfo.Folders[folderIndex];
 
     // Для BCJ2 ожидаем 4 входных packed stream'а.
@@ -1391,7 +1442,6 @@ public static class SevenZipFolderDecoder
       return SevenZipFolderDecodeResult.InvalidData;
 
     // Строим offsets входных/выходных потоков для каждого coder.
-    // И заполняем owner-таблицы: глобальный in/out индекс -> coderIndex.
     if (folder.NumInStreams > int.MaxValue || folder.NumOutStreams > int.MaxValue)
       return SevenZipFolderDecodeResult.NotSupported;
 
@@ -1401,8 +1451,9 @@ public static class SevenZipFolderDecoder
     var coderInStart = new int[coderCount];
     var coderOutStart = new int[coderCount];
 
-    var inOwner = new int[totalIn];
-    var outOwner = new int[totalOut];
+    // M9: таблицы inOwner/outOwner размером totalIn/totalOut больше не выделяются — счётчики
+    // приходят из недоверенного заголовка (до ~8 ГиБ на массив). inOwner не читался вовсе,
+    // а единственный потребитель outOwner ищет владельца просмотром диапазонов кодеров.
 
     int inCursor = 0;
     int outCursor = 0;
@@ -1424,12 +1475,6 @@ public static class SevenZipFolderDecoder
 
       coderInStart[ci] = inCursor;
       coderOutStart[ci] = outCursor;
-
-      for (int k = 0; k < nin; k++)
-        inOwner[inCursor + k] = ci;
-
-      for (int k = 0; k < nout; k++)
-        outOwner[outCursor + k] = ci;
 
       if (IsBcj2MethodId(c.MethodId))
       {
@@ -1464,7 +1509,7 @@ public static class SevenZipFolderDecoder
 
     // Для каждого входа BCJ2:
     // 1) по BindPairs находим producer OutIndex,
-    // 2) по outOwner узнаём producer coder (ожидаем LZMA2 1in/1out),
+    // 2) по диапазонам кодеров (coderOutStart) узнаём producer coder (ожидаем LZMA2 1in/1out),
     // 3) его единственный InIndex должен быть одним из PackedStreamIndices -> берём соответствующий range,
     // 4) распаковываем LZMA2 и кладём в result[slot].
     for (int slot = 0; slot < 4; slot++)
@@ -1519,7 +1564,30 @@ public static class SevenZipFolderDecoder
       if ((uint)producerOutIndex >= (uint)totalOut)
         return SevenZipFolderDecodeResult.InvalidData;
 
-      int producerCoderIndex = outOwner[producerOutIndex];
+      // M9: владелец out-потока находится просмотром диапазонов кодеров вместо таблицы
+      // int[totalOut]. Эквивалентность: проверка выше по коду
+      // (inCursor != totalIn || outCursor != totalOut → InvalidData) выполняется до этого
+      // поиска и гарантирует, что диапазоны кодеров покрывают [0, totalOut) без пропусков и
+      // пересечений, а проверка producerOutIndex >= totalOut — что индекс лежит в этих пределах.
+      int producerCoderIndex = -1;
+      for (int ci = 0; ci < coderCount; ci++)
+      {
+        long rangeStart = coderOutStart[ci];
+        long rangeEnd = rangeStart + (long)folder.Coders[ci].NumOutStreams;
+        if (producerOutIndex >= rangeStart && producerOutIndex < rangeEnd)
+        {
+          producerCoderIndex = ci;
+          break;
+        }
+      }
+
+      // Защитная (недостижима): диапазоны кодеров покрывают [0, totalOut) без пропусков и
+      // пересечений (гарантия проверки inCursor != totalIn || outCursor != totalOut выше) и
+      // producerOutIndex уже проверен на < totalOut, поэтому он обязательно совпадает с каким-то
+      // кодером. Ветка защищает от исключения при нарушении инварианта;
+      // поведение не меняется.
+      if (producerCoderIndex < 0)
+        return SevenZipFolderDecodeResult.InvalidData;
       SevenZipCoderInfo producerCoder = folder.Coders[producerCoderIndex];
 
       // Producer coder для входа BCJ2 ожидаем 1in/1out (Copy / LZMA2 / LZMA).

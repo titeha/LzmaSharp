@@ -194,6 +194,20 @@ public static class SevenZipSubStreamsInfoReader
           }
 
           int streams = (int)n;
+
+          // Каждая папка с streams >= 2 читает streams - 1 размеров, и каждый размер кодируется
+          // SevenZipEncodedUInt64, то есть занимает минимум один байт. Если доступных байт во входе
+          // меньше, чем нужно размеров, их пока нет. Возвращаем NeedMoreInput, а не InvalidData:
+          // reader работает и в потоковом маршруте, где src — частичный буфер, и на конце потока
+          // NeedMoreInput штатно становится терминальным отказом. Проверка поставлена до аллокации,
+          // иначе new ulong[streams] выделил бы память по недоверенному счётчику до проверки входа.
+          if (streams >= 2 && (ulong)(streams - 1) > (ulong)(src.Length - offset))
+          {
+            subStreamsInfo = null;
+            bytesConsumed = 0;
+            return SevenZipSubStreamsInfoReadResult.NeedMoreInput;
+          }
+
           var sizes = new ulong[streams];
 
           if (streams == 1)

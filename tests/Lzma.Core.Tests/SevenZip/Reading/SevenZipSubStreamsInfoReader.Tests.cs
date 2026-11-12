@@ -293,6 +293,88 @@ public class SevenZipSubStreamsInfoReaderTests
     Assert.Equal([0xAABBCCDDu, 0x01020304u], sub.UnpackCrcPerFolder![1]);
   }
 
+  [Fact]
+  public void TryRead_Читает_БольшоеЧислоПотоков_НоНехваткаВхода_НеАллоцирует()
+  {
+    var unpackInfo = CreateUnpackInfo(folderUnpackSize: 10);
+
+    // NumUnpackStreams = 8_000_000, Size указан, но ни одного байта размеров и без End.
+    // 64 МиБ доказывают дефект, но не роняют машину (значение выбрано намеренно).
+    var src = new List<byte>
+    {
+      SevenZipNid.SubStreamsInfo,
+      SevenZipNid.NumUnpackStream,
+    };
+    SevenZipEncodedUInt64.TryWrite(src, 8_000_000UL, out _);
+    src.Add(SevenZipNid.Size);
+
+    byte[] srcBytes = src.ToArray();
+
+    long before = GC.GetAllocatedBytesForCurrentThread();
+    var result = SevenZipSubStreamsInfoReader.TryRead(srcBytes, unpackInfo, out var sub, out var bytesConsumed);
+    long after = GC.GetAllocatedBytesForCurrentThread();
+
+    Assert.Equal(SevenZipSubStreamsInfoReadResult.NeedMoreInput, result);
+    Assert.Equal(0, bytesConsumed);
+    Assert.Null(sub);
+    long deltaAlloc = after - before;
+    Assert.True(deltaAlloc < 1_048_576, $"Аллокация {deltaAlloc} байт превышает допустимый предел 1 048 576");
+  }
+
+  [Fact]
+  public void TryRead_Читает_ПределЧислоПотоков_НоНеваткаВхода_НеАллоцирует()
+  {
+    var unpackInfo = CreateUnpackInfo(folderUnpackSize: 10);
+
+    // NumUnpackStreams = int.MaxValue, Size указан, но ни одного байта размеров. Это граничное
+    // значение из контракта: без проверки код попытался выделить ulong[int.MaxValue] (~16 ГиБ).
+    // RED намеренно не воспроизводился — доказательство даёт тот же путь кода в тесте выше.
+    var src = new List<byte>
+    {
+      SevenZipNid.SubStreamsInfo,
+      SevenZipNid.NumUnpackStream,
+    };
+    SevenZipEncodedUInt64.TryWrite(src, (ulong)int.MaxValue, out _);
+    src.Add(SevenZipNid.Size);
+
+    byte[] srcBytes = src.ToArray();
+
+    var result = SevenZipSubStreamsInfoReader.TryRead(srcBytes, unpackInfo, out var sub, out var bytesConsumed);
+
+    Assert.Equal(SevenZipSubStreamsInfoReadResult.NeedMoreInput, result);
+    Assert.Equal(0, bytesConsumed);
+    Assert.Null(sub);
+  }
+
+  [Fact]
+  public void TryRead_ПолныйВход_Читает_NumUnpackStream_И_Size_И_Вычисляет_ПоследнийРазмер()
+  {
+    var unpackInfo = CreateUnpackInfo(folderUnpackSize: 10);
+
+    // Тот же вход, что и в TryRead_Читает_NumUnpackStream_И_Size_И_Вычисляет_ПоследнийРазмер,
+    // но как отдельный позитивный контроль: num=3 и ровно два размера (по одному байту каждый)
+    // при полном входе. Проверка предела не должна срабатывать, когда вход достаточен
+    // (streams - 1 = 2 == числу доступных байтов размеров).
+    byte[] src =
+    [
+      SevenZipNid.SubStreamsInfo,
+      SevenZipNid.NumUnpackStream,
+      0x03,
+      SevenZipNid.Size,
+      0x02,
+      0x03,
+      SevenZipNid.End,
+    ];
+
+    var result = SevenZipSubStreamsInfoReader.TryRead(src, unpackInfo, out var sub, out var bytesConsumed);
+
+    Assert.Equal(SevenZipSubStreamsInfoReadResult.Ok, result);
+    Assert.Equal(src.Length, bytesConsumed);
+    Assert.NotNull(sub);
+    Assert.Equal([3UL], sub!.NumUnpackStreamsPerFolder);
+    Assert.Equal([2UL, 3UL, 5UL], sub.UnpackSizesPerFolder[0]);
+  }
+
   private static SevenZipUnpackInfo CreateUnpackInfo(ulong folderUnpackSize)
   {
     var coder = new SevenZipCoderInfo(

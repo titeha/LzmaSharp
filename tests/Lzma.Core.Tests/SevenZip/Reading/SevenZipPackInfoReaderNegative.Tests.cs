@@ -158,6 +158,41 @@ public sealed class SevenZipPackInfoReaderNegativeTests
     Assert.Equal(0, bytesConsumed);
   }
 
+  [Fact]
+  public void TryRead_NeedMoreInput_ЕслиЗаявленоМногоПотоковНоРазмеровНет()
+  {
+    // RES-001: заявленное число потоков много больше доступного входа. До проверки
+    // доступного входа аллокация ulong[numPackStreams] происходит раньше, чем читаются размеры.
+    byte[] data = Concat(
+      [SevenZipNid.PackInfo, 0x00], // packPos = 0
+      EncodeUInt64LongForm(8_000_000UL), // numPackStreams = 8 000 000
+      [SevenZipNid.Size]); // блоков размеров нет, байтов размеров нет
+
+    long before = GC.GetAllocatedBytesForCurrentThread();
+    var res = SevenZipPackInfoReader.TryRead(data, out _, out int bytesConsumed);
+    long delta = GC.GetAllocatedBytesForCurrentThread() - before;
+
+    Assert.Equal(SevenZipPackInfoReadResult.NeedMoreInput, res);
+    Assert.Equal(0, bytesConsumed);
+    Assert.True(delta < 1_048_576, $"Аллокация {delta} байт превышает допустимый предел 1 048 576");
+  }
+
+  [Fact]
+  public void TryRead_NeedMoreInput_ЕслиЗаявленоIntMaxValueНоРазмеровНет()
+  {
+    // RES-001: предельный счётчик потоков. До фикса код пытался бы выделить ulong[int.MaxValue]
+    // (~16 ГиБ). После проверки доступного входа отказ — NeedMoreInput без аллокации.
+    byte[] data = Concat(
+      [SevenZipNid.PackInfo, 0x00], // packPos = 0
+      EncodeUInt64LongForm((ulong)int.MaxValue), // numPackStreams = int.MaxValue
+      [SevenZipNid.Size]); // блоков размеров нет, байтов размеров нет
+
+    var res = SevenZipPackInfoReader.TryRead(data, out _, out int bytesConsumed);
+
+    Assert.Equal(SevenZipPackInfoReadResult.NeedMoreInput, res);
+    Assert.Equal(0, bytesConsumed);
+  }
+
   private static byte[] EncodeUInt64LongForm(ulong value)
   {
     byte[] data = new byte[9];

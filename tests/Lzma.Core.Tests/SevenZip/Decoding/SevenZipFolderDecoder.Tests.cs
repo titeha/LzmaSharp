@@ -1163,4 +1163,601 @@ public class SevenZipFolderDecoderTests
 
     return archive;
   }
+
+  // ----- RES-002: limit on in-memory folder unpack (C4) -----
+
+  private static SevenZipCoderInfo CreateLzma1CoderForRed()
+  {
+    var lzmaProps = new LzmaProperties(Lc: 3, Lp: 0, Pb: 2);
+    const int dictionarySize = 1 << 20;
+
+    // Raw LZMA stream (без LZMA-Alone header), маленький, но достаточный для старта декода.
+    byte[] packed = new LzmaEncoder(lzmaProps, dictionarySize).EncodeLiteralOnly(new byte[256]);
+
+    byte[] coderProps = new byte[5];
+    coderProps[0] = lzmaProps.ToByteOrThrow();
+    System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(coderProps.AsSpan(1, 4), (uint)dictionarySize);
+
+    return new SevenZipCoderInfo(
+      methodId: [0x03, 0x01, 0x01], // LZMA
+      properties: coderProps,
+      numInStreams: 1,
+      numOutStreams: 1);
+  }
+
+  private static SevenZipStreamsInfo CreateSingleCoderStreamsInfo(
+      SevenZipCoderInfo coder,
+      ReadOnlySpan<byte> packed,
+      ulong declaredUnpackSize)
+  {
+    var packInfo = new SevenZipPackInfo(
+      packPos: 0,
+      packSizes: [(ulong)packed.Length]);
+
+    var folder = new SevenZipFolder(
+      Coders: [coder],
+      BindPairs: [],
+      PackedStreamIndices: [0],
+      NumInStreams: 1,
+      NumOutStreams: 1);
+
+    var unpackInfo = new SevenZipUnpackInfo(
+      folders: [folder],
+      folderUnpackSizes: [[declaredUnpackSize]]);
+
+    return new SevenZipStreamsInfo(
+      packInfo: packInfo,
+      unpackInfo: unpackInfo,
+      subStreamsInfo: null);
+  }
+
+  [Fact]
+  public void C4_RED_DeclaredUnpack300MiB_SeveralPackedBytes_ReturnsNotSupportedWithoutAllocating()
+  {
+    // Главный RED: заявленный unpack 300 МиБ (> FLOOR 256 МиБ, < int.MaxValue), packed — несколько байт.
+    // До правки декодер выделяет new byte[300 МиБ] → тест падает (дельта аллокаций велика, либо
+    // результат не NotSupported). После правки: NotSupported и дельта аллокаций < 1 МиБ.
+    const long declaredUnpack = 300L << 20;
+
+    SevenZipCoderInfo coder = CreateLzma1CoderForRed();
+    byte[] packedStreams = [0x01, 0x02, 0x03, 0x04, 0x05];
+    SevenZipStreamsInfo streamsInfo = CreateSingleCoderStreamsInfo(coder, packedStreams, (ulong)declaredUnpack);
+
+    long before = GC.GetAllocatedBytesForCurrentThread();
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.DecodeFolderToArray(
+        streamsInfo, packedStreams, 0, SevenZipDecodeOptions.Default, out byte[] _);
+    long after = GC.GetAllocatedBytesForCurrentThread();
+    long delta = after - before;
+
+    Assert.Equal(SevenZipFolderDecodeResult.NotSupported, result);
+    Assert.True(
+      delta < 1_048_576,
+      $"дельта аллокаций {delta} байт — ожидается меньше 1 МиБ после правки");
+  }
+
+  private static SevenZipCoderInfo CreateCopyCoder()
+  {
+    return new SevenZipCoderInfo(
+      methodId: [0x00], // Copy
+      properties: [],
+      numInStreams: 1,
+      numOutStreams: 1);
+  }
+
+  // Тесты самой политики (чистая функция, без ФС и потоков).
+  [Fact]
+  public void C4_Policy_ZeroPacked_ReturnsFloor()
+  {
+    Assert.Equal(SevenZipMemoryPolicy.FloorBytes, SevenZipMemoryPolicy.GetMaxUnpackBytes(0));
+  }
+
+  [Fact]
+  public void C4_Policy_NegativePacked_TreatedAsZero_ReturnsFloor()
+  {
+    Assert.Equal(SevenZipMemoryPolicy.FloorBytes, SevenZipMemoryPolicy.GetMaxUnpackBytes(-1024));
+  }
+
+  [Fact]
+  public void C4_Policy_AtCapDividedAmplification_ReturnsCap()
+  {
+    long packedLength = SevenZipMemoryPolicy.CapBytes / SevenZipMemoryPolicy.Amplification;
+    Assert.Equal(SevenZipMemoryPolicy.CapBytes, SevenZipMemoryPolicy.GetMaxUnpackBytes(packedLength));
+  }
+
+  [Fact]
+  public void C4_Policy_LongMaxValue_SaturatesToCapWithoutOverflow()
+  {
+    Assert.Equal(SevenZipMemoryPolicy.CapBytes, SevenZipMemoryPolicy.GetMaxUnpackBytes(long.MaxValue));
+  }
+
+  [Fact]
+  public void C4_Policy_FloorBoundary_GetMaxUnpackBytesOne_ReturnsFloor()
+  {
+    Assert.Equal(SevenZipMemoryPolicy.FloorBytes, SevenZipMemoryPolicy.GetMaxUnpackBytes(1));
+  }
+
+  [Fact]
+  public void C4_Policy_Monotonic_OnSamplePoints()
+  {
+    long a = SevenZipMemoryPolicy.GetMaxUnpackBytes(0);
+    long[] points = [1L, 100L, 1000L, 4096L, 1 << 20, 3 << 20, 100 << 20,
+      SevenZipMemoryPolicy.CapBytes / SevenZipMemoryPolicy.Amplification,
+      SevenZipMemoryPolicy.CapBytes / SevenZipMemoryPolicy.Amplification + 1,
+      long.MaxValue];
+    foreach (long p in points)
+    {
+      long b = SevenZipMemoryPolicy.GetMaxUnpackBytes(p);
+      Assert.True(b >= a, $"non-decreasing at {p}: {a} -> {b}");
+      Assert.True(b <= SevenZipMemoryPolicy.CapBytes, $"within cap at {p}: {b}");
+      a = b;
+    }
+  }
+
+  // Граница: ровно на пределе. Пакет такой длины, что предел ровно равен заявленному размеру →
+  // предел НЕ срабатывает (результат определяется данными, а не лимитом: Copy-кодер даёт InvalidData).
+  [Fact]
+  public void C4_Boundary_ExactlyAtLimit_IsNotRejected()
+  {
+    long packedLength = 5000L;
+    long limit = SevenZipMemoryPolicy.GetMaxUnpackBytes(packedLength);
+
+    byte[] packedStreams = new byte[packedLength];
+    for (long i = 0; i < packedLength; i++)
+      packedStreams[i] = (byte)i;
+
+    SevenZipStreamsInfo streamsInfo = CreateSingleCoderStreamsInfo(
+        CreateCopyCoder(), packedStreams, (ulong)limit);
+
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.DecodeFolderToArray(
+        streamsInfo, packedStreams, 0, SevenZipDecodeOptions.Default, out byte[] _);
+
+    Assert.NotEqual(SevenZipFolderDecodeResult.NotSupported, result);
+  }
+
+  // Граница: на один байт больше лимита → NotSupported.
+  [Fact]
+  public void C4_Boundary_OneByteOverLimit_IsRejected()
+  {
+    long packedLength = 5000L;
+    long limit = SevenZipMemoryPolicy.GetMaxUnpackBytes(packedLength);
+
+    byte[] packedStreams = new byte[packedLength];
+
+    SevenZipStreamsInfo streamsInfo = CreateSingleCoderStreamsInfo(
+        CreateCopyCoder(), packedStreams, (ulong)(limit + 1));
+
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.DecodeFolderToArray(
+        streamsInfo, packedStreams, 0, SevenZipDecodeOptions.Default, out byte[] _);
+
+    Assert.Equal(SevenZipFolderDecodeResult.NotSupported, result);
+  }
+
+  // Пол (FLOOR). Пакет 1 байт, заявленный размер ровно 256 МиБ → предел не срабатывает;
+  // 256 МиБ + 1 байт → NotSupported.
+  [Fact]
+  public void C4_Floor_256MiBAtFloorWithOnePackedByte_IsNotRejected()
+  {
+    const long declaredUnpack = 256L << 20; // == FloorBytes
+    Assert.Equal(SevenZipMemoryPolicy.FloorBytes, SevenZipMemoryPolicy.GetMaxUnpackBytes(1));
+
+    byte[] packedStreams = [0x42];
+    SevenZipStreamsInfo streamsInfo = CreateSingleCoderStreamsInfo(
+        CreateCopyCoder(), packedStreams, (ulong)declaredUnpack);
+
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.DecodeFolderToArray(
+        streamsInfo, packedStreams, 0, SevenZipDecodeOptions.Default, out byte[] _);
+
+    Assert.NotEqual(SevenZipFolderDecodeResult.NotSupported, result);
+  }
+
+  [Fact]
+  public void C4_Floor_256MiBPlusOneByte_IsRejected()
+  {
+    const long declaredUnpack = (256L << 20) + 1; // > FloorBytes
+
+    byte[] packedStreams = [0x42];
+    SevenZipStreamsInfo streamsInfo = CreateSingleCoderStreamsInfo(
+        CreateCopyCoder(), packedStreams, (ulong)declaredUnpack);
+
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.DecodeFolderToArray(
+        streamsInfo, packedStreams, 0, SevenZipDecodeOptions.Default, out byte[] _);
+
+    Assert.Equal(SevenZipFolderDecodeResult.NotSupported, result);
+  }
+
+  // ----- C4-аддендум (M3, M4, M5, M6) -----
+
+  // Минимальная топология: один Copy-кодер. Проверка суммы RES-002 выполняется до валидации
+  // топологии (до ветвления на BCJ2 и линейный конвейер), поэтому структура намеренно минимальна —
+  // проверяется именно арифметика суммы folderUnpackSizes, а не декодирование. packedSize — длина
+  // packed-региона (используется и для предела GetMaxUnpackBytes, и для чтения в линейном конвейере).
+  private static SevenZipStreamsInfo CreateMinimalFolderStreamsInfo(
+      ulong[] declaredUnpackSizes, ulong packedSize)
+  {
+    var packInfo = new SevenZipPackInfo(packPos: 0, packSizes: [packedSize]);
+
+    var folder = new SevenZipFolder(
+      Coders: [CreateCopyCoder()],
+      BindPairs: [],
+      PackedStreamIndices: [0],
+      NumInStreams: 1,
+      NumOutStreams: 1);
+
+    var unpackInfo = new SevenZipUnpackInfo(
+      folders: [folder],
+      folderUnpackSizes: [declaredUnpackSizes]);
+
+    return new SevenZipStreamsInfo(
+      packInfo: packInfo,
+      unpackInfo: unpackInfo,
+      subStreamsInfo: null);
+  }
+
+  // Валидная цепочка из двух Copy-кодеров (1 in/1 out), одна bind pair (InIndex=1, OutIndex=0),
+  // NumInStreams=NumOutStreams=2, folderUnpackSizes из двух элементов (число == coderCount).
+  // Нужна для M3/M6: после обхода проверки суммы топологические проверки не должны сами по себе
+  // возвращать NotSupported — иначе они замаскируют проверяемое различие. Вместо NotSupported
+  // линейный конвейер доходит до Copy-кодера и возвращает InvalidData (длина packed != объём).
+  private static SevenZipStreamsInfo CreateTwoCoderChainStreamsInfo(
+      ulong[] declaredUnpackSizes, ulong packedSize)
+  {
+    var packInfo = new SevenZipPackInfo(packPos: 0, packSizes: [packedSize]);
+
+    var folder = new SevenZipFolder(
+      Coders:
+      [
+        new SevenZipCoderInfo(methodId: [0x00], properties: [], numInStreams: 1, numOutStreams: 1), // Copy
+        new SevenZipCoderInfo(methodId: [0x00], properties: [], numInStreams: 1, numOutStreams: 1), // Copy
+      ],
+      BindPairs: [new SevenZipBindPair(InIndex: 1, OutIndex: 0)],
+      PackedStreamIndices: [0],
+      NumInStreams: 2,
+      NumOutStreams: 2);
+
+    var unpackInfo = new SevenZipUnpackInfo(
+      folders: [folder],
+      folderUnpackSizes: [declaredUnpackSizes]);
+
+    return new SevenZipStreamsInfo(
+      packInfo: packInfo,
+      unpackInfo: unpackInfo,
+      subStreamsInfo: null);
+  }
+
+  // Модельный BCJ2-folder (как в существующих тестах валидации BindPairs): 4 coder-а
+  // (Copy, BCJ2, Copy, Copy), 3 bind pair, 4 packed stream. Сумма folderUnpackSizes здесь намеренно
+  // превышает предел памяти — проверяется именно RES-002 во второй точке входа, а не декодирование.
+  private static SevenZipStreamsInfo CreateBcj2StreamsInfo(ulong[] declaredUnpackSizes)
+  {
+    var folder = new SevenZipFolder(
+      Coders:
+      [
+        new SevenZipCoderInfo(methodId: [0x00], properties: [], numInStreams: 1, numOutStreams: 1), // Copy
+        new SevenZipCoderInfo(methodId: [0x1B], properties: [], numInStreams: 4, numOutStreams: 1), // BCJ2
+        new SevenZipCoderInfo(methodId: [0x00], properties: [], numInStreams: 1, numOutStreams: 1), // Copy
+        new SevenZipCoderInfo(methodId: [0x00], properties: [], numInStreams: 1, numOutStreams: 1), // Copy
+      ],
+      BindPairs:
+      [
+        new SevenZipBindPair(InIndex: 1, OutIndex: 3),
+        new SevenZipBindPair(InIndex: 3, OutIndex: 3),
+        new SevenZipBindPair(InIndex: 4, OutIndex: 0),
+      ],
+      PackedStreamIndices: [6UL, 2UL, 0UL, 5UL],
+      NumInStreams: 7,
+      NumOutStreams: 4);
+
+    var packInfo = new SevenZipPackInfo(packPos: 0, packSizes: [3UL, 2UL, 1UL, 4UL]);
+
+    var unpackInfo = new SevenZipUnpackInfo(
+      folders: [folder],
+      folderUnpackSizes: [declaredUnpackSizes]);
+
+    return new SevenZipStreamsInfo(
+      packInfo: packInfo,
+      unpackInfo: unpackInfo,
+      subStreamsInfo: null);
+  }
+
+  // M4: вторая точка входа TryDecodeBcj2InputStreamsToArrays. Сумма folderUnpackSizes (>300 МиБ)
+  // превышает предел GetMaxUnpackBytes(5 байт) (=256 МиБ, Floor) -> NotSupported.
+  // Ловушка: удаление блока проверки :1385-:1398 -> метод пройдет дальше и вернет
+  // InvalidData из TryGetFolderPackedStreamRanges (сумма packSizes [3,2,1,4]=10 > 5-byte packed),
+  // а не NotSupported -> тест упадет.
+  [Fact]
+  public void C4_M4_TryDecodeBcj2InputStreamsToArrays_SumOverLimit_ReturnsNotSupported()
+  {
+    const ulong each = 300L << 20; // 300 МиБ; сумма с остальными > 256 МиБ (Floor для 5 байт)
+    SevenZipStreamsInfo streamsInfo = CreateBcj2StreamsInfo([each, 123UL, 4UL, 3UL]);
+    byte[] packedStreams = [0x01, 0x02, 0x03, 0x04, 0x05];
+
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.TryDecodeBcj2InputStreamsToArrays(
+        streamsInfo: streamsInfo,
+        packedStreams: packedStreams,
+        folderIndex: 0,
+        decodedInputStreams: out byte[][] _);
+
+    Assert.Equal(SevenZipFolderDecodeResult.NotSupported, result);
+  }
+
+  // M6: заявленный поток больше int.MaxValue (ulong.MaxValue). Недоверенный заголовок может указать
+  // астрономический объём; декод должен отклонить его как NotSupported, без исключения
+  // (OverflowException не допускается — сумма считается с насыщением, а размер каждого потока
+  // отбракован проверкой «> int.MaxValue» в конвейере). Фактический результат: NotSupported.
+  // Ловушка: если удалить проверку «folderUnpackSizes[i] > int.MaxValue» в линейном конвейере,
+  // размер приведётся к int переполнением (-1) и конвейер пойдёт дальше -> InvalidData, а не
+  // NotSupported -> тест падает.
+  [Fact]
+  public void C4_M6_FolderUnpackSizeOverIntMaxValue_ReturnsNotSupportedWithoutException()
+  {
+    byte[] packedStreams = [0x01, 0x02, 0x03, 0x04, 0x05];
+    SevenZipStreamsInfo streamsInfo = CreateTwoCoderChainStreamsInfo(
+        [ulong.MaxValue, ulong.MaxValue], packedSize: 5);
+
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.DecodeFolderToArray(
+        streamsInfo, packedStreams, 0, SevenZipDecodeOptions.Default, out byte[] _);
+
+    Assert.Equal(SevenZipFolderDecodeResult.NotSupported, result);
+  }
+
+  // M3: проверяется СУММА, а не максимум. Два потока по 200 МиБ: каждый по отдельности < предела
+  // (256 МиБ для 5 байт packed), но сумма 400 МиБ > предела -> NotSupported. Валидная 2-кодерная
+  // цепочка (folderUnpackSizes.Length == coderCount == 2): после обхода проверки суммы топологические
+  // проверки (в т.ч. folderUnpackSizes.Length != coderCount) не возвращают NotSupported, а линейный
+  // конвейер доходит до Copy-кодера и возвращает InvalidData (длина packed != заявленный объём), так что
+  // замена суммы на максимум (max(200,200)=200 МиБ < 256 МиБ) делает тест падающим.
+  [Fact]
+  public void C4_M3_SumOfTwo200MiBStreams_ExceedsLimit_ReturnsNotSupported()
+  {
+    const ulong each = 200L << 20; // 200 МиБ < Floor(256 МиБ) по отдельности
+    byte[] packedStreams = [0x01, 0x02, 0x03, 0x04, 0x05];
+    SevenZipStreamsInfo streamsInfo = CreateTwoCoderChainStreamsInfo([each, each], packedSize: 5);
+
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.DecodeFolderToArray(
+        streamsInfo, packedStreams, 0, SevenZipDecodeOptions.Default, out byte[] _);
+
+    Assert.Equal(SevenZipFolderDecodeResult.NotSupported, result);
+  }
+
+  // M5: ветвь усиления политики на уровне декодера (не только пол). packed = Cap/Amplification - 1
+  // = 1 048 575 байт -> предел = 1 048 575 * 1024 = 1 073 740 800.
+  // 1) заявленая сумма == предел -> НЕ отклоняется (результат != NotSupported; фактический результат
+  //    записан в отчёт — InvalidData, т.к. Copy-кодер не выдаст заявленный объём);
+  // 2) заявленая сумма == предел + 1 -> NotSupported.
+  // Ловушка: замена в декодере «>» на «>=» сделает равенство пределу отклонённым ->
+  // утверждение 1 упадет.
+  [Fact]
+  public void C4_M5_AmplificationBranch_AtLimit_NotRejected_And_OverLimit_Rejected()
+  {
+    const int packedLength = 1_048_575; // Cap/Amplification - 1
+    const long atLimit = 1_073_740_800L; // packedLength * Amplification
+    const long overLimit = atLimit + 1;
+
+    byte[] packed = new byte[packedLength];
+    for (int i = 0; i < packedLength; i++)
+      packed[i] = (byte)i;
+
+    // 1) ровно на пределе -> не NotSupported.
+    SevenZipStreamsInfo atLimitInfo = CreateMinimalFolderStreamsInfo(
+        [(ulong)atLimit], packedSize: (ulong)packedLength);
+    SevenZipFolderDecodeResult atResult = SevenZipFolderDecoder.DecodeFolderToArray(
+        atLimitInfo, packed, 0, SevenZipDecodeOptions.Default, out byte[] _);
+    Assert.NotEqual(SevenZipFolderDecodeResult.NotSupported, atResult);
+
+    // 2) на один байт больше -> NotSupported.
+    SevenZipStreamsInfo overLimitInfo = CreateMinimalFolderStreamsInfo(
+        [(ulong)overLimit], packedSize: (ulong)packedLength);
+    SevenZipFolderDecodeResult overResult = SevenZipFolderDecoder.DecodeFolderToArray(
+        overLimitInfo, packed, 0, SevenZipDecodeOptions.Default, out byte[] _);
+    Assert.Equal(SevenZipFolderDecodeResult.NotSupported, overResult);
+  }
+
+  // ----- C4b (M9 v2): вывод числа потоков folder'а из длин массивов -----
+
+  // Макет BCJ2-folder: один BCJ2-кодер (4 in / 1 out), BindPairs = [] (0 bind pair),
+  // PackedStreamIndices = [0,1,2,3] (4 packed stream). NumInStreams/NumOutStreams задаются вызовом —
+  // это «заявленные» из недоверенного заголовка счётчики, которые до правки прямо шли в
+  // new int[totalIn]/new int[totalOut].
+  private static SevenZipStreamsInfo CreateBcj2FolderWithDeclaredCounts(
+      ulong numInStreams, ulong numOutStreams)
+  {
+    var folder = new SevenZipFolder(
+      Coders:
+      [
+        new SevenZipCoderInfo(methodId: [0x1B], properties: [], numInStreams: 4, numOutStreams: 1), // BCJ2
+      ],
+      BindPairs: [],
+      PackedStreamIndices: [0UL, 1UL, 2UL, 3UL],
+      NumInStreams: numInStreams,
+      NumOutStreams: numOutStreams);
+
+    var packInfo = new SevenZipPackInfo(packPos: 0, packSizes: [1UL, 1UL, 1UL, 1UL]);
+    var unpackInfo = new SevenZipUnpackInfo(folders: [folder], folderUnpackSizes: [[1UL]]);
+    return new SevenZipStreamsInfo(packInfo: packInfo, unpackInfo: unpackInfo, subStreamsInfo: null);
+  }
+
+  // M9_in: заявленный NumInStreams огромен (30_000_000), NumOutStreams = 1. Сумма счётчиков
+  // кодеров (4 + 1 = 5) не равна заявленному totalIn (30 млн), поэтому декод отклоняет структуру как
+  // InvalidData — и до правки, и после. До правки в TryDecodeBcj2InputStreamsToArrays выделялись
+  // in/out-таблицы размером totalIn/totalOut (int[30 млн] ≈ 114 МиБ); после M9-правки таблицы не
+  // выделяются вовсе, но отказ остаётся тем же (InvalidData), потому что сумма инкрементов coder-ов
+  // (inCursor/outCursor) не равна заявленному totalIn/totalOut. Тест фиксирует свойство безопасности —
+  // отсутствие большой аллокации: дельта < 1 МиБ.
+  [Fact]
+  public void C4_M9_in_TryDecodeBcj2HugeNumInStreams_NoBigAllocation()
+  {
+    const ulong claimedIn = 30_000_000UL;
+    SevenZipStreamsInfo streamsInfo = CreateBcj2FolderWithDeclaredCounts(claimedIn, numOutStreams: 1UL);
+    byte[] packedStreams = [0x00, 0x00, 0x00, 0x00];
+
+    long before = GC.GetAllocatedBytesForCurrentThread();
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.TryDecodeBcj2InputStreamsToArrays(
+        streamsInfo: streamsInfo,
+        packedStreams: packedStreams,
+        folderIndex: 0,
+        decodedInputStreams: out byte[][] _);
+    long after = GC.GetAllocatedBytesForCurrentThread();
+    long delta = after - before;
+
+    Assert.Equal(SevenZipFolderDecodeResult.InvalidData, result);
+    Assert.True(
+      delta < 1_048_576,
+      $"дельта аллокаций {delta} байт — ожидается меньше 1 МиБ (до правки ~114 МиБ: int[30 млн])");
+  }
+
+  // M9_out: заявлены NumOutStreams огромен (30_000_000), NumInStreams = 4. Сумма счётчиков кодеров
+  // (4 + 1 = 5) не равна заявленному totalOut (30 млн), поэтому декод отклоняет структуру как
+  // InvalidData — и до правки, и после. До правки в TryDecodeBcj2InputStreamsToArrays выделялись
+  // in/out-таблицы размером totalIn/totalOut (int[30 млн] ≈ 114 МиБ); после M9-правки таблицы не
+  // выделяются вовсе, но отказ остаётся тем же (InvalidData), потому что сумма инкрементов coder-ов
+  // (inCursor/outCursor) не равна заявленному totalOut. Тот же принцип безопасности: дельта < 1 МиБ.
+  [Fact]
+  public void C4_M9_out_TryDecodeBcj2HugeNumOutStreams_NoBigAllocation()
+  {
+    const ulong claimedOut = 30_000_000UL;
+    SevenZipStreamsInfo streamsInfo = CreateBcj2FolderWithDeclaredCounts(numInStreams: 4UL, numOutStreams: claimedOut);
+    byte[] packedStreams = [0x00, 0x00, 0x00, 0x00];
+
+    long before = GC.GetAllocatedBytesForCurrentThread();
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.TryDecodeBcj2InputStreamsToArrays(
+        streamsInfo: streamsInfo,
+        packedStreams: packedStreams,
+        folderIndex: 0,
+        decodedInputStreams: out byte[][] _);
+    long after = GC.GetAllocatedBytesForCurrentThread();
+    long delta = after - before;
+
+    Assert.Equal(SevenZipFolderDecodeResult.InvalidData, result);
+    Assert.True(
+      delta < 1_048_576,
+      $"дельта аллокаций {delta} байт — ожидается меньше 1 МиБ (до правки ~114 МиБ: int[30 млн])");
+  }
+
+  // №3 (согласованность, GREEN до и после): корректный BCJ2-folder — один BCJ2-кодер
+  // (4 in / 1 out), BindPairs.Length = 0, PackedStreamIndices.Length = 4. totalIn = 0 + 4 = 4 =
+  // NumInStreams, totalOut = 0 + 1 = 1 = NumOutStreams — тождество выполняется. Правка не
+  // отклоняет структуру (образец — существующий BCJ2-тест файла).
+  [Fact]
+  public void C4_M9_3_SingleBcj2Folder_ValidCounts_DecodesOk()
+  {
+    SevenZipStreamsInfo streamsInfo = CreateBcj2FolderWithDeclaredCounts(numInStreams: 4UL, numOutStreams: 1UL);
+    byte[] packedStreams = [0x10, 0x20, 0x30, 0x40];
+
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.TryDecodeBcj2InputStreamsToArrays(
+        streamsInfo: streamsInfo,
+        packedStreams: packedStreams,
+        folderIndex: 0,
+        decodedInputStreams: out byte[][] _);
+
+    Assert.Equal(SevenZipFolderDecodeResult.Ok, result);
+  }
+
+  // №4 (согласованность, GREEN до и после): двухкодерная цепочка из C4-аддендума — 2 Copy-кодера,
+  // BindPairs.Length = 1, PackedStreamIndices.Length = 1, NumInStreams = 2, NumOutStreams = 2.
+  // totalIn = 1 + 1 = 2 = NumInStreams, totalOut = 1 + 1 = 2 = NumOutStreams — тождество. Маршрут —
+  // линейный конвейер DecodeFolderToArray (не BCJ2), правка его не трогает; выводимые значения
+  // совпадают с заявлеными (folderUnpackSizes [2,2] при packedSize 2).
+  [Fact]
+  public void C4_M9_4_TwoCoderChain_ValidCounts_DecodesOk()
+  {
+    byte[] packedStreams = [0xAA, 0xBB];
+    SevenZipStreamsInfo streamsInfo = CreateTwoCoderChainStreamsInfo([2UL, 2UL], packedSize: 2);
+
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.DecodeFolderToArray(
+        streamsInfo, packedStreams, 0, SevenZipDecodeOptions.Default, out byte[] _);
+
+    Assert.Equal(SevenZipFolderDecodeResult.Ok, result);
+  }
+
+  // Предельное значение (добавляется после правки, §5.1): NumInStreams = int.MaxValue + 1.
+  // Срабатывает сохранённый guard (> int.MaxValue → NotSupported); аллокация не начинается,
+  // дельта < 1 МиБ. Тест проверяет, что правка M9 не устранил этот guard.
+  [Fact]
+  public void C4_M9_5_NumInStreamsOverIntMaxValue_ReturnsNotSupportedByGuard()
+  {
+    const ulong overMax = (ulong)int.MaxValue + 1UL;
+    SevenZipStreamsInfo streamsInfo = CreateBcj2FolderWithDeclaredCounts(overMax, numOutStreams: 1UL);
+    byte[] packedStreams = [0x00, 0x00, 0x00, 0x00];
+
+    long before = GC.GetAllocatedBytesForCurrentThread();
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.TryDecodeBcj2InputStreamsToArrays(
+        streamsInfo: streamsInfo,
+        packedStreams: packedStreams,
+        folderIndex: 0,
+        decodedInputStreams: out byte[][] _);
+    long after = GC.GetAllocatedBytesForCurrentThread();
+    long delta = after - before;
+
+    Assert.Equal(SevenZipFolderDecodeResult.NotSupported, result);
+    Assert.True(
+      delta < 1_048_576,
+      $"дельта аллокаций {delta} байт — ожидается меньше 1 МиБ");
+  }
+
+  // №5 (новый, из кросс-семейного ревью, §4): дубликаты OutIndex в BindPairs. totalOut = 4, а
+  // OutIndex всех BindPair'ов = {0, 2, 3, 2} (индекс 2 занят дважды). Число различных занятых
+  // индексов = 3, значит свободный ровно один (индекс 1), и декод должен продолжить работу —
+  // результат НЕ NotSupported. Ошибочная реализация «свободных = totalOut - BindPairs.Length»
+  // вычислила бы 4 - 4 = 0 и вернула NotSupported -> тест падал бы. Именно этот случай, когда в
+  // HashSet попадают дубликаты: важно РАЗЛИЧНЫЕ индексы (usedOutIndices.Count), а не длина
+  // массивa BindPairs. Тест утверждает лишь absence NotSupported (точный код результата зависит
+  // от дальнейшей раскладки BCJ2 и приведён в отчёте) и дельту аллокаций < 1 МиБ.
+  [Fact]
+  public void C4_M9_6_DuplicateOutIndex_BindPairs_UsesDistinctCount_NotNotSupported()
+  {
+    byte[] packedStreams =
+    [
+      0xC0, 0xC1, 0xC2,             // ord0 -> CopyC.in (global in=6)
+      0xD0, 0xD1,                   // ord1 -> raw BCJ2 slot1 (global in=2)
+      0xB0,                         // ord2 -> CopyB.in (global in=0)
+      0xA0, 0xA1, 0xA2, 0xA3,       // ord3 -> CopyA.in (global in=5)
+    ];
+
+    SevenZipStreamsInfo streamsInfo = CreateBcj2DuplicateOutIndexStreamsInfo();
+
+    long before = GC.GetAllocatedBytesForCurrentThread();
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.DecodeFolderToArray(
+        streamsInfo, packedStreams, 0, SevenZipDecodeOptions.Default, out byte[] _);
+    long after = GC.GetAllocatedBytesForCurrentThread();
+    long delta = after - before;
+
+    // Именно это свойство дискриминирует HashSet по различным индексам.
+    Assert.NotEqual(SevenZipFolderDecodeResult.NotSupported, result);
+    Assert.True(
+      delta < 1_048_576,
+      $"дельта аллокаций {delta} байт — ожидается меньше 1 МиБ");
+  }
+
+  private static SevenZipStreamsInfo CreateBcj2DuplicateOutIndexStreamsInfo()
+  {
+    // Глобальные outIndex: CopyB=0, BCJ2=1, CopyA=2, CopyC=3.
+    // Три BindPair собирают входа BCJ2 (slot0<-CopyA.out2, slot2<-CopyC.out3, slot3<-CopyB.out0).
+    // Четвёрый BindPair (InIndex=5, не входящий в входа BCJ2) намеренно дублирует OutIndex=2:
+    // в TryDecodeBcj2InputStreamsToArrays он не участвует, но верхний scan в DecodeFolderToArray
+    // кладёт его в HashSet. В итоге Occupied = {0,2,3} (различных = 3), свободный один (1).
+    var folder = new SevenZipFolder(
+        Coders:
+        [
+          new SevenZipCoderInfo(methodId: [0x00], properties: [], numInStreams: 1, numOutStreams: 1), // coder 0 = CopyB
+          new SevenZipCoderInfo(methodId: [0x1B], properties: [], numInStreams: 4, numOutStreams: 1), // coder 1 = BCJ2
+          new SevenZipCoderInfo(methodId: [0x00], properties: [], numInStreams: 1, numOutStreams: 1), // coder 2 = CopyA
+          new SevenZipCoderInfo(methodId: [0x00], properties: [], numInStreams: 1, numOutStreams: 1), // coder 3 = CopyC
+        ],
+        BindPairs:
+        [
+          new SevenZipBindPair(InIndex: 1, OutIndex: 2),
+          new SevenZipBindPair(InIndex: 3, OutIndex: 3),
+          new SevenZipBindPair(InIndex: 4, OutIndex: 0),
+          new SevenZipBindPair(InIndex: 5, OutIndex: 2), // дубликат OutIndex
+        ],
+        PackedStreamIndices: [6UL, 2UL, 0UL, 5UL],
+        NumInStreams: 7,
+        NumOutStreams: 4);
+
+    var packInfo = new SevenZipPackInfo(packPos: 0, packSizes: [3UL, 2UL, 1UL, 4UL]);
+    var unpackInfo = new SevenZipUnpackInfo(
+        folders: [folder],
+        folderUnpackSizes: [[1UL, 123UL, 4UL, 3UL]]);
+    return new SevenZipStreamsInfo(packInfo: packInfo, unpackInfo: unpackInfo, subStreamsInfo: null);
+  }
 }
