@@ -85,6 +85,15 @@ public static class SevenZipFolderDecoder
     if (TryGetSingleLzma2Coder(streamsInfo, packedStreams, folderIndex,
             out ReadOnlySpan<byte> packStream, out byte lzma2PropertiesByte))
     {
+      // RES-003: словарь LZMA2 выделяется целиком внутри кодека (Lzma2IncrementalDecoder →
+      // Lzma1.LzmaDecoder → LzmaDictionary._buffer = new byte[size]), поэтому размер, заданный
+      // байтом свойств, ограничивается политикой до входа в кодек. Если свойства не распознаны
+      // (TryDecodeDictionarySize вернул false), поведение не меняется — ошибку обработает
+      // прежний путь внутри кодека.
+      if (SevenZipLzma2Coder.TryDecodeDictionarySize(lzma2PropertiesByte, out uint streamDictSize)
+          && streamDictSize > SevenZipMemoryPolicy.MaxCodecBufferBytes)
+        return SevenZipFolderDecodeResult.NotSupported;
+
       Lzma2DecodeResult r = Lzma2Decoder.DecodeToStream(
           packStream, lzma2PropertiesByte, output, out bytesWritten, out _, progress, token);
 
@@ -200,6 +209,11 @@ public static class SevenZipFolderDecoder
 
       if (!Lzma2Properties.TryParse(lzma2PropertiesByte, out Lzma2Properties properties))
         return SevenZipFolderDecodeResult.InvalidData;
+
+      // RES-003: тот же предел для потокового маршрута из архива-Stream. DictionarySize уже
+      // разобрана из байта свойств, поэтому повторно декодировать её не нужно.
+      if (properties.DictionarySize > SevenZipMemoryPolicy.MaxCodecBufferBytes)
+        return SevenZipFolderDecodeResult.NotSupported;
 
       archive.Position = fileOffset;
 
@@ -1008,6 +1022,11 @@ public static class SevenZipFolderDecoder
     if (dictionarySize > int.MaxValue)
       return SevenZipFolderDecodeResult.NotSupported;
 
+    // RES-003: предел буфера кодека (словарь LZMA2) — до входа в кодек. Существующий guard
+    // «> int.MaxValue» сохранён: он отвечает за представимость значения, а не за политику.
+    if (dictionarySize > SevenZipMemoryPolicy.MaxCodecBufferBytes)
+      return SevenZipFolderDecodeResult.NotSupported;
+
     Lzma2DecodeResult lzma2Result = Lzma2Decoder.DecodeToArray(
       input: input,
       dictionaryProp: lzma2PropertiesByte,
@@ -1653,6 +1672,11 @@ public static class SevenZipFolderDecoder
           return SevenZipFolderDecodeResult.InvalidData;
 
         if (dictionarySize > int.MaxValue)
+          return SevenZipFolderDecodeResult.NotSupported;
+
+        // RES-003: предел буфера кодека (словарь LZMA2) — до входа в кодек. Существующий guard
+        // «> int.MaxValue» сохранён: он отвечает за представимость значения, а не за политику.
+        if (dictionarySize > SevenZipMemoryPolicy.MaxCodecBufferBytes)
           return SevenZipFolderDecodeResult.NotSupported;
 
         Lzma2DecodeResult lzma2Result = Lzma2Decoder.DecodeToArray(

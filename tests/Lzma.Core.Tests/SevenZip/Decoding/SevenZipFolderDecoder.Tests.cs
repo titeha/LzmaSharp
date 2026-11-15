@@ -1966,4 +1966,162 @@ public class SevenZipFolderDecoderTests
         folderUnpackSizes: [[1UL, 123UL, 4UL, 3UL]]);
     return new SevenZipStreamsInfo(packInfo: packInfo, unpackInfo: unpackInfo, subStreamsInfo: null);
   }
+
+  // ----- RES-003: предел словаря LZMA2 (C5b) -----
+
+  // Покрывает таблицу TryDecodeDictionarySize — на ней держится весь шаг: p=36 даёт ровно 1 ГиБ
+  // (наибольшее допустимое), p=37 — 1,5 ГиБ (первое значение выше предела политики, но ниже
+  // int.MaxValue, поэтому оно именно политически отклоняется, а не по представимости).
+  [Fact]
+  public void C5B_Unit_TryDecodeDictionarySize_Table()
+  {
+    // p = 36 → (2 | 0) << (18 + 11) = 2^29... проверка ниже фактическими числами.
+    Assert.True(SevenZipLzma2Coder.TryDecodeDictionarySize(36, out uint d36));
+    Assert.Equal(1073741824u, d36); // ровно 1 ГиБ
+
+    Assert.True(SevenZipLzma2Coder.TryDecodeDictionarySize(37, out uint d37));
+    Assert.Equal(1610612736u, d37); // 1,5 ГиБ — первое отклоняемое политикой
+
+    Assert.True(SevenZipLzma2Coder.TryDecodeDictionarySize(40, out uint d40));
+    Assert.Equal(0xFFFFFFFFu, d40);
+
+    Assert.False(SevenZipLzma2Coder.TryDecodeDictionarySize(41, out _));
+  }
+
+  // Мусор, отваливающийся на парсинге заголовка LZMA2 (первый байт 0x03..0x7F — неиспользуемый
+  // диапазон), без выделения словаря. Нужен, чтобы RED доказывался сменой кода отказа, а не
+  // наблюдением аллокации (аллокация LZMA2 ленива — при первом чанке данных).
+  private static byte[] Lzma2InvalidHeaderGarbage(int length)
+  {
+    byte[] garbage = new byte[length];
+    if (garbage.Length > 0)
+      garbage[0] = 0x03;
+    return garbage;
+  }
+
+  // Свойства LZMA2 — ОДИН байт (в отличие от пяти байт LZMA1). propertiesByte = 37 => 1,5 ГиБ.
+  private static SevenZipCoderInfo CreateLzma2CoderForRed(byte propertiesByte)
+  {
+    return new SevenZipCoderInfo(
+      methodId: [0x21], // LZMA2
+      properties: [propertiesByte],
+      numInStreams: 1,
+      numOutStreams: 1);
+  }
+
+  // RED №1 (§4.3, in-memory конвейер DecodeFolderToArray). До правки — InvalidData (мусор на
+  // заголовке), после правки — NotSupported (словарь 1,5 ГиБ > предела политики до входа в кодекс).
+  [Fact]
+  public void C5B_RED_InMemory_Lzma2Dictionary1_5GiB_ReturnsNotSupported()
+  {
+    SevenZipCoderInfo coder = CreateLzma2CoderForRed(propertiesByte: 37);
+    byte[] packedStreams = Lzma2InvalidHeaderGarbage(8);
+    SevenZipStreamsInfo streamsInfo = CreateSingleCoderStreamsInfo(
+        coder, packedStreams, declaredUnpackSize: 16UL);
+
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.DecodeFolderToArray(
+        streamsInfo, packedStreams, 0, SevenZipDecodeOptions.Default, out byte[] _);
+
+    Assert.Equal(SevenZipFolderDecodeResult.NotSupported, result);
+  }
+
+  // RED №2 (§4.1, быстрый потоковый путь DecodeFolderToStream для одиночного LZMA2-folder).
+  [Fact]
+  public void C5B_RED_FastStream_Lzma2Dictionary1_5GiB_ReturnsNotSupported()
+  {
+    SevenZipCoderInfo coder = CreateLzma2CoderForRed(propertiesByte: 37);
+    byte[] packedStreams = Lzma2InvalidHeaderGarbage(8);
+    SevenZipStreamsInfo streamsInfo = CreateSingleCoderStreamsInfo(
+        coder, packedStreams, declaredUnpackSize: 16UL);
+
+    using var output = new MemoryStream();
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.DecodeFolderToStream(
+        streamsInfo, packedStreams, 0, SevenZipDecodeOptions.Default, output, out long _);
+
+    Assert.Equal(SevenZipFolderDecodeResult.NotSupported, result);
+  }
+
+  // RED №3 (§4.2, потоковый декод из архива-Stream). Архив-поток — тот же мусор, packStart/packSize
+  // указывают на него (образец — существующие тесты DecodeFolderStreamToStream).
+  [Fact]
+  public void C5B_RedStreamFromArchive_Lzma2Dictionary1_5GiB_ReturnsNotSupported()
+  {
+    SevenZipCoderInfo coder = CreateLzma2CoderForRed(propertiesByte: 37);
+    byte[] packed = Lzma2InvalidHeaderGarbage(8);
+    SevenZipStreamsInfo streamsInfo = CreateSingleCoderStreamsInfo(
+        coder, packed, declaredUnpackSize: 16UL);
+
+    using var archive = new MemoryStream(packed);
+    using var output = new MemoryStream();
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.DecodeFolderStreamToStream(
+        streamsInfo, archive, packedBaseOffset: 0, folderIndex: 0, SevenZipDecodeOptions.Default,
+        output, out long _);
+
+    Assert.Equal(SevenZipFolderDecodeResult.NotSupported, result);
+  }
+
+  // Продюсер LZMA2 внутри BCJ2 (пункт «продюсер BCJ2» в задании). Аналог CreateBcj2FolderWithLzmaProducer,
+  // но producer-кодер — LZMA2 с однобайтовым свойствами. producer (coder index 2) отдаётся на slot0 BCJ2.
+  private static SevenZipStreamsInfo CreateBcj2FolderWithLzma2Producer(byte propertiesByte)
+  {
+    var folder = new SevenZipFolder(
+      Coders:
+      [
+        new SevenZipCoderInfo([0x00], [], 1, 1), // CopyB
+        new SevenZipCoderInfo([0x1B], [], 4, 1), // BCJ2
+        new SevenZipCoderInfo([0x21], [propertiesByte], 1, 1), // producer slot0 (LZMA2)
+        new SevenZipCoderInfo([0x00], [], 1, 1), // CopyC
+      ],
+      BindPairs:
+      [
+        new SevenZipBindPair(InIndex: 1, OutIndex: 2), // BCJ2 slot0 <- producer.out2
+        new SevenZipBindPair(InIndex: 3, OutIndex: 3), // BCJ2 slot2 <- CopyC.out3
+        new SevenZipBindPair(InIndex: 4, OutIndex: 0), // BCJ2 slot3 <- CopyB.out0
+      ],
+      PackedStreamIndices: [6UL, 2UL, 0UL, 5UL],
+      NumInStreams: 7,
+      NumOutStreams: 4);
+
+    var packInfo = new SevenZipPackInfo(packPos: 0, packSizes: [3UL, 2UL, 1UL, 4UL]);
+    var unpackInfo = new SevenZipUnpackInfo(
+      folders: [folder],
+      folderUnpackSizes:
+      [
+        [1UL, 123UL, 4UL, 3UL]
+      ]);
+
+    return new SevenZipStreamsInfo(packInfo: packInfo, unpackInfo: unpackInfo, subStreamsInfo: null);
+  }
+
+  // RED №4 (продюсер LZMA2 внутри BCJ2). packed-регион 10 байт, producer-срез лежит по смещению 6,
+  // поэтому packed[6] = 0x03 (валидный заголовок ломается на парсинге, без аллокации словаря).
+  [Fact]
+  public void C5B_RED_Bcj2Lzma2Producer_Lzma2Dictionary1_5GiB_ReturnsNotSupported()
+  {
+    SevenZipStreamsInfo streamsInfo = CreateBcj2FolderWithLzma2Producer(propertiesByte: 37);
+
+    byte[] packedStreams = new byte[10];
+    packedStreams[6] = 0x03; // срез producer-кодера (slot0) начинается со смещения 6
+
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.TryDecodeBcj2InputStreamsToArrays(
+        streamsInfo, packedStreams, 0, out byte[][] _);
+
+    Assert.Equal(SevenZipFolderDecodeResult.NotSupported, result);
+  }
+
+  // Граничный тест (§5.3): propertiesByte = 36 => ровно 1 ГиБ. Предел строгий «>», поэтому на
+  // границе отклонения не происходит — фактический код не NotSupported (на мусоре — InvalidData).
+  [Fact]
+  public void C5B_Boundary_Lzma2DictionaryExactly1GiB_IsNotRejectedByLimit()
+  {
+    SevenZipCoderInfo coder = CreateLzma2CoderForRed(propertiesByte: 36);
+    byte[] packedStreams = Lzma2InvalidHeaderGarbage(8);
+    SevenZipStreamsInfo streamsInfo = CreateSingleCoderStreamsInfo(
+        coder, packedStreams, declaredUnpackSize: 16UL);
+
+    SevenZipFolderDecodeResult result = SevenZipFolderDecoder.DecodeFolderToArray(
+        streamsInfo, packedStreams, 0, SevenZipDecodeOptions.Default, out byte[] _);
+
+    Assert.NotEqual(SevenZipFolderDecodeResult.NotSupported, result);
+  }
 }
