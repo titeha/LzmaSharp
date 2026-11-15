@@ -2,12 +2,12 @@
 doc_kind: current-work-plan
 status: active
 project: LzmaSharp
-last_verified_date: 2026-11-12
+last_verified_date: 2026-11-13
 main_branch: main
-main_commit: 5d1aa999876e199c8a19b6d6c3a714bc7512c126
+main_commit: f342fde11295941dff725b48b0468b2819de03fb
 active_work_branch: fix/sec004-codec-limits
-active_work_commit: 5d1aa99
-next_task: "C5a (RES-003 — предел memSize PPMd и словаря LZMA1, 1 ГиБ на аллокацию кодека) исполнителем ornith-1.5-35b-a3b по tasks/C5A_SPEC_PACK.md на ветке fix/sec004-codec-limits; затем C5b (словарь LZMA2 в четырёх маршрутах), C6 (модель бюджета), C7/C8 (фактический останов вывода — обязательно кросс-семейное ревью), C9, C10; M9 закрыт в 276c2ce, карточка M8 (UI-сообщение NotSupported) остаётся открытой; merge фазы C в main и релиз 1.3.0 выполнены"
+active_work_commit: a5b215d
+next_task: "C6 (модель бюджета операции: internal pure-тип + тесты-инварианты, к production не подключается) — контракт готовит тимлид, исполнитель ornith-1.5-35b-a3b; затем C7 (фактический останов вывода в ZIP) и C8 (бюджет вывода в 7z) — обязательно кросс-семейное ревью; далее C9 (design STRONG_ONLY, нужен свежий аудит call graph), C2 (косметика ZIP), C10 (публичные опции — отдельное подтверждение владельца), C11 (gate фазы). RES-001/RES-002/M9 закрыты и опубликованы в 1.3.0; RES-003 закрыт в ветке и ждёт merge. Карточка M8 (UI-сообщение NotSupported) открыта. Ручные работы владельца — в .agent/MANUAL_TASKS.md"
 ---
 
 # LzmaSharp: текущее состояние работ и ближайший план
@@ -95,23 +95,48 @@ reparse-компонентах в цепочке пути назначения, 
 ### Рабочая ветка
 
 ```text
-branch: fix/sec004-codec-limits (от main = 5d1aa99)
-commit: 5d1aa99 (своих коммитов пока нет)
-date:   2026-11-12
+branch: fix/sec004-codec-limits (от main = f342fde)
+commit: a5b215d (da4c002 — C5a: PPMd memSize и словарь LZMA1; a5b215d — C5b: словарь LZMA2)
+date:   2026-11-13
 ```
 
-Ветка создана для продолжения фазы C — шаг C5 (RES-003): пределы размера словаря кодека и `memSize`
-PPMd. Предыдущая ветка `fix/sec004-resource-budgets` влита в `main` (`cbdd4f3`) и опубликована
-в 1.3.0; её состав: C3a–C3d (RES-001, `ac08c03`, `91eb420`, `9fb4473`, `c872152`), README
-(`123ec87`), C4 (RES-002, `4e4cf4d`), C4-аддендум (`70ecdb6`), C4b (M9, `276c2ce`) и закрытие
-находок ревью C4b (`adc2204`). Ветки `ci/g8-blocking-sbom-pinning`, `fix/sec003-path-trust` и
-`fix/sec002-multivolume-transaction` влиты и не удалены.
+Ветка закрывает **RES-003** (аллокации буферов кодеков по недоверенным свойствам). Добавлена
+internal-константа `SevenZipMemoryPolicy.MaxCodecBufferBytes = 1 ГиБ` (значение утверждено
+владельцем 2026-10-27) и семь проверок `NotSupported` до входа в кодек: PPMd `memSize`, словарь
+LZMA1 в линейном конвейере и у продюсера BCJ2, словарь LZMA2 в быстром потоковом маршруте,
+в потоковом маршруте из архива-`Stream`, в in-memory конвейере и у продюсера BCJ2. Кодеки
+(`Ppmd7Model`, `Ppmd7Decoder`, `LzmaDictionary`, `LzmaDecoder`, `Lzma2Decoder`,
+`Lzma2IncrementalDecoder`) и их тесты не менялись; wire-валидация PPMd
+`[1<<11 .. 0xFFFFFFFF−36]` и guard'ы «> `int.MaxValue`» сохранены.
 
-Локальные факты на `5d1aa99` (Windows 11 Pro, SDK 10.0.112 при `global.json` 10.0.101) — те же,
-что на `adc2204`, поскольку `5d1aa99` и `b3b9137` меняли только workflow и README:
-`Lzma.Core.Tests` 1825 passed / 5 skipped / 1830; `Lzma.Ui.Tests` 239 / 0 / 0;
-`dotnet build -c Release -t:Rebuild` 0 ошибок / 67 предупреждений (= baseline); регрессия
-FolderDecoder + ArchiveDecoder + Real7z + Interop 569 / 0 / 0.
+До правки два потоковых маршрута LZMA2 не имели проверки вовсе: байт свойств уходил прямо в кодек,
+а `Lzma2Properties.TryGetDictionarySizeInt32` отклоняет только `0xFFFFFFFF` и значения больше
+`int.MaxValue`, поэтому `p = 37/38/39` (1,5 / 2 / 3 ГиБ) проходили.
+
+Локальные факты на `a5b215d` (Windows 11 Pro, SDK 10.0.112 при `global.json` 10.0.101):
+`Lzma.Core.Tests` 1837 passed / 5 skipped / 1842; `Lzma.Ui.Tests` 239 / 0 / 0;
+`dotnet build -c Release -t:Rebuild` 0 ошибок / 67 предупреждений (= baseline); интероп и fixture
+`Real7z|Interop` 153 / 0 / 0 — наибольший словарь в fixture `TestData/Real` равен 2^26 = 64 МиБ,
+запас до предела 16×, поэтому ложных отказов нет.
+
+Независимая проверка тимлида (не по отчётам исполнителя): для C5a временно удалена проверка PPMd —
+тест упал с дельтой `GC.GetAllocatedBytesForCurrentThread` 1 073 774 336 байт; для C5b временно
+удалена проверка in-memory конвейера LZMA2 — упал ровно её тест
+(`Expected: NotSupported / Actual: InvalidData`), а остальные пять тестов C5b остались зелёными,
+то есть каждая из четырёх проверок LZMA2 покрыта собственным тестом. Оба раза файлы восстановлены
+байт-в-байт (sha256 сверен). CI ветки: run `43282924276` (`da4c002`) — success на трёх ОС.
+
+Особенность RED для LZMA2: словарь выделяется внутри кодека лениво (при первом чанке данных),
+поэтому на мусорных packed-данных большой аллокации до правки не происходит — RED доказывается
+сменой кода отказа (`InvalidData` → `NotSupported`), а не дельтой аллокаций.
+
+Изменение поведения, которое нужно учитывать потребителям: легитимный архив со словарём больше
+1 ГиБ (байт свойств LZMA2 37–39) теперь отклоняется `NotSupported`; подъём предела станет возможен
+публичными опциями (шаг C10).
+
+Doc-tail: SDL и `<Description>` пакета обновлены этим коммитом; остаток — уточнение артефакта плана
+`ACCEPTANCE_C.md` §C4/§C5 в части действия пределов на потоковые маршруты (вне git).
+
 
 ## 4. Что уже завершено
 
@@ -1533,10 +1558,11 @@ F4 disposition (принято владельцем, без преувеличе
 Текущий пакет (фаза C) ограничен только:
 
 ```text
-фаза C / бюджеты: RES-001 (C3a–C3d), RES-002 (C4 + аддендум) и M9 (C4b + закрытие находок ревью)
-                  ЗАКРЫТЫ, влиты в main и опубликованы в 1.3.0;
-                  далее C5a (RES-003: memSize PPMd и словарь LZMA1), C5b (словарь LZMA2 в четырёх
-                  маршрутах), C6 (модель бюджета), C7/C8 (фактический останов вывода), C9, C10
+фаза C / бюджеты: RES-001 (C3a–C3d), RES-002 (C4 + аддендум) и M9 (C4b) ЗАКРЫТЫ, влиты в main
+                  и опубликованы в 1.3.0; RES-003 ЗАКРЫТ в ветке fix/sec004-codec-limits
+                  (C5a da4c002 + C5b a5b215d) и ждёт merge в main;
+                  далее C6 (модель бюджета операции), C7/C8 (фактический останов вывода),
+                  C9 (bounded open files), C2 (косметика ZIP), C10 (публичные опции), C11 (gate)
 ```
 
 Политика пределов C4/C5 утверждена владельцем 2026-10-27 (вариант C: нижняя планка 256 МиБ,
