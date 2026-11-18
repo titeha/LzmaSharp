@@ -44,10 +44,23 @@ public static class ZipStreamExtractor
       return ZipExtractResult.InvalidData;
 
     // Итог для процентов — суммарный распакованный размер (папки нулевые).
+    // SEC-010: записи могут прийти вручную собранными через публичный API, поэтому накопление
+    // контролируется: отрицательный размер и переполнение long дают InvalidData до начала
+    // извлечения. Без этой проверки сумма из двух long.MaxValue даёт -2 и уходит знаменателем
+    // в SevenZipProgress, а корректный отказ получается лишь случайно — за счёт best-effort
+    // проверки свободного места, которая пропускается на UNC и неготовых томах.
     long total = 0;
     for (int i = 0; i < entries.Count; i++)
-      if (!entries[i].IsDirectory)
-        total += entries[i].UncompressedSize;
+    {
+      if (entries[i].IsDirectory)
+        continue;
+
+      long size = entries[i].UncompressedSize;
+      if (size < 0 || total > long.MaxValue - size)
+        return ZipExtractResult.InvalidData;
+
+      total += size;
+    }
 
     // Накопленный распакованный объём (в «коробке», чтобы делегат мог его наращивать).
     long[] processed = [0];

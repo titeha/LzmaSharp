@@ -178,6 +178,109 @@ public sealed class ZipStreamExtractorTests
     }
   }
 
+  // SEC-010 (остаток): заявленная сумма распакованных размеров переполняет Int64. До правки
+  // перехватывается best-effort pre-flight места (InsufficientSpace, насыщение `required`);
+  // после правки — контрольным накоплением суммы (InvalidData) ещё до вызова ExtractCore.
+  [Fact]
+  public void Извлечение_ПереполнениеСуммыUncompressedSize_ПослеПравки_InvalidData()
+  {
+    // Оба члена — Deflate (сжимаемые данные), чтобы метод был Deflate, а не Store.
+    byte[] a = Encoding.UTF8.GetBytes(string.Concat(Enumerable.Repeat("compressible payload line\n", 2000)));
+    byte[] b = Encoding.UTF8.GetBytes(string.Concat(Enumerable.Repeat("compressible payload line\n", 2000)));
+
+    ZipWriter.Build(
+    [
+        new ZipWriterEntry("a.txt", a),
+        new ZipWriterEntry("b.txt", b),
+    ], out byte[] archive);
+
+    var reports = new List<SevenZipProgress>();
+    var progress = new SyncProgress(reports.Add);
+
+    string dest = NewTempDir();
+    try
+    {
+      using var ms = new MemoryStream(archive, writable: false);
+      Assert.Equal(ZipReadResult.Ok, ZipStreamReader.ReadCentralDirectory(ms, out ZipStreamEntry[] entries));
+
+      // Обе записи: заяшенный размер = long.MaxValue → сумма переполняет Int64.
+      entries = [entries[0] with { UncompressedSize = long.MaxValue }, entries[1] with { UncompressedSize = long.MaxValue }];
+
+      ZipExtractResult result = ZipStreamExtractor.ExtractToDirectory(ms, entries, dest, progress: progress);
+
+      // Контракт после правки (§0): переполнение суммы → InvalidData, отказ до ExtractCore.
+      Assert.Equal(ZipExtractResult.InvalidData, result);
+      Assert.False(Directory.Exists(dest));                 // отказ до создания staged-файлов
+      Assert.DoesNotContain(reports, r => r.TotalBytes < 0); // репортов с отрицательным итогом нет
+    }
+    finally
+    {
+      if (Directory.Exists(dest)) Directory.Delete(dest, recursive: true);
+    }
+  }
+
+  // SEC-010 (остаток): отрицательный размер одной записи — ранняя проверка (WriteEntry до правки,
+  // контрольное накопление после) классифицирует как InvalidData. Зелёный до и после правки.
+  [Fact]
+  public void Извлечение_ОтрицательныйРазмерЭлемента_InvalidData()
+  {
+    byte[] a = Encoding.UTF8.GetBytes(string.Concat(Enumerable.Repeat("compressible payload line\n", 2000)));
+
+    ZipWriter.Build([new ZipWriterEntry("a.txt", a)], out byte[] archive);
+
+    string dest = NewTempDir();
+    try
+    {
+      using var ms = new MemoryStream(archive, writable: false);
+      Assert.Equal(ZipReadResult.Ok, ZipStreamReader.ReadCentralDirectory(ms, out ZipStreamEntry[] entries));
+
+      entries = [entries[0] with { UncompressedSize = -1 }];
+
+      Assert.Equal(ZipExtractResult.InvalidData,
+          ZipStreamExtractor.ExtractToDirectory(ms, entries, dest));
+      Assert.False(Directory.Exists(dest));
+    }
+    finally
+    {
+      if (Directory.Exists(dest)) Directory.Delete(dest, recursive: true);
+    }
+  }
+
+  // SEC-010 (остаток): сумма ровно long.MaxValue не перехватывается guard'ом — отказ остаётся
+  // InsufficientSpace от pre-flight места (required насыщается до long.MaxValue). Граница не
+  // подгоняется: guard проверяет строгое `>`, поэтому сумма == MaxValue проходит.
+  [Fact]
+  public void Извлечение_СуммаРовноLongMaxValue_GuardПропускает_InsufficientSpace()
+  {
+    byte[] a = Encoding.UTF8.GetBytes(string.Concat(Enumerable.Repeat("compressible payload line\n", 2000)));
+    byte[] b = Encoding.UTF8.GetBytes(string.Concat(Enumerable.Repeat("compressible payload line\n", 2000)));
+
+    ZipWriter.Build(
+    [
+        new ZipWriterEntry("a.txt", a),
+        new ZipWriterEntry("b.txt", b),
+    ], out byte[] archive);
+
+    string dest = NewTempDir();
+    try
+    {
+      using var ms = new MemoryStream(archive, writable: false);
+      Assert.Equal(ZipReadResult.Ok, ZipStreamReader.ReadCentralDirectory(ms, out ZipStreamEntry[] entries));
+
+      entries = [
+        entries[0] with { UncompressedSize = long.MaxValue - 5 },
+        entries[1] with { UncompressedSize = 5 }
+      ];
+
+      Assert.Equal(ZipExtractResult.InsufficientSpace,
+          ZipStreamExtractor.ExtractToDirectory(ms, entries, dest));
+    }
+    finally
+    {
+      if (Directory.Exists(dest)) Directory.Delete(dest, recursive: true);
+    }
+  }
+
   // Синхронный IProgress (не System.Progress) — чтобы отчёты пришли до проверок в тесте.
   private sealed class SyncProgress(Action<SevenZipProgress> onReport) : IProgress<SevenZipProgress>
   {
