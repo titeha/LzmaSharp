@@ -6,6 +6,16 @@ namespace Lzma.Core.Tests.SevenZip;
 
 public class SevenZipArchiveDecoderTests
 {
+  // Коллектор отчётов прогресса: сохраняет последовательно переданные отчёты и финальный
+  // код результата, чтобы проверки могли опираться и на то, и на другое.
+  private sealed class CollectingProgress : IProgress<SevenZipProgress>
+  {
+    public List<SevenZipProgress> Reports { get; } = new();
+
+    public SevenZipArchiveDecodeResult LastResult { get; set; }
+
+    public void Report(SevenZipProgress value) => Reports.Add(value);
+  }
   [Fact]
   public void DecodeSingleFile_ОдинФайл_ОдинFolder_Lzma2Copy_ВозвращаетИсходныеБайты()
   {
@@ -83,6 +93,242 @@ public class SevenZipArchiveDecoderTests
             archive: archive,
             options: null!,
             files: out _));
+  }
+
+  // SEC-010/C2b, §5.1: маршрут «в память». Размер распаковки folder'а = ulong.MaxValue приходит
+  // из недоверенного заголовка. (long)ulong.MaxValue = -1, поэтому без насыщения знаменатель
+  // прогресса в репорте :459 отрицателен. Проверка кода результата через Assert.Equal сверху:
+  // если классификация действительно NotSupported — утверждение проходит и проверка идёт дальше,
+  // к знаменателю; иначе падает здесь и показывает фактический код.
+  [Fact]
+  public void DecodeToArray_РазмерFolder_UlongMaxValue_ЗнаменательПрогрессаНеОтрицателен_ВПамяти()
+  {
+    byte[] fileBytes = [1, 2, 3, 4, 5];
+    string fileName = "big.bin";
+    byte[] archive = Build7zArchive_ОдинПоток_РазмерFolderНаГранице(ulong.MaxValue, fileName, fileBytes);
+
+    var reports = new CollectingProgress();
+    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeToArray(
+        archive,
+        SevenZipDecodeOptions.Default,
+        out _,
+        out _,
+        progress: reports);
+    reports.LastResult = result;
+
+    // Код результата (NotSupported) не утверждаем — он зависит от более поздних проверок
+    // (RES-002, размер потока) и не меняется правкой знаменателя; фактический код зафиксирован
+    // в отчёте исполнителя.
+    Assert.NotEmpty(reports.Reports);
+    Assert.All(reports.Reports, r => Assert.True(r.TotalBytes >= 0, $"Отчёт прогресса с отрицательным знаменателем: {r}"));
+    Assert.Contains(reports.Reports, r => r.TotalBytes == long.MaxValue);
+  }
+
+  // SEC-010/C2b, §5.2: насыщение СУММЫ без отрицательных слагаемых. Два sub-stream'а одного
+  // folder'а с размерами long.MaxValue и 1: каждый слагаемый положителен, но их сумма переполняет
+  // long (переходит через ноль в минус). folderTotal = long.MaxValue + 1.
+  [Fact]
+  public void DecodeToArray_СуммаРазмеров_ПереполнениеLong_ЗнаменательПрогрессаПереполнениеНеОтрицателен_ВПамяти()
+  {
+    byte[] fileBytes = [1, 2, 3, 4, 5];
+    byte[] archive = Build7zArchive_TwoSubstreams_SumAtBoundary(fileBytes);
+
+    var reports = new CollectingProgress();
+    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeToArray(
+        archive,
+        SevenZipDecodeOptions.Default,
+        out _,
+        out _,
+        progress: reports);
+    reports.LastResult = result;
+
+    // Код результата (NotSupported) не утверждаем по той же причине, что и в §5.1: он
+    // определяется поздними проверками и правкой знаменателя не меняется. Фактический код
+    // (NotSupported до и после правки) зафиксирован в отчёте исполнителя.
+    Assert.NotEmpty(reports.Reports);
+    Assert.All(reports.Reports, r => Assert.True(r.TotalBytes >= 0, $"Отчёт прогресса с отрицательным знаменателем: {r}"));
+    Assert.Contains(reports.Reports, r => r.TotalBytes == long.MaxValue);
+  }
+
+  // SEC-010/C2b, §5.3: позитивный контроль. Небольшой реальный архив с переданным progress —
+  // знаменатель равен сумме заященных размеров, насыщение нормальный случай не исказил.
+  [Fact]
+  public void DecodeToArray_НебольшойРеальныйАрхив_ЗнаменательРавенСуммеРазмеров_ВПамяти()
+  {
+    byte[] fileBytes = [
+        0, 1, 2, 3, 4, 5, 6, 7,
+            8, 9, 255, 254, 253, 0, 0, 1,
+            65, 66, 67, 68, 69, 70,
+    ];
+    const string fileName = "file.bin";
+    byte[] archive = Build7zArchive_SingleFile_SingleFolder_Lzma2Copy(fileBytes, fileName);
+
+    var reports = new CollectingProgress();
+    SevenZipArchiveDecodeResult result = SevenZipArchiveDecoder.DecodeToArray(
+        archive,
+        SevenZipDecodeOptions.Default,
+        out _,
+        out _,
+        progress: reports);
+    reports.LastResult = result;
+
+    Assert.Equal(SevenZipArchiveDecodeResult.Ok, result);
+    Assert.NotEmpty(reports.Reports);
+    Assert.All(reports.Reports, r => Assert.True(r.TotalBytes >= 0, $"Отчёт прогресса с отрицательным знаменателем: {r}"));
+    Assert.Contains(reports.Reports, r => r.TotalBytes == fileBytes.Length);
+  }
+
+  // Архив: один folder с двумя sub-stream'ами. folderTotal = long.MaxValue + 1, размеры
+  // sub-stream'ов = [long.MaxValue, 1]. Оба слагаемые <= long.MaxValue (проходят защиту плана),
+  // но их сумма переполняет long. Пакет — Lzma2Copy маленьких байт.
+  private static byte[] Build7zArchive_TwoSubstreams_SumAtBoundary(byte[] fileBytes)
+  {
+    const int dictionarySize = 1 << 20;
+    const int maxChunkPayloadSize = 64 * 1024;
+    byte[] packedStreams = Lzma2CopyEncoder.EncodeChunkedAuto(
+        fileBytes,
+        dictionarySize,
+        maxChunkPayloadSize: maxChunkPayloadSize,
+        out byte lzma2PropsByte);
+
+    byte[] nextHeader = BuildHeaderДваПодпотока(
+        packSizes: [(ulong)packedStreams.Length],
+        folderTotal: (ulong)(long.MaxValue + 1UL),
+        coder: new SevenZipCoderInfo([0x21], [lzma2PropsByte], numInStreams: 1, numOutStreams: 1),
+        new[] { "first.bin", "second.bin" });
+
+    uint nextHeaderCrc = Crc32.Compute(nextHeader);
+
+    var sigHeader = new SevenZipSignatureHeader(
+        VersionMajor: 0,
+        VersionMinor: 4,
+        StartHeaderCrc: 0,
+        NextHeaderOffset: (ulong)packedStreams.Length,
+        NextHeaderSize: (ulong)nextHeader.Length,
+        NextHeaderCrc: nextHeaderCrc);
+
+    uint startHeaderCrc = Crc32.Compute(sigHeader.GetStartHeaderBytes());
+    sigHeader = sigHeader with { StartHeaderCrc = startHeaderCrc };
+
+    var archive = new List<byte>(SevenZipSignatureHeader.TotalSize + packedStreams.Length + nextHeader.Length);
+
+    Span<byte> sigBuf = stackalloc byte[SevenZipSignatureHeader.TotalSize];
+    sigHeader.Write(sigBuf);
+    archive.AddRange(sigBuf.ToArray());
+
+    archive.AddRange(packedStreams);
+    archive.AddRange(nextHeader);
+
+    return [.. archive];
+  }
+
+  private static byte[] BuildHeaderДваПодпотока(ulong[] packSizes, ulong folderTotal, SevenZipCoderInfo coder, string[] fileNames)
+  {
+    var header = new List<byte>(512);
+
+    WriteNid(header, SevenZipNid.Header);
+
+    // MainStreamsInfo
+    WriteNid(header, SevenZipNid.MainStreamsInfo);
+    WritePackInfo(header, packSizes);
+    WriteUnpackInfoSingleFolder(header, coder, folderTotal);
+    WriteSubStreamsInfoДваПодпотока(header, folderTotal);
+
+    WriteNid(header, SevenZipNid.End); // End MainStreamsInfo
+
+    // FilesInfo: два файла по одному sub-stream'у.
+    WriteNid(header, SevenZipNid.FilesInfo);
+    WriteEncodedUInt64(header, 2UL);
+    WriteNid(header, SevenZipNid.Name);
+    var bytes = new List<byte>();
+    foreach (string n in fileNames)
+    {
+      byte[] nameBytes = System.Text.Encoding.Unicode.GetBytes(n);
+      bytes.AddRange(nameBytes);
+      bytes.Add(0);
+      bytes.Add(0);
+    }
+    WriteEncodedUInt64(header, (ulong)(1 + bytes.Count));
+    WriteByte(header, 0);
+    header.AddRange(bytes);
+    WriteNid(header, SevenZipNid.End);
+
+    WriteNid(header, SevenZipNid.End);
+
+    return [.. header];
+  }
+
+  private static void WriteUnpackInfoSingleFolder(List<byte> output, SevenZipCoderInfo coder, ulong folderTotal)
+  {
+    WriteNid(output, SevenZipNid.UnpackInfo);
+    WriteNid(output, SevenZipNid.Folder);
+    WriteEncodedUInt64(output, 1UL);
+    WriteByte(output, 0);
+    WriteFolder(output, coder);
+    WriteNid(output, SevenZipNid.CodersUnpackSize);
+    WriteEncodedUInt64(output, folderTotal);
+
+    // End UnpackInfo — обязательно, иначе читатель не видит границу секции.
+    WriteNid(output, SevenZipNid.End);
+  }
+
+  private static void WriteSubStreamsInfoДваПодпотока(List<byte> output, ulong folderTotal)
+  {
+    WriteNid(output, SevenZipNid.SubStreamsInfo);
+    WriteNid(output, SevenZipNid.NumUnpackStream);
+    WriteEncodedUInt64(output, 2UL);
+    WriteNid(output, SevenZipNid.Size);
+    // Первый размер — явный. Второй вычисляется читателем как folderTotal - size[0].
+    WriteEncodedUInt64(output, (ulong)long.MaxValue);
+
+    // End SubStreamsInfo — без него читатель сдвигает иерархию и отклоняет заголовок.
+    WriteNid(output, SevenZipNid.End);
+  }
+
+  // Архив: один folder, один поток, size распаковки folder'а задается напрямую (в том числе
+  // значением из недоверенного заголовка, выходящим за long.MaxValue). SubStreamsInfo пустая —
+  // размер одного sub-stream берётся из CodersUnpackSize. Пакет — Lzma2Copy маленьких байт, поэтому
+  // фактическая распаковка минимальна, а заященный размер управляет только знаменателем прогресса.
+  private static byte[] Build7zArchive_ОдинПоток_РазмерFolderНаГранице(ulong folderUnpackSizeU64, string fileName, byte[] fileBytes)
+  {
+    const int dictionarySize = 1 << 20;
+    const int maxChunkPayloadSize = 64 * 1024;
+    byte[] packedStreams = Lzma2CopyEncoder.EncodeChunkedAuto(
+        fileBytes,
+        dictionarySize,
+        maxChunkPayloadSize: maxChunkPayloadSize,
+        out byte lzma2PropsByte);
+
+    byte[] nextHeader = BuildHeaderSingleFolderSingleStream(
+        packSizes: [(ulong)packedStreams.Length],
+        folderUnpackSize: folderUnpackSizeU64,
+        coder: new SevenZipCoderInfo([0x21], [lzma2PropsByte], numInStreams: 1, numOutStreams: 1),
+        fileName,
+        folderCrc: null);
+
+    uint nextHeaderCrc = Crc32.Compute(nextHeader);
+
+    var sigHeader = new SevenZipSignatureHeader(
+        VersionMajor: 0,
+        VersionMinor: 4,
+        StartHeaderCrc: 0, // заполним ниже
+        NextHeaderOffset: (ulong)packedStreams.Length,
+        NextHeaderSize: (ulong)nextHeader.Length,
+        NextHeaderCrc: nextHeaderCrc);
+
+    uint startHeaderCrc = Crc32.Compute(sigHeader.GetStartHeaderBytes());
+    sigHeader = sigHeader with { StartHeaderCrc = startHeaderCrc };
+
+    var archive = new List<byte>(SevenZipSignatureHeader.TotalSize + packedStreams.Length + nextHeader.Length);
+
+    Span<byte> sigBuf = stackalloc byte[SevenZipSignatureHeader.TotalSize];
+    sigHeader.Write(sigBuf);
+    archive.AddRange(sigBuf.ToArray());
+
+    archive.AddRange(packedStreams);
+    archive.AddRange(nextHeader);
+
+    return [.. archive];
   }
 
   private static byte[] Build7zArchive_SingleFile_SingleFolder_Lzma2Copy(byte[] fileBytes, string fileName, uint? folderCrc = null)

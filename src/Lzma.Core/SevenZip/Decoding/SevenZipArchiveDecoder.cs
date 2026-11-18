@@ -453,7 +453,18 @@ public static partial class SevenZipArchiveDecoder
         ulong[]? folderSizes = unpackSizesPerFolder[f];
         if (folderSizes is not null)
           for (int s = 0; s < folderSizes.Length; s++)
-            totalUnpackedBytes += (long)folderSizes[s];
+          {
+            // SEC-010/C2b: размеры приходят из недоверенного заголовка как ulong. Приведение к long
+            // значения больше long.MaxValue дало бы отрицательное слагаемое, а сумма нескольких
+            // больших размеров переполнила бы long — знаменатель прогресса стал бы отрицательным.
+            // Насыщение вместо переполнения (тот же приём, что в ComputeRequiredSpace и в RES-002);
+            // код результата не меняется: прогресс — справочная величина.
+            ulong sizeU64 = folderSizes[s];
+            long size = sizeU64 > long.MaxValue ? long.MaxValue : (long)sizeU64;
+            totalUnpackedBytes = size > long.MaxValue - totalUnpackedBytes
+              ? long.MaxValue
+              : totalUnpackedBytes + size;
+          }
       }
 
       progress.Report(new SevenZipProgress(0, totalUnpackedBytes));
@@ -1165,7 +1176,14 @@ public static partial class SevenZipArchiveDecoder
               && !folderHasSelected[plan[i].FolderIndex])
             continue;
 
-          totalUnpackedBytes += plan[i].Size;
+          // SEC-010/C2b: насыщение вместо переполнения — знаменатель прогресса не должен
+          // становиться отрицательным. Обычно сумму опережает pre-flight свободного места
+          // (ComputeRequiredSpace насыщается так же), но измерение места best-effort и на UNC
+          // или неготовом томе пропускается.
+          long planSize = plan[i].Size;
+          totalUnpackedBytes = planSize > long.MaxValue - totalUnpackedBytes
+            ? long.MaxValue
+            : totalUnpackedBytes + planSize;
         }
 
         progress?.Report(new SevenZipProgress(0, totalUnpackedBytes));
