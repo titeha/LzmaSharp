@@ -42,6 +42,8 @@ public enum SevenZipNextHeaderReadResult
 /// - объект хранит состояние между вызовами;
 /// - при <see cref="SevenZipNextHeaderReadResult.NeedMoreInput"/> декодер
 ///   съедает максимально возможный кусок входа.
+/// - буферы растут по фактически поступившим данным, а не выделяются целиком по заявленным
+///   размерам из заголовка (SEC-013): физический буфер никогда не превышает заявленный размер.
 /// </para>
 /// </summary>
 public sealed class SevenZipNextHeaderReader
@@ -61,6 +63,14 @@ public sealed class SevenZipNextHeaderReader
   // ограничен 2 ГиБ). Раньше здесь стояло 64 МБ — из-за чего любой 7z с данными > 64 МБ не открывался
   // in-memory (NotSupported), хотя формат валиден; для архивов больше 2 ГиБ есть потоковый путь.
   private const int _maxPackedStreamsBytes = int.MaxValue;
+
+  // SEC-013: заявные размеры держим отдельно от физического буфера — буфер растёт по мере
+  // поступления данных, а не выделяется целиком по недоверенному значению заголовка.
+  private int _packedStreamsTarget;
+  private int _nextHeaderTarget;
+
+  // Начальный запас роста: достаточно для типичного заголовка и ограничивает число переразбиений.
+  private const int _growFloor = 64 * 1024;
 
   // SignatureHeader всегда 32 байта.
   private readonly byte[] _signatureHeaderBuffer = new byte[SevenZipSignatureHeader.Size];
@@ -109,7 +119,7 @@ public sealed class SevenZipNextHeaderReader
   /// <summary>
   /// Считанные байты NextHeader. Допустимо читать только после результата <see cref="SevenZipNextHeaderReadResult.Ok"/>.
   /// </summary>
-  public ReadOnlyMemory<byte> NextHeader => _nextHeader;
+  public ReadOnlyMemory<byte> NextHeader => _nextHeader.AsMemory(0, _nextHeaderTarget);
 
   /// <summary>
   /// Байты между сигнатурным заголовком и NextHeader (упакованные данные архива).
@@ -127,9 +137,11 @@ public sealed class SevenZipNextHeaderReader
 
     _skipRemaining = 0;
 
+    _packedStreamsTarget = 0;
     _packedStreams = [];
     _packedStreamsFilled = 0;
 
+    _nextHeaderTarget = 0;
     _nextHeader = [];
     _nextHeaderFilled = 0;
 
@@ -194,16 +206,20 @@ public sealed class SevenZipNextHeaderReader
         if (_skipRemaining > _maxPackedStreamsBytes)
           return SetTerminal(SevenZipNextHeaderReadResult.NotSupported);
 
-        _packedStreams = _skipRemaining == 0
-          ? []
-          : new byte[checked((int)_skipRemaining)];
+        // SEC-013: буфер не выделяется по смещению NextHeaderOffset. Размер из заголовка
+        // запоминается как цель, физический массив растёт в EnsureCapacity по фактически
+        // поступившим данным. Для файла-«бомбы» в 96 байт это килобайты вместо гигабайтов,
+        // а для корректного архива, поданного целиком, — ровно одно выделение нужного размера.
+        _packedStreams = [];
+        _packedStreamsTarget = (int)_skipRemaining;
         _packedStreamsFilled = 0;
 
         // Если NextHeaderSize не помещается в int — пока не поддерживаем.
         if (_signatureHeader.NextHeaderSize > int.MaxValue)
           return SetTerminal(SevenZipNextHeaderReadResult.NotSupported);
 
-        _nextHeader = new byte[(int)_signatureHeader.NextHeaderSize];
+        _nextHeader = [];
+        _nextHeaderTarget = (int)_signatureHeader.NextHeaderSize;
         _nextHeaderFilled = 0;
 
         _step = Step.SkipToNextHeader;
@@ -230,6 +246,7 @@ public sealed class SevenZipNextHeaderReader
 
         if (take > 0)
         {
+          EnsureCapacity(ref _packedStreams, _packedStreamsFilled + take, _packedStreamsTarget);
           input.Slice(bytesConsumed, take)
             .CopyTo(_packedStreams.AsSpan(_packedStreamsFilled));
           _packedStreamsFilled += take;
@@ -247,11 +264,11 @@ public sealed class SevenZipNextHeaderReader
 
       if (_step == Step.NextHeader)
       {
-        int need = _nextHeader.Length - _nextHeaderFilled;
+        int need = _nextHeaderTarget - _nextHeaderFilled;
         if (need == 0)
         {
-          // Проверяем CRC NextHeader.
-          uint crc = Crc32.Compute(_nextHeader);
+          // Проверяем CRC NextHeader по заявленной длине, а не по физическому массиву.
+          uint crc = Crc32.Compute(_nextHeader.AsSpan(0, _nextHeaderTarget));
           if (crc != _signatureHeader.NextHeaderCrc)
             return SetTerminal(SevenZipNextHeaderReadResult.InvalidData);
 
@@ -263,14 +280,19 @@ public sealed class SevenZipNextHeaderReader
           return SevenZipNextHeaderReadResult.NeedMoreInput;
 
         int take = Math.Min(need, available);
-        input.Slice(bytesConsumed, take)
-          .CopyTo(_nextHeader.AsSpan(_nextHeaderFilled));
 
-        _nextHeaderFilled += take;
+        if (take > 0)
+        {
+          EnsureCapacity(ref _nextHeader, _nextHeaderFilled + take, _nextHeaderTarget);
+          input.Slice(bytesConsumed, take)
+            .CopyTo(_nextHeader.AsSpan(_nextHeaderFilled));
+          _nextHeaderFilled += take;
+        }
+
         bytesConsumed += take;
 
         // Если NextHeader ещё не полностью прочитан — ждём продолжения.
-        if (_nextHeaderFilled < _nextHeader.Length)
+        if (_nextHeaderFilled < _nextHeaderTarget)
           return SevenZipNextHeaderReadResult.NeedMoreInput;
 
         // Иначе — цикл продолжится и попадёт в ветку need==0.
@@ -280,6 +302,26 @@ public sealed class SevenZipNextHeaderReader
       // Неверное состояние.
       return SetTerminal(SevenZipNextHeaderReadResult.InvalidData);
     }
+  }
+
+  /// <summary>
+  /// SEC-013: наращивает физический буфер так, чтобы в него поместилось <paramref name="required"/>
+  /// байт, но не больше заявленного <paramref name="target"/>. Рост геометрический с полом
+  /// <c>_growFloor</c>, поэтому при подаче данных кусками число переразбиений логарифмическое,
+  /// а при подаче целиком выделяется ровно нужный размер.
+  /// </summary>
+  private static void EnsureCapacity(ref byte[] buffer, int required, int target)
+  {
+    if (buffer.Length >= required)
+      return;
+
+    int capped = Math.Min(required, target);
+    int doubled = buffer.Length == 0 ? 0 : buffer.Length * 2;
+    int newSize = Math.Min(target, Math.Max(Math.Max(capped, doubled), Math.Min(_growFloor, target)));
+    if (newSize < required)
+      newSize = Math.Min(target, required);
+
+    Array.Resize(ref buffer, newSize);
   }
 
   private SevenZipNextHeaderReadResult SetTerminal(SevenZipNextHeaderReadResult result)
