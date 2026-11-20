@@ -100,6 +100,18 @@ public static class ZipReader
       }
       else if (method == MethodDeflate)
       {
+        // SEC-014: uncompSize приходит из центрального каталога и никак не связан с длиной входа,
+        // поэтому new byte[uncompSize] выделял до 4 ГиБ на файле в сотню байт, а при значении
+        // больше int.MaxValue давал OverflowException наружу из публичного API. Отказываем до
+        // аллокации. Предел — та же утверждённая владельцем политика усиления, что и для in-memory
+        // распаковки folder'а 7z (256 МиБ / 1024× / 1 ГиБ): новых чисел не вводим. compSize уже
+        // ограничена длиной архива проверкой в TryReadLocalData.
+        if (uncompSize > int.MaxValue)
+          return ZipReadResult.NotSupported;
+
+        if (uncompSize > Lzma.Core.SevenZip.SevenZipMemoryPolicy.GetMaxUnpackBytes(compSize))
+          return ZipReadResult.NotSupported;
+
         content = new byte[uncompSize];
         DeflateDecodeResult dr = DeflateDecoder.Decode(compressed, content, out _, out int written);
         if (dr != DeflateDecodeResult.Ok || written != uncompSize)
