@@ -32,16 +32,28 @@ internal static class SevenZipMemoryPolicy
   /// <summary>Допустимое усиление относительно длины packed-данных.</summary>
   internal const long Amplification = 1024L;
 
-  /// <summary>Предел in-memory распаковки для packed-данных указанной длины (в байтах).</summary>
-  internal static long GetMaxUnpackBytes(long packedLength)
+  /// <summary>
+  /// Предел in-memory распаковки для packed-данных указанной длины (в байтах).
+  /// </summary>
+  /// <param name="packedLength">Длина packed-данных, от которой считается усиление.</param>
+  /// <param name="amplification">
+  /// Допустимое усиление. По умолчанию — <see cref="Amplification"/> (1024), то есть поведение
+  /// существующих вызовов не меняется. Вызывающий может передать границу, производную от формата:
+  /// например, для Deflate это 1032 (SEC-014b), потому что общее значение 1024 оказалось ниже
+  /// инварианта формата и отказывало легитимным архивам с максимально сжимаемым содержимым.
+  /// </param>
+  internal static long GetMaxUnpackBytes(long packedLength, long amplification = Amplification)
   {
     if (packedLength < 0)
       packedLength = 0;
 
-    // Насыщение вместо переполнения: при packedLength >= Cap/Amplification предел равен Cap.
-    long byAmplification = packedLength >= CapBytes / Amplification
+    if (amplification <= 0)
+      amplification = Amplification;
+
+    // Насыщение вместо переполнения: при packedLength >= Cap/amplification предел равен Cap.
+    long byAmplification = packedLength >= CapBytes / amplification
       ? CapBytes
-      : packedLength * Amplification;
+      : packedLength * amplification;
 
     long limit = byAmplification > FloorBytes ? byAmplification : FloorBytes;
     return limit > CapBytes ? CapBytes : limit;

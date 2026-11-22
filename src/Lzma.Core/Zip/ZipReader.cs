@@ -29,6 +29,12 @@ public static class ZipReader
   private const uint Zip64Sentinel32 = 0xFFFFFFFF;
   private const ushort Zip64Sentinel16 = 0xFFFF;
 
+  // SEC-014b: максимальное усиление Deflate ограничено самим форматом и составляет примерно
+  // 1032:1, поэтому для ZIP применяется эта граница, а не общая константа политики 1024:
+  // значение 1024 отказывало легитимным архивам с максимально сжимаемым содержимым (нули,
+  // разреженные данные). Прогон: 260 МиБ нулей → compSize 265 029 Б, ratio 1028,7:1.
+  private const long DeflateMaxAmplification = 1032;
+
   /// <summary>
   /// Читает ZIP-архив в набор распакованных элементов.
   /// </summary>
@@ -104,12 +110,14 @@ public static class ZipReader
         // поэтому new byte[uncompSize] выделял до 4 ГиБ на файле в сотню байт, а при значении
         // больше int.MaxValue давал OverflowException наружу из публичного API. Отказываем до
         // аллокации. Предел — та же утверждённая владельцем политика усиления, что и для in-memory
-        // распаковки folder'а 7z (256 МиБ / 1024× / 1 ГиБ): новых чисел не вводим. compSize уже
-        // ограничена длиной архива проверкой в TryReadLocalData.
+        // распаковки folder'а 7z (256 МиБ / 1024× / 1 ГиБ): для Deflate усиление взято по
+        // границе формата (1032:1) вместо общей константы 1024, иначе легитимный максимально
+        // сжимаемый архив получал отказ. Новых чисел не вводим. compSize уже ограничена длиной
+        // архива проверкой в TryReadLocalData.
         if (uncompSize > int.MaxValue)
           return ZipReadResult.NotSupported;
 
-        if (uncompSize > Lzma.Core.SevenZip.SevenZipMemoryPolicy.GetMaxUnpackBytes(compSize))
+        if (uncompSize > Lzma.Core.SevenZip.SevenZipMemoryPolicy.GetMaxUnpackBytes(compSize, DeflateMaxAmplification))
           return ZipReadResult.NotSupported;
 
         content = new byte[uncompSize];

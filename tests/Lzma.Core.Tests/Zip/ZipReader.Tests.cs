@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.IO.Compression;
 using System.Text;
 
+using Lzma.Core.SevenZip;
 using Lzma.Core.Zip;
 
 namespace Lzma.Core.Tests.Zip;
@@ -146,6 +147,77 @@ public sealed class ZipReaderTests
     Assert.Equal(ZipReadResult.Ok, res);
     ZipEntry entry = Assert.Single(entries, e => !e.IsDirectory);
     Assert.Equal(content, entry.Bytes);
+  }
+
+  // SEC-014b: граница усиления Deflate по инварианту формата (1032:1). Все тесты — чистая
+  // арифметика: метод политики возвращает предел без аллокации содержимого, сотни мегабайт
+  // не выделяются. Существующие тесты SEC-014 (нижняя планка) этим не задеваются.
+  [Fact]
+  public void Политика_ГраницаФорматаDeflate_ФактИзПрогона()
+  {
+    // 260 МиБ нулей: compSize 265 029 Б, ratio 1028,7:1. 1032 * 265 029 = 273 509 928.
+    // Нижняя (256 МиБ) и верхняя (1 ГиБ) планки не действуют.
+    const long expected = 1032 * 265_029L; // 273 509 928
+
+    long limit = SevenZipMemoryPolicy.GetMaxUnpackBytes(265_029, 1032);
+
+    Assert.Equal(expected, limit);
+    Assert.Equal(273_509_928L, limit);
+  }
+
+  [Fact]
+  public void Политика_СтароеИФорматноеУсиление_ЛегитимныйЭлементПроходит()
+  {
+    // Тот же compSize = 265 029: по умолчанию (1024) предел 271 389 696, по границе формата
+    // (1032) — 273 509 928. Легитимный uncompSize 272 000 000 раньше получал отказ, теперь нет.
+    long oldLimit = SevenZipMemoryPolicy.GetMaxUnpackBytes(265_029); // значение по умолчанию 1024
+    long newLimit = SevenZipMemoryPolicy.GetMaxUnpackBytes(265_029, 1032);
+
+    const long oldLimitExpected = 1024 * 265_029L; // 271 389 696
+    const long legitUncomp = 272_000_000L;
+
+    Assert.Equal(oldLimitExpected, oldLimit);
+    Assert.Equal(newLimit, SevenZipMemoryPolicy.GetMaxUnpackBytes(265_029, 1032));
+    Assert.True(legitUncomp > oldLimit, "Легитимный элемент раньше попадал под отказ 1024.");
+    Assert.True(legitUncomp <= newLimit, "Легитимный элемент проходит по границе формата 1032.");
+  }
+
+  [Fact]
+  public void Политика_НижняяПланка_ДействуетСФорматнымУсилением()
+  {
+    // compSize 64: 64 * 1032 = 66 048 ниже нижней планки, поэтому предел = Floor = 256 МиБ.
+    long limit = SevenZipMemoryPolicy.GetMaxUnpackBytes(64, 1032);
+
+    Assert.Equal(256L << 20, limit);
+  }
+
+  [Fact]
+  public void Политика_ВерхняяПланка_НасыщениеБезПереполнения()
+  {
+    // int.MaxValue при 1032 насыщается до Cap = 1 ГиБ, исключение не бросается.
+    long limit = SevenZipMemoryPolicy.GetMaxUnpackBytes(int.MaxValue, 1032);
+
+    Assert.Equal(1L << 30, limit);
+  }
+
+  [Fact]
+  public void Политика_ОтрицательнаяДлина_НеБросаетИсключение()
+  {
+    // Отрицательная длина приводит к нулю, далее действует нижняя планка.
+    long limit = SevenZipMemoryPolicy.GetMaxUnpackBytes(-1, 1032);
+
+    Assert.Equal(256L << 20, limit);
+  }
+
+  [Fact]
+  public void Политика_ЗначениеПоУмолчанию_СохраняетПоведениеДля7z()
+  {
+    // Значение по умолчанию должно быть равно явному 1024 для каждого входа — вызовы 7z
+    // в SevenZipFolderDecoder.cs не меняли бы поведения.
+    long[] values = [0, 64, 1_048_575, 1_048_576, 265_029, (long)int.MaxValue];
+
+    foreach (long x in values)
+      Assert.Equal(SevenZipMemoryPolicy.GetMaxUnpackBytes(x, 1024), SevenZipMemoryPolicy.GetMaxUnpackBytes(x));
   }
 
   private static byte[] BclCreateZip((string Name, byte[] Content)[] files, CompressionLevel level)
