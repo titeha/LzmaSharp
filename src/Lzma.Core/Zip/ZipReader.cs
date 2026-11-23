@@ -58,6 +58,18 @@ public static class ZipReader
     var list = new List<ZipEntry>(totalEntries);
     int pos = (int)cdOffset;
 
+    // SEC-017: суммарный заявленный объём всех элементов проверяем ДО распаковки. Поэлементной
+    // проверки SEC-014 недостаточно: у предела есть нижняя планка 256 МиБ, поэтому архив с большим
+    // числом маленьких элементов накапливал гигабайты содержимого в памяти, хотя каждый элемент
+    // проходил свою проверку. Предел — тот же метод политики с той же границей формата Deflate,
+    // поэтому корректный архив (u ≤ 1032 × c по каждому элементу, для Store u = c) отказ не
+    // получает вплоть до верхней планки CapBytes (1 ГиБ) — см. утверждённое владельцем изменение
+    // поведения. Отказ здесь бесплатный: ни аллокаций, ни работы декодера ещё не было.
+    SumDeclaredSizes(archive, pos, totalEntries, out long packedTotal, out long declaredTotal);
+
+    if (declaredTotal > Lzma.Core.SevenZip.SevenZipMemoryPolicy.GetMaxUnpackBytes(packedTotal, DeflateMaxAmplification))
+      return ZipReadResult.NotSupported;
+
     for (int i = 0; i < totalEntries; i++)
     {
       if (pos + 46 > archive.Length || BinaryPrimitives.ReadUInt32LittleEndian(archive.Slice(pos, 4)) != CentralFileSignature)
@@ -138,6 +150,53 @@ public static class ZipReader
 
     entries = [.. list];
     return ZipReadResult.Ok;
+  }
+
+  /// <summary>
+  /// SEC-017: предварительный проход по записям центрального каталога без распаковки — считаем
+  /// суммарную длину packed-данных и суммарный заявленный распакованный объём, чтобы отказ по
+  /// суммарному объёму наступал до любых аллокаций и до любой работы декодера.
+  /// Проход останавливается на первой записи, которую не удалось разобрать, и оставляет то, что
+  /// уже накоплено: накопленная сумма является нижней оценкой реального объёма, поэтому архив с
+  /// завышенными размерами всё равно будет отклонён, а структурные ошибки основной цикл
+  /// классифицирует сам своими кодами. Записи каталогов не учитываются: содержимого у них нет, и
+  /// основной цикл их пропускает. При изменении разбора записи центрального каталога править ОБА
+  /// места — этот метод и основной цикл <see cref="Read"/>.
+  /// </summary>
+  private static void SumDeclaredSizes(
+      ReadOnlySpan<byte> archive, int pos, int totalEntries, out long packedTotal, out long declaredTotal)
+  {
+    packedTotal = 0;
+    declaredTotal = 0;
+
+    for (int i = 0; i < totalEntries; i++)
+    {
+      if (pos + 46 > archive.Length
+          || BinaryPrimitives.ReadUInt32LittleEndian(archive.Slice(pos, 4)) != CentralFileSignature)
+        return;
+
+      uint compSize = BinaryPrimitives.ReadUInt32LittleEndian(archive.Slice(pos + 20, 4));
+      uint uncompSize = BinaryPrimitives.ReadUInt32LittleEndian(archive.Slice(pos + 24, 4));
+      int nameLen = BinaryPrimitives.ReadUInt16LittleEndian(archive.Slice(pos + 28, 2));
+      int extraLen = BinaryPrimitives.ReadUInt16LittleEndian(archive.Slice(pos + 30, 2));
+      int commentLen = BinaryPrimitives.ReadUInt16LittleEndian(archive.Slice(pos + 32, 2));
+
+      if (pos + 46 + nameLen > archive.Length)
+        return;
+
+      // Запись каталога: имя заканчивается на '/'. Байт имени смотрим напрямую, без декодирования:
+      // и в UTF-8, и в OEM кодировке символ '/' — это один и тот же байт 0x2F.
+      bool isDirectory = nameLen > 0 && archive[pos + 46 + nameLen - 1] == (byte)'/';
+
+      if (!isDirectory)
+      {
+        // Насыщение вместо переполнения: заявленные размеры недоверенные (приём из шагов C2 и C2b).
+        packedTotal = compSize > long.MaxValue - packedTotal ? long.MaxValue : packedTotal + compSize;
+        declaredTotal = uncompSize > long.MaxValue - declaredTotal ? long.MaxValue : declaredTotal + uncompSize;
+      }
+
+      pos += 46 + nameLen + extraLen + commentLen;
+    }
   }
 
   /// <summary>

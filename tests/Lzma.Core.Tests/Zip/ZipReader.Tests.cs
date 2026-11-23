@@ -72,6 +72,116 @@ public sealed class ZipReaderTests
     throw new InvalidOperationException("Запись центрального каталога не найдена.");
   }
 
+  // SEC-017: заплатка по номеру элемента — ищет N-ю запись центрального каталога по
+  // сигнатуре 0x02014b50 и пишет uint little-endian по смещению +24 (uncompSize элемента).
+  private static byte[] PatchUncompSizeAt(byte[] zip, int entryIndex, uint uncompSize)
+  {
+    Span<byte> centralSignature = stackalloc byte[4];
+    BinaryPrimitives.WriteUInt32LittleEndian(centralSignature, 0x02014b50);
+
+    int found = -1;
+    Span<byte> archive = zip;
+    for (int i = 0; i + 4 <= archive.Length; i++)
+    {
+      if (centralSignature.SequenceEqual(archive.Slice(i, 4)))
+      {
+        found++;
+        if (found == entryIndex)
+        {
+          BinaryPrimitives.WriteUInt32LittleEndian(archive.Slice(i + 24, 4), uncompSize);
+          return zip;
+        }
+      }
+    }
+
+    throw new InvalidOperationException($"Запись центрального каталога номер {entryIndex} не найдена.");
+  }
+
+  // SEC-017: суммарный объём по заявленным размерам двух маленьких элементов с завышенным uncompSize.
+  // Поэлементно каждый проходит (200 МиБ ≤ нижней планки 256 МиБ при крошечном compSize),
+  // но их сумма 400 МиБ > предела операции max(256 МиБ, 1032 × packedTotal). До правки
+  // первый элемент выделяет 200 МиБ и падает на сверке длины распаковки.
+  [Fact]
+  public void Read_СуммаЭлементов_ЗаПределомОперации_ОтказДоАлокации()
+  {
+    const uint twoHundredMb = (uint)(200L << 20);
+    byte[] zip = BclCreateZip(
+    [
+      ("a.txt", new byte[64]),
+      ("b.txt", new byte[64]),
+    ], CompressionLevel.Optimal);
+    zip = PatchUncompSizeAt(zip, 0, twoHundredMb);
+    zip = PatchUncompSizeAt(zip, 1, twoHundredMb);
+
+    long before = GC.GetAllocatedBytesForCurrentThread();
+    var res = ZipReader.Read(zip, out _);
+    long after = GC.GetAllocatedBytesForCurrentThread();
+
+    Assert.Equal(ZipReadResult.NotSupported, res);
+    Assert.True(
+      after - before < 1024 * 1024,
+      $"Алокация превысила 1 МиБ: {(after - before)} байт");
+  }
+
+  // SEC-017: предварительный проход не задевает обычные архивы. Несколько маленьких легитимных
+  // элементов с суммарным распакованным объёмом много ниже нижней планки политики, поэтому
+  // результат Ok и содержимое совпадает с исходным побайтово.
+  [Fact]
+  public void Read_МногоЛегитимныхЭлементов_ЧитаетсяКорректно()
+  {
+    byte[] Make(int seed)
+    {
+      var data = new byte[4 * 1024];
+      for (int i = 0; i < data.Length; i++)
+        data[i] = (byte)(seed + i);
+      return data;
+    }
+
+    var files = new (string Name, byte[] Content)[]
+    {
+      ("one.txt", Make(1)),
+      ("two.txt", Make(2)),
+      ("three.txt", Make(3)),
+      ("four.txt", Make(4)),
+    };
+
+    byte[] zip = BclCreateZip(files, CompressionLevel.Optimal);
+
+    var res = ZipReader.Read(zip, out ZipEntry[] entries);
+
+    Assert.Equal(ZipReadResult.Ok, res);
+    Assert.Equal(files.Length, entries.Length);
+    foreach ((string name, byte[] content) in files)
+    {
+      ZipEntry entry = Assert.Single(entries, e => e.Name == name && !e.IsDirectory);
+      Assert.Equal(content, entry.Bytes);
+    }
+  }
+
+  // SEC-017: записи каталогов не участвуют в накоплении предварительного прохода (основной цикл
+  // их пропускает), поэтому архив с записью каталога и одним файлом читается корректно. Принадлежность
+  // к каталогу в проходе определяется по последнему байту имени без декодирования имени.
+  [Fact]
+  public void Read_ЗаписьКаталога_НеЛомаетУчёт()
+  {
+    byte[] fileContent = Encoding.UTF8.GetBytes("содержимое файла в архиве");
+    var files = new (string Name, byte[] Content)[]
+    {
+      ("archive/", Array.Empty<byte>()),
+      ("note.txt", fileContent),
+    };
+
+    byte[] zip = BclCreateZip(files, CompressionLevel.Optimal);
+
+    var res = ZipReader.Read(zip, out ZipEntry[] entries);
+
+    Assert.Equal(ZipReadResult.Ok, res);
+
+    Assert.Single(entries, e => e.Name == "archive/" && e.IsDirectory);
+    ZipEntry fileEntry = Assert.Single(entries, e => e.Name == "note.txt" && !e.IsDirectory);
+    Assert.Equal(fileContent, fileEntry.Bytes);
+  }
+
   [Fact]
   public void Read_ОгромныйUncompSize_ЗаПределомInt_ОтказДоАлокации()
   {
