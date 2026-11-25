@@ -2124,4 +2124,114 @@ public class SevenZipFolderDecoderTests
 
     Assert.NotEqual(SevenZipFolderDecodeResult.NotSupported, result);
   }
+
+  // ============================================================
+  // SEC-012a: фактический вывод LZMA2 in-memory маршрута ограничен заявленным размером.
+  // ============================================================
+
+  // §5.1 (главный RED): in-memory конвейер DecodeFolderToArray → TryDecodeLzma2Coder.
+  // Настоящий LZMA2-поток (Lzma2CopyEncoder) распаковывается в N = 2 МиБ нулей, но в метаданных
+  // folder'а заявлено 16 байт. Код результата НЕ меняется: до правки декод идёт до сверки длины и
+  // тоже даёт InvalidData, поэтому красный статус до правки обеспечивается УТВЕРЖДЕНИЕМ ПРО ДЕЛЬТУ
+  // аллокаций (мегабайты до правки), а не кодом отказа. После правки предел = 16 останавливает рост
+  // выхода сразу: NeedMoreOutput → InvalidData, выход не материализуется, дельта < 1 МиБ
+  // (буфер словаря 4 КиБ + служебные объекты).
+  [Fact]
+  public void SEC012A_RED_InMemory_Lzma2ActualGreaterThanDeclared_InvalidDataWithBoundedAllocation()
+  {
+    const int declaredUnpack = 16;
+    const int actualOutput = 2 << 20; // 2 МиБ фактического вывода (нули → быстрое копирование).
+
+    byte[] plain = new byte[actualOutput];
+    byte[] packed = Lzma2CopyEncoder.Encode(plain, dictionarySize: 4096, out byte lzma2PropertiesByte);
+
+    SevenZipCoderInfo coder = CreateLzma2CoderForRed(lzma2PropertiesByte);
+
+    long before = GC.GetAllocatedBytesForCurrentThread();
+    SevenZipFolderDecodeResult result = DecodeSingleCoderFolderToArray(
+        coder, packed, declaredUnpack, out byte[] decoded);
+    long after = GC.GetAllocatedBytesForCurrentThread();
+    long delta = after - before;
+
+    Assert.Equal(SevenZipFolderDecodeResult.InvalidData, result);
+    Assert.Empty(decoded);
+    Assert.True(
+      delta < 1_048_576,
+      $"дельта аллокаций {delta} байт — ожидается меньше 1 МиБ после правки (предел = {declaredUnpack})");
+  }
+
+  // §5.2 (крайний случай, регрессионный предохранитель): заявленный размер 0, а поток содержит
+  // реальные данные. Без явной ветки NeedMoreOutput пустой decoded совпал бы по длине с нулевым
+  // заявленным размером, и folder был бы принят как корректный. До правки тест тоже зелёный
+  // (декодирование доходит до сверки длины 512 != 0 → InvalidData), поэтому это НЕ RED, а
+  // предохранитель: после правки отказ приходит от NeedMoreOutput, до правки — от сверки длины.
+  [Fact]
+  public void SEC012A_DeclaredZero_Lzma2HasRealData_ReturnsInvalidData()
+  {
+    byte[] plain = new byte[512];
+    for (int i = 0; i < plain.Length; i++)
+      plain[i] = (byte)(i + 1);
+
+    byte[] packed = Lzma2CopyEncoder.Encode(plain, dictionarySize: 4096, out byte lzma2PropertiesByte);
+
+    SevenZipCoderInfo coder = CreateLzma2CoderForRed(lzma2PropertiesByte);
+    SevenZipFolderDecodeResult result = DecodeSingleCoderFolderToArray(
+        coder, packed, expectedUnpackSize: 0, out byte[] decoded);
+
+    Assert.Equal(SevenZipFolderDecodeResult.InvalidData, result);
+    Assert.Empty(decoded);
+  }
+
+  // §5.3: прямая проверка внутреннего метода DecodeToArrayBounded на настоящем LZMA2-потоке
+  // (через InternalsVisibleTo). Три случая: предел меньше вывода → NeedMoreOutput без материализации;
+  // предел ровно равен выводу → Finished и полный выход (граница не откусывает последний байт);
+  // предел 0 на потоке из одного маркера конца → Finished и пустой выход.
+  [Fact]
+  public void SEC012A_Bounded_UnderDeclared_ReturnsNeedMoreOutputWithoutAllocating()
+  {
+    byte[] plain = new byte[100_000]; // фактический выход = 100000 байт
+    for (int i = 0; i < plain.Length; i++)
+      plain[i] = (byte)(i * 7 + 3);
+    byte[] packed = Lzma2CopyEncoder.Encode(plain, dictionarySize: 4096, out byte lzma2PropertiesByte);
+
+    Lzma2DecodeResult result = Lzma2Decoder.DecodeToArrayBounded(
+        packed, lzma2PropertiesByte, maxOutputBytes: 16, out byte[] output, out int bytesConsumed);
+
+    Assert.Equal(Lzma2DecodeResult.NeedMoreOutput, result);
+    Assert.Empty(output);
+    // bytesConsumed — потреблённый префикс ввода до отказа (заголовок чанка + часть payload,
+    // уложенная в предел); он ограничен длиной ввода и не материализует выход.
+    Assert.InRange(bytesConsumed, 0, packed.Length);
+  }
+
+  [Fact]
+  public void SEC012A_Bounded_ExactlyDeclared_ReturnsFinishedWithFullOutput()
+  {
+    byte[] plain = new byte[100_000];
+    for (int i = 0; i < plain.Length; i++)
+      plain[i] = (byte)(i * 7 + 3);
+    byte[] packed = Lzma2CopyEncoder.Encode(plain, dictionarySize: 4096, out byte lzma2PropertiesByte);
+
+    Lzma2DecodeResult result = Lzma2Decoder.DecodeToArrayBounded(
+        packed, lzma2PropertiesByte, maxOutputBytes: plain.Length, out byte[] output, out int _);
+
+    Assert.Equal(Lzma2DecodeResult.Finished, result);
+    Assert.Equal(plain.Length, output.Length);
+    Assert.Equal(plain, output);
+  }
+
+  [Fact]
+  public void SEC012A_Bounded_ZeroDeclared_EndMarkerOnly_ReturnsFinishedWithEmptyOutput()
+  {
+    // Пустой ввод → Lzma2CopyEncoder пишет ровно один байт маркера конца (0x00).
+    byte[] packed = Lzma2CopyEncoder.Encode([], dictionarySize: 4096, out byte lzma2PropertiesByte);
+    Assert.Single(packed);
+    Assert.Equal(0x00, packed[0]);
+
+    Lzma2DecodeResult result = Lzma2Decoder.DecodeToArrayBounded(
+        packed, lzma2PropertiesByte, maxOutputBytes: 0, out byte[] output, out int _);
+
+    Assert.Equal(Lzma2DecodeResult.Finished, result);
+    Assert.Empty(output);
+  }
 }

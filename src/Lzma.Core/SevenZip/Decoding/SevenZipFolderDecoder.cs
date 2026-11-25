@@ -1027,9 +1027,12 @@ public static class SevenZipFolderDecoder
     if (dictionarySize > SevenZipMemoryPolicy.MaxCodecBufferBytes)
       return SevenZipFolderDecodeResult.NotSupported;
 
-    Lzma2DecodeResult lzma2Result = Lzma2Decoder.DecodeToArray(
+    // SEC-012: фактический вывод ограничен заявленным размером. Заявленный размер здесь уже
+    // ограничен политикой RES-002 (проверка выше по потоку), поэтому предел представим и безопасен.
+    Lzma2DecodeResult lzma2Result = Lzma2Decoder.DecodeToArrayBounded(
       input: input,
       dictionaryProp: lzma2PropertiesByte,
+      maxOutputBytes: expectedUnpackSize,
       output: out decoded,
       bytesConsumed: out int lzma2BytesConsumed,
       progress: progress,
@@ -1043,6 +1046,15 @@ public static class SevenZipFolderDecoder
 
     if (lzma2Result == Lzma2DecodeResult.InvalidData)
     {
+      decoded = [];
+      return SevenZipFolderDecodeResult.InvalidData;
+    }
+
+    if (lzma2Result == Lzma2DecodeResult.NeedMoreOutput)
+    {
+      // SEC-012: фактический вывод больше заявленного — это повреждённый или враждебный архив.
+      // Без этой ветки случай expectedUnpackSize == 0 прошёл бы дальше: decoded пуст, сравнение
+      // длины совпало бы, и folder был бы принят как корректный.
       decoded = [];
       return SevenZipFolderDecodeResult.InvalidData;
     }
@@ -1679,9 +1691,11 @@ public static class SevenZipFolderDecoder
         if (dictionarySize > SevenZipMemoryPolicy.MaxCodecBufferBytes)
           return SevenZipFolderDecodeResult.NotSupported;
 
-        Lzma2DecodeResult lzma2Result = Lzma2Decoder.DecodeToArray(
+        // SEC-012: фактический вывод ограничен заявленным размером продюсера.
+        Lzma2DecodeResult lzma2Result = Lzma2Decoder.DecodeToArrayBounded(
           input: src,
           dictionaryProp: lzma2PropertiesByte,
+          maxOutputBytes: expectedSize,
           output: out decoded,
           bytesConsumed: out int bytesConsumed);
 
@@ -1689,6 +1703,9 @@ public static class SevenZipFolderDecoder
           return SevenZipFolderDecodeResult.NotSupported;
 
         if (lzma2Result == Lzma2DecodeResult.InvalidData)
+          return SevenZipFolderDecodeResult.InvalidData;
+
+        if (lzma2Result == Lzma2DecodeResult.NeedMoreOutput)
           return SevenZipFolderDecodeResult.InvalidData;
 
         if (decoded.Length != expectedSize)

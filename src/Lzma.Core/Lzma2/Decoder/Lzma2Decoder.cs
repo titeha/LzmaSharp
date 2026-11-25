@@ -78,6 +78,40 @@ public static class Lzma2Decoder
   }
 
   /// <summary>
+  /// SEC-012: декодирует поток LZMA2 в массив, ограничивая суммарный выход значением
+  /// <paramref name="maxOutputBytes"/>. Если фактический вывод больше предела, возвращает
+  /// <see cref="Lzma2DecodeResult.NeedMoreOutput"/> и выход не материализуется, поэтому вызывающий
+  /// не платит памятью за архив, у которого заявленный размер расходится с фактическим.
+  /// Метод внутренний: публичные перегрузки <c>DecodeToArray</c> поведения не меняют.
+  /// </summary>
+  internal static Lzma2DecodeResult DecodeToArrayBounded(
+      ReadOnlySpan<byte> input,
+      byte dictionaryProp,
+      long maxOutputBytes,
+      out byte[] output,
+      out int bytesConsumed,
+      IProgress<LzmaProgress>? progress = null,
+      System.Threading.CancellationToken token = default)
+  {
+    if (!Lzma2Properties.TryParse(dictionaryProp, out var properties))
+    {
+      output = [];
+      bytesConsumed = 0;
+      return Lzma2DecodeResult.NotSupported;
+    }
+
+    if (!properties.TryGetDictionarySizeInt32(out int dictionarySize))
+    {
+      output = [];
+      bytesConsumed = 0;
+      return Lzma2DecodeResult.NotSupported;
+    }
+
+    var decoder = new Lzma2IncrementalDecoder(progress: progress, dictionarySize: dictionarySize);
+    return DecodeToArray(decoder, input, out output, out bytesConsumed, token, maxOutputBytes);
+  }
+
+  /// <summary>
   /// Декодирует поток LZMA2 напрямую в <see cref="Stream"/>, не накапливая весь выход в памяти
   /// (для больших файлов). <paramref name="bytesWritten"/> — сколько байт записано (long).
   /// </summary>
@@ -335,10 +369,12 @@ public static class Lzma2Decoder
       ReadOnlySpan<byte> input,
       out byte[] output,
       out int bytesConsumed,
-      System.Threading.CancellationToken token = default)
+      System.Threading.CancellationToken token = default,
+      long maxOutputBytes = long.MaxValue)
   {
     int inputOffset = 0;
     var writer = new ArrayBufferWriter<byte>();
+    bool decoderAskedForMoreOutput = false;
 
     while (true)
     {
@@ -346,7 +382,25 @@ public static class Lzma2Decoder
       // и распаковка одного большого файла посреди, а не только между folder-ами.
       token.ThrowIfCancellationRequested();
 
-      Span<byte> outSpan = writer.GetSpan(_defaultOutputChunkSize);
+      // SEC-012: просим у буфера не больше, чем осталось до предела выхода, и ОБРЕЗАЕМ span до
+      // этого остатка — GetSpan(sizeHint) может вернуть span длиннее запрошенного, и без обрезки
+      // декодер записал бы больше разрешённого.
+      long remaining = maxOutputBytes - writer.WrittenCount;
+
+      if (remaining <= 0 && decoderAskedForMoreOutput)
+      {
+        // Предел исчерпан, а декодер на предыдущей итерации попросил ещё места: фактический вывод
+        // больше разрешённого. Выход не материализуем — именно ради этого предел и введён.
+        bytesConsumed = inputOffset;
+        output = [];
+        return Lzma2DecodeResult.NeedMoreOutput;
+      }
+
+      int chunk = remaining >= _defaultOutputChunkSize
+        ? _defaultOutputChunkSize
+        : (int)Math.Max(remaining, 0);
+
+      Span<byte> outSpan = writer.GetSpan(chunk).Slice(0, chunk);
 
       Lzma2DecodeResult result = decoder.Decode(
           input.Slice(inputOffset),
@@ -359,7 +413,11 @@ public static class Lzma2Decoder
 
       if (result == Lzma2DecodeResult.NeedMoreOutput)
       {
-        if (consumed == 0 && written == 0)
+        decoderAskedForMoreOutput = true;
+
+        // Прежняя гарантия сохранена: при НЕнулевом выходном span отсутствие прогресса — это
+        // дефект декодера. Нулевой span (предел выхода равен нулю) прогресса дать и не может.
+        if (consumed == 0 && written == 0 && chunk > 0)
           throw new InvalidOperationException("Декодер не продвинулся: не потребил ввод и не записал вывод.");
 
         continue;
