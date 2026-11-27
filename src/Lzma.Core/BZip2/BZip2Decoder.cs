@@ -47,7 +47,7 @@ public static class BZip2Decoder
   {
     output = [];
 
-    var decoder = new Worker(input);
+    var decoder = new Worker(input, long.MaxValue);
 
     try
     {
@@ -66,9 +66,54 @@ public static class BZip2Decoder
     }
   }
 
+  /// <summary>
+  /// SEC-012b: декодирует поток BZip2, ограничивая фактический вывод значением
+  /// <paramref name="maxOutputBytes"/>. Если потоку нужно больше вывода, возвращает
+  /// <see cref="BZip2DecodeResult.InvalidData"/> и выход не материализуется, поэтому вызывающий не
+  /// платит памятью за архив, у которого заявленный размер расходится с фактическим. Отдельного кода
+  /// результата нет намеренно: публичный <see cref="BZip2DecodeResult"/> не расширяется, а для
+  /// вызывающего расхождение заявленного и фактического размера — это в любом случае InvalidData.
+  /// Метод внутренний: публичный <see cref="Decode"/> поведения не меняет.
+  /// </summary>
+  internal static BZip2DecodeResult DecodeBounded(
+      ReadOnlySpan<byte> input,
+      long maxOutputBytes,
+      out byte[] output)
+  {
+    output = [];
+
+    var decoder = new Worker(input, maxOutputBytes);
+
+    try
+    {
+      output = decoder.Decode();
+      return BZip2DecodeResult.Ok;
+    }
+    catch (OutputLimitExceededException)
+    {
+      output = [];
+      return BZip2DecodeResult.InvalidData;
+    }
+    catch (NotSupportedBZip2Exception)
+    {
+      output = [];
+      return BZip2DecodeResult.NotSupported;
+    }
+    catch (InvalidBZip2Exception)
+    {
+      output = [];
+      return BZip2DecodeResult.InvalidData;
+    }
+  }
+
   private sealed class InvalidBZip2Exception : Exception;
 
   private sealed class NotSupportedBZip2Exception : Exception;
+
+  // SEC-012b: фактический вывод превынил предел, переданный вызывающим. Исключение — способ
+  // немедленно прервать декодирование из глубины побитовых readers'ов, где вызывается Emit;
+  // перехватывается в DecodeBounded и переводится в InvalidData. Тип приватный, наружу не уходит.
+  private sealed class OutputLimitExceededException : Exception;
 
   private sealed class Worker
   {
@@ -96,15 +141,38 @@ public static class BZip2Decoder
 
     // Выход: управляемый растущий byte[] (вместо List<byte>) — без overhead List.Add и с
     // разумной стартовой ёмкостью, чтобы избежать множества удвоений.
+    // SEC-012b: предел фактического вывода; long.MaxValue у публичного Decode, то есть без предела.
+    private readonly long _maxOutputBytes;
+
     private byte[] _out = [];
     private int _outLen;
 
-    public Worker(ReadOnlySpan<byte> input) => _input = input.ToArray();
+    public Worker(ReadOnlySpan<byte> input, long maxOutputBytes)
+    {
+      _input = input.ToArray();
+      _maxOutputBytes = maxOutputBytes < 0 ? 0 : maxOutputBytes;
+    }
 
     private void Emit(byte b)
     {
       if (_outLen == _out.Length)
-        Array.Resize(ref _out, _out.Length * 2);
+      {
+        // Предел достигнут: дальше писать некуда. Прерываем декодирование, а не удваиваем буфер.
+        if (_outLen >= _maxOutputBytes)
+          throw new OutputLimitExceededException();
+
+        // Удвоение, но не больше предела. Арифметика в long, чтобы _out.Length * 2 не переполнил int.
+        long next = (long)_out.Length * 2;
+
+        if (next > _maxOutputBytes)
+          next = _maxOutputBytes;
+
+        // Гарантия прогресса: если расти некуда, это тот же исчерпанный предел.
+        if (next <= _out.Length)
+          throw new OutputLimitExceededException();
+
+        Array.Resize(ref _out, (int)next);
+      }
 
       _out[_outLen++] = b;
     }
@@ -125,9 +193,15 @@ public static class BZip2Decoder
       _tt = new int[maxBlock + 1];
       _ll8 = new byte[maxBlock];
 
-      // Стартовая ёмкость выхода: оценка по размеру входа (bzip2-сжатие текста ~3-9×),
-      // но не меньше размера блока. Удвоение скорректирует, если оценка занижена.
-      _out = new byte[Math.Max(maxBlock, _input.Length * 4)];
+      // Стартовая ёмкость выхода: оценка по размеру входа (bzip2-сжатие текста ~3-9×), но не меньше
+      // размера блока — и не больше предела вывода (SEC-012b), иначе «бомба» платила бы памятью
+      // ещё до первого удвоения.
+      long startCapacity = Math.Max(maxBlock, (long)_input.Length * 4);
+
+      if (startCapacity > _maxOutputBytes)
+        startCapacity = _maxOutputBytes;
+
+      _out = new byte[(int)startCapacity];
       _outLen = 0;
 
       while (true)

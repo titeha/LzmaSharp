@@ -755,7 +755,9 @@ public static class SevenZipFolderDecoder
   {
     decoded = [];
 
-    BZip2DecodeResult result = BZip2Decoder.Decode(input, out byte[] output);
+    // SEC-012b: фактический вывод ограничен заявленным размером. Заявленный размер уже ограничен
+    // политикой RES-002 (проверка выше по потоку), поэтому предел представим и безопасен.
+    BZip2DecodeResult result = BZip2Decoder.DecodeBounded(input, expectedUnpackSize, out byte[] output);
 
     if (result == BZip2DecodeResult.NotSupported)
       return SevenZipFolderDecodeResult.NotSupported;
